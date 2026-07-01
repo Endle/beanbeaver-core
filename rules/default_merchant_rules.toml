@@ -1,0 +1,62 @@
+# Public default merchant categorization rules.
+# These should contain generally reusable patterns only.
+# Project-local overrides belong in config/merchant_rules.toml.
+
+[[rules]]
+keywords = ["COSTCO", "COSICO"]
+category = "Expenses:Food:Grocery"
+
+[[rules]]
+keywords = ["T&T SUPERMARKET", "T&T Supermarket"]
+category = "Expenses:Food:Grocery"
+
+[[rules]]
+# No Frills franchises print as "<OWNER>'S NO FR <CITY>" (truncated), sometimes
+# further shortened to "<OWNER>'S NF <CITY>", so match those franchise forms too.
+keywords = ["NO FRILLS", "NOFRILLS", "DAVE & ANNETTE'S NO FR", "PETER & SUZI'S NF"]
+category = "Expenses:Food:Grocery"
+
+[[rules]]
+keywords = ["REAL CANADIAN SUPERSTORE"]
+category = "Expenses:Food:Grocery"
+
+[[rules]]
+keywords = ["Bestco Fresh", "BESTCO FRESH"]
+category = "Expenses:Food:Grocery"
+
+[[rules]]
+keywords = ["FOODY MART"]
+category = "Expenses:Food:Grocery"
+
+[[rules]]
+keywords = ["TREDISH GROCERIES"]
+category = "Expenses:Food:Grocery"
+
+[[rules]]
+# Walmart Supercenter purchases are predominantly groceries.
+keywords = ["WALMART", "WAL-MART"]
+category = "Expenses:Food:Grocery"
+
+[[rules]]
+keywords = ["SHELL", "ESSO CIRCLE K", "PETRO CANADA"]
+category = "Expenses:Driving:Gas"
+
+[[rules]]
+keywords = ["UBER"]
+category = "Expenses:Travel:Taxi"
+
+[[rules]]
+keywords = ["LYFT"]
+category = "Expenses:Travel:Taxi"
+
+[[rules]]
+keywords = ["ONE S BETTER LIVING"]
+category = "Expenses:Home"
+
+[[rules]]
+keywords = ["MINISO CANADA"]
+category = "Expenses:Home"
+
+[[rules]]
+keywords = ["IKEA", "STRUC-TUBE", "STRUC TUBE"]
+category = "Expenses:Home:Furniture"
