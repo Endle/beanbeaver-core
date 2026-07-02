@@ -11,137 +11,16 @@
 //! (CI clones it with a read-only token — see
 //! `.github/workflows/private-regression.yml`). When the env var is unset the
 //! test SKIPS, so plain `cargo test` stays green without the private repo.
+//!
+//! The matching/assertion engine is shared with `public_e2e.rs`; see
+//! `tests/e2e_harness/mod.rs`.
 
-use std::collections::{HashMap, HashSet};
+mod e2e_harness;
+
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use receipt_core::ocr_transform::{transform, RawDetection};
-use receipt_core::receipt_categories::resolve_account_target;
-use receipt_core::receipt_parser::parse_receipt;
-use receipt_core::rules::{default_known_merchants, parser_rule_layers_with_overrides};
-use serde_json::Value;
-
-/// Reference date (year, month, day). Only affects placeholder/2-digit-year
-/// inference; the corpus uses explicit full dates, so the exact value is inert.
-const TODAY_YEAR: i32 = 2026;
-/// Padding the desktop pre-OCR resize adds; the raw `.ocr.json` coordinates are in
-/// this padded space (matches the PyO3 `receipt_process_receipt` default).
-const PADDING: i64 = 50;
-
-// --- tolerant matchers (faithful to the Python cached harness) ----------------
-
-fn normalize_merchant(s: &str) -> String {
-    s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_uppercase).collect()
-}
-
-fn levenshtein(a: &[u8], b: &[u8]) -> usize {
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut cur = vec![0usize; b.len() + 1];
-    for (i, &ca) in a.iter().enumerate() {
-        cur[0] = i + 1;
-        for (j, &cb) in b.iter().enumerate() {
-            let cost = usize::from(ca != cb);
-            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[b.len()]
-}
-
-/// Normalized substring either way, else similarity ratio >= 0.85.
-fn merchant_matches(expected: &str, actual: &str) -> bool {
-    let (e, a) = (normalize_merchant(expected), normalize_merchant(actual));
-    if e.is_empty() || a.is_empty() {
-        return false;
-    }
-    if a.contains(&e) || e.contains(&a) {
-        return true;
-    }
-    let maxlen = e.len().max(a.len());
-    (maxlen - levenshtein(e.as_bytes(), a.as_bytes())) as f64 / maxlen as f64 >= 0.85
-}
-
-/// Decimal-equal (expected "6.97" vs parsed "6.9700").
-fn price_matches(expected: &str, actual: &str) -> bool {
-    match (expected.parse::<f64>(), actual.parse::<f64>()) {
-        (Ok(e), Ok(a)) => (e - a).abs() < 0.005,
-        _ => expected == actual,
-    }
-}
-
-/// Case-insensitive substring either way (the Python cached item/desc match).
-fn item_desc_matches(actual: &str, expected: &str) -> bool {
-    let (a, e) = (actual.to_uppercase(), expected.to_uppercase());
-    !e.is_empty() && (a.contains(&e) || e.contains(&a))
-}
-
-/// Expected `category` is an account; parsed `category` is an internal key.
-/// Match on substring, else resolve both through the account mapping and compare.
-fn category_matches(expected: &str, actual: &str, mapping: &HashMap<String, String>) -> bool {
-    let (e, a) = (expected.to_uppercase(), actual.to_uppercase());
-    if e.contains(&a) || a.contains(&e) {
-        return true;
-    }
-    resolve_account_target(Some(expected), mapping, Some(expected))
-        == resolve_account_target(Some(actual), mapping, Some(actual))
-}
-
-// --- fixtures ------------------------------------------------------------------
-
-/// Recursively collect `*.expected.json` under `dir`.
-fn collect_expected(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_expected(&path, out);
-        } else if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".expected.json")) {
-            out.push(path);
-        }
-    }
-}
-
-/// Parse the raw PaddleOCR `.ocr.json` (`{image_width, image_height,
-/// detections:[[points], [text, conf]]}`) into detections + padded dims. Mirrors
-/// the PyO3 `extract_detections` / `receipt_process_receipt`.
-fn detections_from_ocr(raw: &Value) -> (Vec<RawDetection>, i64, i64) {
-    let w = raw["image_width"].as_i64().expect("image_width");
-    let h = raw["image_height"].as_i64().expect("image_height");
-    let mut dets = Vec::new();
-    if let Some(list) = raw["detections"].as_array() {
-        for entry in list {
-            let Some(fields) = entry.as_array() else { continue };
-            if fields.len() < 2 {
-                continue;
-            }
-            let points = fields[0].as_array().map_or_else(Vec::new, |pts| {
-                pts.iter()
-                    .filter_map(|p| {
-                        let p = p.as_array()?;
-                        Some((p.first()?.as_f64()?, p.get(1)?.as_f64()?))
-                    })
-                    .collect()
-            });
-            let text_conf = fields[1].as_array();
-            let text = text_conf
-                .and_then(|tc| tc.first())
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let confidence = text_conf.and_then(|tc| tc.get(1)).and_then(Value::as_f64).unwrap_or(0.0);
-            dets.push(RawDetection { points, text, confidence });
-        }
-    }
-    (dets, w, h)
-}
-
-fn str_set(v: &Value, key: &str) -> HashSet<String> {
-    v.get(key)
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
-        .unwrap_or_default()
-}
+use e2e_harness::run_cached_corpus;
 
 #[test]
 fn private_cached_e2e() {
@@ -157,138 +36,13 @@ fn private_cached_e2e() {
     // rules only (the future pure-data state).
     let private_rules = fs::read_to_string(root.join("private_rules.toml")).ok();
     let overrides: Vec<&str> = private_rules.as_deref().into_iter().collect();
-    let layers = parser_rule_layers_with_overrides(&overrides);
-    let mapping: HashMap<String, String> = layers.account_mapping.iter().cloned().collect();
-    let merchants = default_known_merchants();
 
-    let mut expected_files = Vec::new();
-    collect_expected(&fixtures, &mut expected_files);
-    expected_files.sort();
-    assert!(!expected_files.is_empty(), "no *.expected.json under {}", fixtures.display());
+    let result = run_cached_corpus(&fixtures, &overrides);
 
-    let mut ran = 0usize;
-    let mut failures: Vec<String> = Vec::new();
-
-    for ep in &expected_files {
-        let file = ep.file_name().and_then(|n| n.to_str()).unwrap();
-        let stem = file.strip_suffix(".expected.json").unwrap();
-        let ocr_path = ep.with_file_name(format!("{stem}.ocr.json"));
-        if !ocr_path.exists() {
-            continue; // cached mode needs the OCR snapshot
-        }
-        ran += 1;
-        let rel_dir = ep.parent().and_then(|p| p.strip_prefix(&fixtures).ok());
-        let id = match rel_dir {
-            Some(d) if !d.as_os_str().is_empty() => format!("{}/{stem}", d.display()),
-            _ => stem.to_string(),
-        };
-
-        let expected: Value = serde_json::from_str(&fs::read_to_string(ep).unwrap()).unwrap();
-        let raw: Value = serde_json::from_str(&fs::read_to_string(&ocr_path).unwrap()).unwrap();
-        let (dets, w, h) = detections_from_ocr(&raw);
-        let ocr = transform(dets, w, h, PADDING);
-        let parsed = parse_receipt(
-            &ocr.full_text,
-            &ocr.helper_pages,
-            &ocr.spatial_pages,
-            &layers,
-            &format!("{stem}.jpg"),
-            &merchants,
-            TODAY_YEAR,
-        );
-
-        let known = str_set(&expected, "known_failures");
-        let mut failed: HashSet<&'static str> = HashSet::new();
-        let mut case_fail: Vec<String> = Vec::new();
-
-        // merchant (optional/any_of tolerated inline, like the Python harness)
-        if let Some(m) = expected.get("merchant").and_then(Value::as_str) {
-            let optional = expected.get("merchant_optional").and_then(Value::as_bool).unwrap_or(false);
-            let any_of = str_set(&expected, "merchant_any_of");
-            let ok = merchant_matches(m, &parsed.merchant)
-                || any_of.iter().any(|alt| merchant_matches(alt, &parsed.merchant));
-            if !ok && !optional {
-                failed.insert("merchant");
-                if !known.contains("merchant") {
-                    case_fail.push(format!("merchant expected '{m}', got '{}'", parsed.merchant));
-                }
-            }
-        }
-
-        // date (exact)
-        if let Some(dt) = expected.get("date").and_then(Value::as_str) {
-            let actual = parsed.date.map(|(y, m, d)| format!("{y:04}-{m:02}-{d:02}"));
-            if actual.as_deref() != Some(dt) {
-                failed.insert("date");
-                if !known.contains("date") {
-                    case_fail.push(format!("date expected '{dt}', got {actual:?}"));
-                }
-            }
-        }
-
-        // total (exact/decimal) — always checked
-        if let Some(t) = expected.get("total").and_then(Value::as_str) {
-            if !price_matches(t, &parsed.total) {
-                failed.insert("total");
-                if !known.contains("total") {
-                    case_fail.push(format!("total expected '{t}', got '{}'", parsed.total));
-                }
-            }
-        }
-
-        // critical items — description + price + HARD category
-        if let Some(items) = expected.get("critical_items").and_then(Value::as_array) {
-            let mut msg: Option<String> = None;
-            for ci in items {
-                assert!(
-                    ci.get("category_optional").is_none(),
-                    "{id}: 'category_optional' is banned; drop the category or add a private_rules.toml rule"
-                );
-                let desc = ci.get("description").and_then(Value::as_str).unwrap_or_default();
-                let price = ci.get("price").and_then(Value::as_str).unwrap_or_default();
-                let want_cat = ci.get("category").and_then(Value::as_str);
-                let matched: Vec<_> =
-                    parsed.items.iter().filter(|it| item_desc_matches(&it.description, desc)).collect();
-                let price_ok = matched.iter().any(|it| price_matches(price, &it.price));
-                let cat_ok = want_cat.is_none_or(|c| {
-                    matched
-                        .iter()
-                        .filter(|it| price_matches(price, &it.price))
-                        .any(|it| it.category.as_deref().is_some_and(|k| category_matches(c, k, &mapping)))
-                });
-                if matched.is_empty() || !price_ok || !cat_ok {
-                    let got: Vec<_> = matched
-                        .iter()
-                        .map(|it| (it.description.as_str(), it.price.as_str(), it.category.as_deref()))
-                        .collect();
-                    msg = Some(format!("item '{desc}' (price {price}, cat {want_cat:?}) unmatched; candidates {got:?}"));
-                    break;
-                }
-            }
-            if let Some(m) = msg {
-                failed.insert("critical_items");
-                if !known.contains("critical_items") {
-                    case_fail.push(m);
-                }
-            }
-        }
-
-        // A known_failure that unexpectedly passed must be removed.
-        for k in &known {
-            if !failed.contains(k.as_str()) {
-                case_fail.push(format!("known_failure '{k}' unexpectedly passed — remove the marker"));
-            }
-        }
-
-        for m in case_fail {
-            failures.push(format!("{id}: {m}"));
-        }
-    }
-
-    eprintln!("private_cached_e2e: ran {ran} cached case(s), {} divergence(s)", failures.len());
-    for f in &failures {
+    eprintln!("private_cached_e2e: ran {} cached case(s), {} divergence(s)", result.ran, result.failures.len());
+    for f in &result.failures {
         eprintln!("  ✗ {f}");
     }
-    assert!(failures.is_empty(), "{} private cached check(s) diverged from expected", failures.len());
-    assert!(ran > 0, "no cached (.ocr.json) fixtures were executed");
+    assert!(result.failures.is_empty(), "{} private cached check(s) diverged from expected", result.failures.len());
+    assert!(result.ran > 0, "no cached (.ocr.json) fixtures were executed");
 }

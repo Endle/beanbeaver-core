@@ -638,3 +638,208 @@ pub fn format_enriched_transaction(
 
     lines.join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CC: &str = "Liabilities:CreditCard:PENDING";
+
+    fn item(description: &str, price: &str, quantity: i32, account: &str) -> FormatterItemInput {
+        FormatterItemInput {
+            description: description.to_string(),
+            price: price.to_string(),
+            quantity,
+            posting_account: account.to_string(),
+        }
+    }
+
+    /// Minimal receipt; tests override individual fields.
+    fn base() -> FormatterReceiptInput {
+        FormatterReceiptInput {
+            merchant: "COSTCO".to_string(),
+            date_iso: "2026-02-18".to_string(),
+            date_is_placeholder: false,
+            total: "20.00".to_string(),
+            tax: None,
+            image_filename: "costco.jpg".to_string(),
+            raw_text: String::new(),
+            items: vec![],
+            warnings: vec![],
+            tenders: vec![],
+        }
+    }
+
+    /// `format_parsed_receipt`: header metadata, transaction line, item + tax
+    /// postings, the card-last4 comment lifted from raw text, and the FIXME
+    /// unaccounted-amount balancing posting.
+    #[test]
+    fn parsed_receipt_renders_metadata_postings_and_fixme() {
+        let mut r = base();
+        r.tax = Some("1.00".to_string());
+        r.raw_text = "COSTCO\n**** 1234".to_string();
+        r.items = vec![item("COKE ZERO", "17.19", 1, "Expenses:Food:Grocery:Drink:CocaCola")];
+
+        let out = format_parsed_receipt(&r, CC, None);
+
+        assert!(out.contains("; === PARSED RECEIPT - AWAITING CC MATCH ==="));
+        assert!(out.contains("; @merchant: COSTCO"));
+        assert!(out.contains("; @date: 2026-02-18"));
+        assert!(out.contains("; @total: 20.00"));
+        assert!(out.contains("; @items: 1"));
+        assert!(out.contains("; @tax: 1.00"));
+        assert!(out.contains("; @image: costco.jpg"));
+        assert!(!out.contains("@image_sha256"), "no sha passed => no sha line");
+        assert!(out.contains(r#"2026-02-18 * "COSTCO" "Receipt scan""#));
+
+        // payment posting: fallback CC, negative total, card ****last4 comment
+        assert!(out.contains(CC));
+        assert!(out.contains("-20.00 CAD"));
+        assert!(out.contains("; card ****1234"));
+
+        // item posting
+        assert!(out.contains("Expenses:Food:Grocery:Drink:CocaCola"));
+        assert!(out.contains("17.19 CAD"));
+        assert!(out.contains("; COKE ZERO"));
+
+        // tax posting + FIXME unaccounted (20.00 - 17.19 - 1.00 = 1.81)
+        assert!(out.contains("Expenses:Tax:HST"));
+        assert!(out.contains("Expenses:FIXME"));
+        assert!(out.contains("1.81 CAD"));
+        assert!(out.contains("; FIXME: unaccounted amount"));
+
+        // raw OCR reference block
+        assert!(out.contains("; --- Raw OCR Text (for reference) ---"));
+        assert!(out.contains("; **** 1234"));
+    }
+
+    /// A passed image sha renders its own metadata line.
+    #[test]
+    fn parsed_receipt_includes_image_sha_when_present() {
+        let out = format_parsed_receipt(&base(), CC, Some("abc123"));
+        assert!(out.contains("; @image_sha256: abc123"));
+    }
+
+    /// Placeholder dates surface an UNKNOWN marker plus a FIXME note.
+    #[test]
+    fn parsed_receipt_flags_placeholder_date() {
+        let mut r = base();
+        r.date_is_placeholder = true;
+        let out = format_parsed_receipt(&r, CC, None);
+        assert!(out.contains("; @date: UNKNOWN"));
+        assert!(out.contains("; FIXME: unknown date (placeholder used: 2026-02-18)"));
+    }
+
+    /// Quantities > 1 are annotated in the item posting comment.
+    #[test]
+    fn parsed_receipt_annotates_multi_quantity_items() {
+        let mut r = base();
+        r.items = vec![item("WATER", "2.00", 3, "Expenses:Food:Grocery:Drink")];
+        let out = format_parsed_receipt(&r, CC, None);
+        assert!(out.contains("; WATER (qty 3)"), "{out}");
+    }
+
+    /// Multiple tenders each get a payment posting; a non-card tender uses its
+    /// review-assigned asset account and a kind comment.
+    #[test]
+    fn parsed_receipt_renders_multiple_tenders_with_account_override() {
+        let mut r = base();
+        r.raw_text = "**** 9999".to_string();
+        r.tenders = vec![
+            FormatterTenderInput { amount: "15.00".to_string(), account: None, kind: "card".to_string() },
+            FormatterTenderInput {
+                amount: "5.00".to_string(),
+                account: Some("Assets:GiftCards:Costco".to_string()),
+                kind: "gift_card".to_string(),
+            },
+        ];
+        let out = format_parsed_receipt(&r, CC, None);
+        // card tender -> PENDING CC with card comment
+        assert!(out.contains(CC));
+        assert!(out.contains("-15.00 CAD"));
+        assert!(out.contains("; card ****9999"));
+        // gift-card tender -> overridden asset account with "gift card" comment
+        assert!(out.contains("Assets:GiftCards:Costco"));
+        assert!(out.contains("-5.00 CAD"));
+        assert!(out.contains("; gift card"));
+    }
+
+    /// A gift-card tender with no assigned account falls back to its PENDING slot.
+    #[test]
+    fn parsed_receipt_uses_pending_account_for_unassigned_gift_card() {
+        let mut r = base();
+        r.tenders = vec![FormatterTenderInput {
+            amount: "20.00".to_string(),
+            account: None,
+            kind: "gift_card".to_string(),
+        }];
+        let out = format_parsed_receipt(&r, CC, None);
+        assert!(out.contains("Assets:GiftCards:PENDING"));
+    }
+
+    /// `format_draft_beancount`: draft header, source line, FIXME narration.
+    #[test]
+    fn draft_beancount_uses_review_header_and_fixme_narration() {
+        let mut r = base();
+        r.items = vec![item("COKE ZERO", "17.19", 1, "Expenses:Food:Grocery:Drink:CocaCola")];
+        let out = format_draft_beancount(&r, CC);
+        assert!(out.contains("; === DRAFT - REVIEW NEEDED ==="));
+        assert!(out.contains("; Source: costco.jpg"));
+        assert!(out.contains(r#"2026-02-18 * "COSTCO" "FIXME: add description""#));
+    }
+
+    /// `generate_filename`: slugifies the merchant, handles placeholders and
+    /// all-punctuation merchants.
+    #[test]
+    fn generate_filename_slugifies_and_handles_edge_cases() {
+        assert_eq!(generate_filename("2026-02-18", false, "No Frills!"), "2026-02-18-no-frills.beancount");
+        assert_eq!(generate_filename("2026-02-18", true, "COSTCO"), "unknown-date-costco.beancount");
+        assert_eq!(generate_filename("2026-01-01", false, "!!!"), "2026-01-01-unknown.beancount");
+    }
+
+    /// `format_enriched_transaction`: reuses the matched CC posting/expense,
+    /// itemizes the receipt, and appends the original transaction for reference.
+    #[test]
+    fn enriched_transaction_reuses_match_and_itemizes() {
+        let mut r = base();
+        r.tax = Some("1.00".to_string());
+        r.items = vec![item("COKE ZERO", "17.19", 1, "Expenses:Food:Grocery:Drink:CocaCola")];
+
+        let match_input = EnrichedMatchInput {
+            transaction_date_iso: "2026-02-20".to_string(),
+            payee: "COSTCO WHOLESALE".to_string(),
+            narration: "Purchase".to_string(),
+            postings: vec![
+                EnrichedPostingInput {
+                    account: "Liabilities:CreditCard:Visa".to_string(),
+                    number: Some("-20.00".to_string()),
+                    currency: Some("CAD".to_string()),
+                },
+                EnrichedPostingInput {
+                    account: "Expenses:Uncategorized".to_string(),
+                    number: Some("20.00".to_string()),
+                    currency: Some("CAD".to_string()),
+                },
+            ],
+            file_path: "ledger.beancount".to_string(),
+            line_number: 42,
+            confidence: 0.9,
+            match_details: "amount+date".to_string(),
+        };
+
+        let out = format_enriched_transaction(&r, &match_input, "Expenses:FIXME");
+
+        assert!(out.contains("; === ENRICHED TRANSACTION - REVIEW NEEDED ==="));
+        assert!(out.contains("; Receipt: costco.jpg"));
+        assert!(out.contains("; Matched: ledger.beancount:42"));
+        assert!(out.contains("; Confidence: 90% (amount+date)"));
+        assert!(out.contains(r#"2026-02-20 * "COSTCO WHOLESALE" "Purchase""#));
+        // matched CC posting reused (negative number -> credit posting)
+        assert!(out.contains("Liabilities:CreditCard:Visa"));
+        assert!(out.contains("-20.00 CAD"));
+        // items rendered; remainder balances against the matched expense account
+        assert!(out.contains("Expenses:Food:Grocery:Drink:CocaCola"));
+        assert!(out.contains("; remaining/unitemized"));
+        assert!(out.contains("; --- Original Transaction (to be replaced) ---"));
+    }
+}

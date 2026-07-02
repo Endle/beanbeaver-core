@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  receipt-core:
+    name: receipt-core (test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out core (public)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Runs the inline unit tests AND the vendored public cached E2E corpus
+      # (tests/receipts_e2e). No token needed: the private E2E skips when
+      # BEANBEAVER_PRIVATE_TESTS_DIR is unset. See private-regression.yml for the
+      # token-gated private corpus.
+      - name: Test
+        run: cargo test -p receipt-core -- --nocapture

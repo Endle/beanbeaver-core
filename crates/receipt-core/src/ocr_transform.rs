@@ -157,3 +157,79 @@ pub fn transform(
         spatial_pages: vec![PageInput { lines: spatial_lines }],
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Axis-aligned rectangle detection in padded-image pixels (4 CW points),
+    /// mirroring the desktop test helper `_bbox(x0, y0, x1, y1)`.
+    fn rect(x0: f64, y0: f64, x1: f64, y1: f64, text: &str, conf: f64) -> RawDetection {
+        RawDetection {
+            points: vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)],
+            text: text.to_string(),
+            confidence: conf,
+        }
+    }
+
+    /// Ported from desktop `tests/test_ocr_helpers.py::
+    /// test_transform_filters_overlapping_bob_markers_keeps_real_item_lines`.
+    /// BOB ("bottom of basket") marker lines that overlap real item rows must be
+    /// dropped, while the item detections still group into their expected lines.
+    #[test]
+    fn filters_overlapping_bob_markers_keeps_real_item_lines() {
+        let dets = vec![
+            rect(20.0, 200.0, 820.0, 240.0, "*xxxxxxxxxxBottom of Baske xxxxxxxxxxx", 0.95),
+            rect(120.0, 210.0, 500.0, 250.0, "232952 COKE ZERO", 0.99),
+            rect(760.0, 210.0, 920.0, 248.0, "17.19 H", 0.99),
+            rect(40.0, 300.0, 500.0, 340.0, "*x*********BOB Count 3", 0.95),
+            rect(120.0, 320.0, 550.0, 360.0, "305882 *KS IBU 400M", 0.99),
+            rect(760.0, 324.0, 900.0, 356.0, "16.99", 0.99),
+        ];
+
+        // padding = 0 => padded dims == original dims (1000x1200).
+        let out = transform(dets, 1000, 1200, 0);
+        let full_text = &out.full_text;
+
+        assert!(!full_text.contains("Bottom of Baske"), "bob marker leaked: {full_text}");
+        assert!(!full_text.contains("BOB Count 3"), "bob marker leaked: {full_text}");
+        assert!(full_text.contains("232952 COKE ZERO 17.19 H"), "item row not grouped: {full_text}");
+        assert!(full_text.contains("305882 *KS IBU 400M 16.99"), "item row not grouped: {full_text}");
+
+        // One page each; spatial word bboxes are normalized into the unit interval.
+        assert_eq!(out.helper_pages.len(), 1);
+        assert_eq!(out.spatial_pages.len(), 1);
+        let bbox = &out.spatial_pages[0].lines[0].words[0].bbox;
+        for v in [bbox.left, bbox.top, bbox.right, bbox.bottom] {
+            assert!((0.0..=1.0).contains(&v), "bbox coord {v} outside [0,1]");
+        }
+        assert!(bbox.left <= bbox.right && bbox.top <= bbox.bottom);
+    }
+
+    /// Empty input yields empty text and one empty page of each shape (so the
+    /// parser always sees a well-formed, single-page document).
+    #[test]
+    fn empty_detections_yield_one_empty_page_each() {
+        let out = transform(Vec::new(), 1000, 1200, 50);
+        assert!(out.full_text.is_empty());
+        assert_eq!(out.helper_pages.len(), 1);
+        assert_eq!(out.spatial_pages.len(), 1);
+        assert!(out.helper_pages[0].lines.is_empty());
+        assert!(out.spatial_pages[0].lines.is_empty());
+    }
+
+    /// Padding is subtracted before normalization: coordinates in padded space are
+    /// de-padded, then divided by the original (de-padded) dims.
+    #[test]
+    fn padding_is_removed_before_normalization() {
+        // padded 200x200 with padding 50 => original 100x100.
+        // Rect (50,50)-(150,90) de-pads to (0,0)-(100,40) => left 0, right 1, bottom .4.
+        let out = transform(vec![rect(50.0, 50.0, 150.0, 90.0, "HELLO", 0.99)], 200, 200, 50);
+        assert_eq!(out.full_text, "HELLO");
+        let bbox = &out.spatial_pages[0].lines[0].words[0].bbox;
+        assert!((bbox.left - 0.0).abs() < 1e-9, "left={}", bbox.left);
+        assert!((bbox.right - 1.0).abs() < 1e-9, "right={}", bbox.right);
+        assert!((bbox.top - 0.0).abs() < 1e-9, "top={}", bbox.top);
+        assert!((bbox.bottom - 0.4).abs() < 1e-9, "bottom={}", bbox.bottom);
+    }
+}

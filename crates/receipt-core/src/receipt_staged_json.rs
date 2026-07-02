@@ -472,3 +472,322 @@ pub fn resolve_stage_document(
         tenders,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Stage layers over the bundled PUBLIC rules (no project/private overrides).
+    /// The desktop tests use `load_item_category_rule_layers()`; here the public
+    /// classifier + default account mapping is the equivalent stable input.
+    fn public_stage_layers() -> StageRuleLayers {
+        let parser = crate::rules::default_parser_rule_layers();
+        StageRuleLayers {
+            category_rules: parser.category_rules,
+            account_mapping: parser.account_mapping,
+        }
+    }
+
+    fn item(description: &str, price: &str, quantity: i32, category: Option<&str>) -> ReceiptItemInput {
+        ReceiptItemInput {
+            description: description.to_string(),
+            price: Some(price.to_string()),
+            quantity,
+            category: category.map(str::to_string),
+        }
+    }
+
+    /// `build_parsed_receipt_stage`: schema/meta shape, sequential item ids,
+    /// classification of a known item, warning routing (item vs top-level), and
+    /// tender pass-through. Mirrors the build-side assertions of the desktop
+    /// `test_receipt_staged_json.py` round-trip tests.
+    #[test]
+    fn build_parsed_stage_sets_meta_ids_warnings_and_tenders() {
+        let layers = public_stage_layers();
+        let receipt = ReceiptInput {
+            merchant: "COSTCO".to_string(),
+            date_iso: "2026-03-07".to_string(),
+            total: "466.68".to_string(),
+            date_is_placeholder: false,
+            items: vec![
+                item("COORS LIGHT", "13.99", 1, None),  // classifies (alcoholic)
+                item("ZZUNKNOWNQ", "2.00", 3, None),    // no classifier match
+            ],
+            tax: Some("5.72".to_string()),
+            subtotal: Some("455.00".to_string()),
+            raw_text: "COSTCO\nTOTAL 466.68".to_string(),
+            image_filename: "costco.jpg".to_string(),
+            warnings: vec![
+                ReceiptWarningInput { message: "on item 0".to_string(), after_item_index: Some(0) },
+                ReceiptWarningInput { message: "out of range".to_string(), after_item_index: Some(99) },
+                ReceiptWarningInput { message: "no index".to_string(), after_item_index: None },
+            ],
+            tenders: vec![
+                TenderInput {
+                    amount: "441.68".to_string(),
+                    account: None,
+                    kind: "card".to_string(),
+                    raw_label: "MasterCard".to_string(),
+                },
+                TenderInput {
+                    amount: "25.00".to_string(),
+                    account: None,
+                    kind: "gift_card".to_string(),
+                    raw_label: "Shop Card".to_string(),
+                },
+            ],
+        };
+
+        let doc = build_parsed_receipt_stage(
+            &receipt,
+            &layers,
+            "receipt-123",
+            "2026-03-07T00:00:00Z",
+            Some("path/to.ocr.json".to_string()),
+            Some("deadbeef".to_string()),
+            "unit-test",
+            "parsed-pass",
+        );
+
+        // meta
+        assert_eq!(doc.meta.schema_version, "2");
+        assert_eq!(doc.meta.stage, "parsed");
+        assert_eq!(doc.meta.stage_index, 0);
+        assert_eq!(doc.meta.receipt_id, "receipt-123");
+        assert_eq!(doc.meta.created_by, "unit-test");
+        assert_eq!(doc.meta.pass_name, "parsed-pass");
+        assert_eq!(doc.meta.image_filename.as_deref(), Some("costco.jpg"));
+        assert_eq!(doc.meta.image_sha256.as_deref(), Some("deadbeef"));
+        assert_eq!(doc.meta.ocr_json_path.as_deref(), Some("path/to.ocr.json"));
+
+        // receipt header
+        assert_eq!(doc.receipt.merchant.as_deref(), Some("COSTCO"));
+        assert_eq!(doc.receipt.currency, "CAD");
+        assert_eq!(doc.receipt.date.as_deref(), Some("2026-03-07"));
+        assert_eq!(doc.receipt.total.as_deref(), Some("466.68"));
+        assert_eq!(doc.receipt.tax.as_deref(), Some("5.72"));
+        assert_eq!(doc.receipt.subtotal.as_deref(), Some("455.00"));
+
+        // items: sequential ids, classification only for the matching keyword
+        assert_eq!(doc.items.len(), 2);
+        assert_eq!(doc.items[0].id, "item-0001");
+        assert_eq!(doc.items[1].id, "item-0002");
+        assert_eq!(doc.items[1].quantity, 3);
+        assert!(doc.items[0].classification.is_some(), "COORS LIGHT should classify");
+        assert!(doc.items[1].classification.is_none(), "gibberish should not classify");
+
+        // warnings: in-range attaches to the item; out-of-range and index-less go top-level
+        assert_eq!(doc.items[0].warnings.len(), 1);
+        assert_eq!(doc.items[0].warnings[0].message, "on item 0");
+        let top: Vec<&str> = doc.warnings.iter().map(|w| w.message.as_str()).collect();
+        assert_eq!(top, vec!["out of range", "no index"]);
+
+        // tenders pass through unchanged, account still unassigned
+        assert_eq!(doc.tenders.len(), 2);
+        assert_eq!(doc.tenders[0].amount, "441.68");
+        assert_eq!(doc.tenders[0].kind, "card");
+        assert_eq!(doc.tenders[0].account, None);
+        assert_eq!(doc.tenders[1].kind, "gift_card");
+    }
+
+    /// Placeholder dates are dropped from the built stage receipt.
+    #[test]
+    fn build_parsed_stage_omits_placeholder_date() {
+        let layers = public_stage_layers();
+        let receipt = ReceiptInput {
+            merchant: "TEST".to_string(),
+            date_iso: "2026-01-01".to_string(),
+            total: "1.00".to_string(),
+            date_is_placeholder: true,
+            items: vec![],
+            tax: None,
+            subtotal: None,
+            raw_text: String::new(),
+            image_filename: String::new(),
+            warnings: vec![],
+            tenders: vec![],
+        };
+        let doc = build_parsed_receipt_stage(&receipt, &layers, "r", "t", None, None, "b", "p");
+        assert_eq!(doc.receipt.date, None);
+        // Empty image filename => no meta image filename.
+        assert_eq!(doc.meta.image_filename, None);
+    }
+
+    fn doc_item(
+        removed: bool,
+        description: Option<&str>,
+        price: Option<&str>,
+        quantity: Option<i32>,
+        classification: Option<ClassificationData>,
+        warnings: &[&str],
+    ) -> StageDocumentItemInput {
+        StageDocumentItemInput {
+            removed,
+            description: description.map(str::to_string),
+            price: price.map(str::to_string),
+            quantity,
+            classification,
+            warning_messages: warnings.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// `resolve_stage_document`: removed items are dropped, defaults fill missing
+    /// fields, the explicit-category classification resolves to its account, and
+    /// warnings are re-indexed against the surviving items (mirrors the desktop
+    /// `test_receipt_stage_resolves_review_overrides_and_removed_items` +
+    /// `test_tender_review_patch_overrides_account`).
+    #[test]
+    fn resolve_stage_document_applies_removals_defaults_and_reindexes() {
+        let layers = public_stage_layers();
+        let document = StageDocumentInput {
+            merchant: Some("NO FRILLS".to_string()),
+            date_iso: Some("2026-03-03".to_string()),
+            total: Some("46.56".to_string()),
+            tax: Some("5.36".to_string()),
+            subtotal: Some("41.20".to_string()),
+            raw_text: "NO FRILLS".to_string(),
+            image_filename: "nofrills.jpg".to_string(),
+            items: vec![
+                doc_item(
+                    false,
+                    Some("  Napa cabbage  "),
+                    Some("3.99"),
+                    Some(1),
+                    Some(ClassificationData {
+                        category: Some("grocery_vegetable".to_string()),
+                        tags: vec![],
+                    }),
+                    &["parser warning"],
+                ),
+                doc_item(true, Some("Milk"), Some("4.99"), Some(1), None, &[]), // removed
+                doc_item(false, Some("   "), None, None, None, &[]),            // defaults
+            ],
+            top_level_warning_messages: vec!["top warn".to_string()],
+            tenders: vec![
+                StageDocumentTenderInput {
+                    amount: Some("25.00".to_string()),
+                    account: Some("Assets:GiftCards:Costco".to_string()),
+                    kind: Some("gift_card".to_string()),
+                    raw_label: Some("Shop".to_string()),
+                    removed: false,
+                },
+                StageDocumentTenderInput {
+                    amount: Some("441.68".to_string()),
+                    account: None,
+                    kind: Some("card".to_string()),
+                    raw_label: Some("MC".to_string()),
+                    removed: true, // dropped
+                },
+                StageDocumentTenderInput {
+                    amount: None,
+                    account: Some("   ".to_string()),
+                    kind: None,
+                    raw_label: None,
+                    removed: false,
+                },
+            ],
+        };
+
+        let resolved = resolve_stage_document(&document, &layers);
+
+        assert_eq!(resolved.merchant, "NO FRILLS");
+        assert!(!resolved.date_is_placeholder);
+
+        // removed item dropped; empty description -> UNKNOWN_ITEM; description trimmed
+        let descs: Vec<&str> = resolved.items.iter().map(|i| i.description.as_str()).collect();
+        assert_eq!(descs, vec!["Napa cabbage", "UNKNOWN_ITEM"]);
+        assert_eq!(resolved.items[0].price, "3.99");
+        assert_eq!(resolved.items[0].quantity, 1);
+        assert_eq!(resolved.items[0].category.as_deref(), Some("Expenses:Food:Grocery:Vegetable"));
+        // missing price/quantity fall back to "0"/1; no classification -> no category
+        assert_eq!(resolved.items[1].price, "0");
+        assert_eq!(resolved.items[1].quantity, 1);
+        assert_eq!(resolved.items[1].category, None);
+
+        // warnings re-indexed to surviving items, then top-level appended
+        assert_eq!(resolved.warnings.len(), 2);
+        assert_eq!(resolved.warnings[0].message, "parser warning");
+        assert_eq!(resolved.warnings[0].after_item_index, Some(0));
+        assert_eq!(resolved.warnings[1].message, "top warn");
+        assert_eq!(resolved.warnings[1].after_item_index, None);
+
+        // tenders: removed dropped; account override kept; blank account -> None; kind default
+        assert_eq!(resolved.tenders.len(), 2);
+        assert_eq!(resolved.tenders[0].account.as_deref(), Some("Assets:GiftCards:Costco"));
+        assert_eq!(resolved.tenders[0].kind, "gift_card");
+        assert_eq!(resolved.tenders[1].amount, "0");
+        assert_eq!(resolved.tenders[1].account, None);
+        assert_eq!(resolved.tenders[1].kind, "card");
+        assert_eq!(resolved.tenders[1].raw_label, "");
+    }
+
+    /// A schema-1 style document (no tenders) resolves to an empty tender list.
+    #[test]
+    fn resolve_stage_document_without_tenders_is_empty() {
+        let layers = public_stage_layers();
+        let document = StageDocumentInput {
+            merchant: Some("TEST".to_string()),
+            date_iso: None, // placeholder
+            total: Some("10.00".to_string()),
+            tax: None,
+            subtotal: None,
+            raw_text: String::new(),
+            image_filename: "legacy.jpg".to_string(),
+            items: vec![],
+            top_level_warning_messages: vec![],
+            tenders: vec![],
+        };
+        let resolved = resolve_stage_document(&document, &layers);
+        assert!(resolved.tenders.is_empty());
+        assert!(resolved.date_is_placeholder);
+    }
+
+    /// `account_from_classification`: explicit category key, legacy `Expenses:`
+    /// alias normalization, a uniquely-matching tag, and the empty case.
+    #[test]
+    fn account_from_classification_resolves_key_alias_and_tag() {
+        let layers = public_stage_layers();
+
+        // explicit internal key -> mapped account
+        let by_key = account_from_classification(
+            Some(&ClassificationData { category: Some("grocery_dairy".to_string()), tags: vec![] }),
+            &layers,
+        );
+        assert_eq!(by_key.as_deref(), Some("Expenses:Food:Grocery:Dairy"));
+
+        // legacy full account is normalized through the alias table
+        let by_alias = account_from_classification(
+            Some(&ClassificationData {
+                category: Some("Expenses:Food:Grocery:Icecream".to_string()),
+                tags: vec![],
+            }),
+            &layers,
+        );
+        assert_eq!(by_alias.as_deref(), Some("Expenses:Food:Grocery:Frozen:IceCream"));
+
+        // no category, but a tag that is a unique key-part ("dairy" only in grocery_dairy)
+        let by_tag = account_from_classification(
+            Some(&ClassificationData { category: None, tags: vec!["dairy".to_string()] }),
+            &layers,
+        );
+        assert_eq!(by_tag.as_deref(), Some("Expenses:Food:Grocery:Dairy"));
+
+        // nothing to resolve
+        assert_eq!(account_from_classification(None, &layers), None);
+    }
+
+    /// `classify_item_semantic`: a known keyword classifies; gibberish yields
+    /// nothing unless a default is supplied.
+    #[test]
+    fn classify_item_semantic_matches_keyword_else_default() {
+        let layers = public_stage_layers();
+        let hit = classify_item_semantic("COORS LIGHT", &layers, None);
+        assert!(hit.is_some_and(|c| c.category.is_some()), "COORS LIGHT should classify");
+        assert!(classify_item_semantic("ZZUNKNOWNQ", &layers, None).is_none());
+        let defaulted = classify_item_semantic("ZZUNKNOWNQ", &layers, Some("grocery_dairy".to_string()));
+        assert_eq!(
+            defaulted.and_then(|c| c.category).as_deref(),
+            Some("grocery_dairy")
+        );
+    }
+}
