@@ -1,7 +1,41 @@
 # Public default merchant identity rules.
-# These map common alias spellings to a canonical merchant family.
-# Project-local overrides belong in config/merchant_families.toml.
+# These map common alias spellings to a canonical merchant family, and drive the
+# fuzzy merchant matcher (see receipt-core `merchant_match`). Project-local
+# overrides belong in config/merchant_families.toml.
+#
+# Fields:
+#   canonical     display name the merchant is normalized to.
+#   aliases       alternate/OCR-mangled spellings matched as exact word-boundary
+#                 substrings anywhere in the receipt text.
+#   corroborators tokens that, when present anywhere in the receipt, license a
+#                 *fuzzy* (approximate) header match to be auto-applied. Without
+#                 a corroborator a close fuzzy match is only ever surfaced as a
+#                 non-authoritative suggestion, never silently substituted. This
+#                 is what stops look-alikes (e.g. "COSTLESS" -> "COSTCO") from
+#                 being confidently rewritten.
 
 [[families]]
 canonical = "REAL CANADIAN SUPERSTORE"
 aliases = ["REAL CANADIAN", "RCSS"]
+
+# Costco's banner is frequently OCR'd with the leading "C" dropped or an O/0
+# confusable ("OSTCO", "C0STCO"). The unmistakable "WHOLESALE" banner licenses
+# the fuzzy correction. Replaces the former hardcoded branch in extract_merchant.
+[[families]]
+canonical = "COSTCO"
+aliases = ["COSTCO WHOLESALE", "COSICO"]
+corroborators = ["WHOLESALE"]
+
+# FreshCo's banner is often OCR'd with a trailing confusable ("FRESHCC"), but the
+# correct spelling reliably reappears in the store address/footer, so the exact
+# alias match on "FRESHCO" recovers it. Replaces the former hardcoded branch.
+[[families]]
+canonical = "FRESHCO"
+aliases = ["FRESHCO"]
+
+# Foody Mart's banner runs the store name into the branch/address on one OCR line
+# ("FOODY MART(Branch) 123 Example Rd"); the exact alias match collapses it to the
+# canonical name. Replaces the former hardcoded branch.
+[[families]]
+canonical = "FOODY MART"
+aliases = ["FOODY MART"]

@@ -9,12 +9,15 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
+use crate::merchant_match::MerchantFamily;
 use crate::receipt_categories::{build_rule_layers, BuildClassifierConfig, BuildRuleEntry};
 use crate::receipt_parser::ParserRuleLayers;
 
 const DEFAULT_ITEM_CLASSIFIER_TOML: &str =
     include_str!("../../../rules/default_item_classifier.toml");
 const DEFAULT_MERCHANT_RULES_TOML: &str = include_str!("../../../rules/default_merchant_rules.toml");
+const DEFAULT_MERCHANT_FAMILIES_TOML: &str =
+    include_str!("../../../rules/default_merchant_families.toml");
 
 /// Two-stage category-key -> beancount-account mapping. Ported verbatim from
 /// `receipt/item_categories.py::DEFAULT_CATEGORY_ACCOUNTS`.
@@ -211,6 +214,37 @@ struct MerchantRuleToml {
 struct MerchantRulesToml {
     #[serde(default)]
     rules: Vec<MerchantRuleToml>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MerchantFamilyToml {
+    canonical: String,
+    #[serde(default)]
+    aliases: Vec<String>,
+    #[serde(default)]
+    corroborators: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MerchantFamiliesToml {
+    #[serde(default)]
+    families: Vec<MerchantFamilyToml>,
+}
+
+/// Load the bundled canonical/alias/corroborator merchant families that drive
+/// the fuzzy merchant matcher (`crate::merchant_match`).
+pub fn default_merchant_families() -> Vec<MerchantFamily> {
+    let parsed: MerchantFamiliesToml = toml::from_str(DEFAULT_MERCHANT_FAMILIES_TOML)
+        .expect("bundled default_merchant_families.toml is valid");
+    parsed
+        .families
+        .into_iter()
+        .map(|family| MerchantFamily {
+            canonical: family.canonical,
+            aliases: family.aliases,
+            corroborators: family.corroborators,
+        })
+        .collect()
 }
 
 /// Flatten merchant keywords from the bundled default merchant rules, preserving

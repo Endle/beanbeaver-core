@@ -65,10 +65,57 @@ impl From<CoreScanTimings> for ScanTimings {
     }
 }
 
+/// How much to trust `MerchantMatch::canonical`. Mirrors
+/// `receipt_core::merchant_match::MerchantMatchStatus`.
+#[derive(uniffi::Enum)]
+pub enum MerchantMatchStatus {
+    /// The raw OCR text already contains a known merchant verbatim.
+    Exact,
+    /// Confidently normalized to `canonical`; safe to show in place of `raw`.
+    Corrected,
+    /// A plausible `canonical`, but not corroborated — offer it (e.g. in grey)
+    /// without replacing `raw`.
+    Suggested,
+    /// No family matched; only `raw` is meaningful.
+    Unknown,
+}
+
+/// Merchant identity resolution surfaced to Swift. The `merchant` field on
+/// `ReceiptResult` is the display string already chosen from this
+/// (`canonical` when `Exact`/`Corrected`, else `raw`); this record lets the UI
+/// show the correction — e.g. render `raw` in grey under a `Suggested`
+/// `canonical` — instead of silently trusting a low-confidence guess.
+#[derive(uniffi::Record)]
+pub struct MerchantMatch {
+    /// Exactly what OCR produced for the merchant header.
+    pub raw: String,
+    /// Canonical family name, when one was matched.
+    pub canonical: Option<String>,
+    pub status: MerchantMatchStatus,
+    /// Similarity of the chosen family in `[0, 1]` (diagnostics/UI only).
+    pub score: f64,
+}
+
+impl From<receipt_core::merchant_match::MerchantMatch> for MerchantMatch {
+    fn from(m: receipt_core::merchant_match::MerchantMatch) -> Self {
+        use receipt_core::merchant_match::MerchantMatchStatus as CoreStatus;
+        let status = match m.status {
+            CoreStatus::Exact => MerchantMatchStatus::Exact,
+            CoreStatus::Corrected => MerchantMatchStatus::Corrected,
+            CoreStatus::Suggested => MerchantMatchStatus::Suggested,
+            CoreStatus::Unknown => MerchantMatchStatus::Unknown,
+        };
+        Self { raw: m.raw, canonical: m.canonical, status, score: m.score }
+    }
+}
+
 /// Flattened, Swift-friendly view of `ProcessedReceipt`.
 #[derive(uniffi::Record)]
 pub struct ReceiptResult {
+    /// Display merchant name (`merchant_match`'s chosen display string).
     pub merchant: String,
+    /// Full merchant resolution (raw OCR, canonical family, confidence).
+    pub merchant_match: MerchantMatch,
     /// ISO `YYYY-MM-DD`, or `None` if the parser found no date.
     pub date: Option<String>,
     pub date_is_placeholder: bool,
@@ -163,6 +210,7 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
     let d = p.parsed;
     ReceiptResult {
         merchant: d.merchant,
+        merchant_match: d.merchant_match.into(),
         date: d.date.map(|(y, m, day)| format!("{y:04}-{m:02}-{day:02}")),
         date_is_placeholder: d.date_is_placeholder,
         total: d.total,

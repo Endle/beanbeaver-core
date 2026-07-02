@@ -30,6 +30,28 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # macos-latest runners ship an Xcode whose compiler-rt resource dir is NOT
+      # where rustc guesses it: linking the ort/onnxruntime-backed live-E2E binary
+      # emits `-lclang_rt.osx` with `-L .../clang/<N>/lib/darwin`, and that guessed
+      # path doesn't exist on the image -> `ld: library 'clang_rt.osx' not found`.
+      # (Pure-Rust builds link fine, so unit tests hide it; it only bites when a
+      # C++-linked binary is actually relinked -- i.e. any cache-miss build.)
+      # Locate the real libclang_rt.osx.a under the active Xcode and add its dir to
+      # the linker search path so `-lclang_rt.osx` resolves regardless of the guess.
+      - name: Fix macOS compiler-rt search path for rustc
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          rt="$(find "$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang" \
+                  -name 'libclang_rt.osx.a' 2>/dev/null | head -n1)"
+          if [[ -z "$rt" ]]; then
+            echo "::error::libclang_rt.osx.a not found under the active Xcode toolchain" >&2
+            exit 1
+          fi
+          dir="$(dirname "$rt")"
+          echo "compiler-rt dir: $dir"
+          echo "RUSTFLAGS=${RUSTFLAGS:+$RUSTFLAGS }-L $dir" >> "$GITHUB_ENV"
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
