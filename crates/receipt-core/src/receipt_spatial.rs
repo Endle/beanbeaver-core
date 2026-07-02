@@ -1681,4 +1681,149 @@ mod tests {
             ]
         );
     }
+
+    // --- ported regressions from desktop tests/test_receipt_spatial_parser_regressions.py ---
+    // Prices are ×10000 fixed-point (3.17 -> 31_700); the desktop asserts on Decimal.
+    // The Rust spatial extractor takes no rule layers (categorization is a later stage).
+
+    fn line(text: &str, words: Vec<WordInput>) -> LineInput {
+        LineInput { text: text.to_string(), words }
+    }
+
+    fn pairs_of(lines: Vec<LineInput>) -> Vec<(String, i64)> {
+        extract_spatial_items(vec![PageInput { lines }])
+            .items
+            .into_iter()
+            .map(|item| (item.description, item.price_scaled))
+            .collect()
+    }
+
+    /// A code-only price row (barcode + deposit price) between two items must not
+    /// have its price stolen by the following item.
+    #[test]
+    fn keeps_next_priced_item_from_stealing_code_only_price_row() {
+        let lines = vec![
+            line("26-L.IQUOR COORS LIGHT 6 PK HQ 15.79", vec![
+                word("26-L.IQUOR", 0.031, 0.289, 0.191, 0.309),
+                word("COORS LIGHT 6 PK HQ", 0.318, 0.301, 0.688, 0.328),
+                word("15.79", 0.760, 0.298, 0.860, 0.324),
+            ]),
+            line("05632700795 0.60", vec![
+                word("05632700795", 0.068, 0.309, 0.257, 0.328),
+                word("0.60", 0.881, 0.317, 0.963, 0.340),
+            ]),
+            line("DEPOSIT 1 COORS PINEAPPLE HQ 3.19", vec![
+                word("DEPOSIT 1", 0.102, 0.328, 0.258, 0.348),
+                word("COORS PINEAPPLE", 0.322, 0.342, 0.579, 0.365),
+                word("HQ", 0.657, 0.341, 0.701, 0.362),
+                word("3.19", 0.793, 0.338, 0.876, 0.361),
+            ]),
+            line("05632702339 0.10", vec![
+                word("05632702339", 0.070, 0.347, 0.259, 0.366),
+                word("0.10", 0.882, 0.356, 0.963, 0.377),
+            ]),
+            line("DEPOSIT 1", vec![word("DEPOSIT 1", 0.103, 0.366, 0.260, 0.385)]),
+            line("TOTAL 19.68", vec![
+                word("TOTAL", 0.090, 0.500, 0.180, 0.512),
+                word("19.68", 0.880, 0.500, 0.950, 0.512),
+            ]),
+        ];
+        let pairs = pairs_of(lines);
+        assert!(pairs.contains(&("26-L.IQUOR COORS LIGHT 6 PK HQ".to_string(), 157_900)));
+        assert!(pairs.iter().any(|(d, p)| d.contains("COORS PINEAPPLE") && *p == 31_900));
+        assert!(!pairs.iter().any(|(d, p)| d.contains("COORS PINEAPPLE") && *p == 6_000));
+    }
+
+    /// A quantity total ("3@$0.10 2.79") must attach to the multi-buy item, not
+    /// to the intervening "DEPOSIT 1" stub.
+    #[test]
+    fn keeps_quantity_total_off_deposit_stub() {
+        let lines = vec![
+            line("(3)06365703339 GROWERS CIDER HQ 10.47", vec![
+                word("(3)06365703339", 0.074, 0.385, 0.310, 0.403),
+                word("GROWERS CIDER", 0.373, 0.381, 0.597, 0.403),
+                word("HQ", 0.657, 0.379, 0.702, 0.400),
+                word("10.47", 0.869, 0.393, 0.963, 0.415),
+            ]),
+            line("3 @ $3.49", vec![word("3 @ $3.49", 0.102, 0.403, 0.261, 0.422)]),
+            line("DEPOSIT 1 0.30", vec![
+                word("DEPOSIT 1", 0.100, 0.421, 0.258, 0.439),
+                word("0.30", 0.884, 0.430, 0.961, 0.452),
+            ]),
+            line("3@$0.10 2.79", vec![
+                word("3@$0.10", 0.098, 0.438, 0.225, 0.457),
+                word("2.79", 0.812, 0.451, 0.893, 0.473),
+            ]),
+            line("06365703620 GROW CIDER HQ 0.10", vec![
+                word("06365703620", 0.061, 0.457, 0.259, 0.475),
+                word("GROW CIDER", 0.322, 0.456, 0.498, 0.476),
+                word("HQ", 0.676, 0.454, 0.720, 0.475),
+                word("0.10", 0.882, 0.469, 0.964, 0.492),
+            ]),
+            line("DEPOSIT 1", vec![word("DEPOSIT 1", 0.094, 0.475, 0.256, 0.495)]),
+            line("TOTAL 13.66", vec![
+                word("TOTAL", 0.090, 0.500, 0.180, 0.512),
+                word("13.66", 0.880, 0.500, 0.950, 0.512),
+            ]),
+        ];
+        let pairs = pairs_of(lines);
+        assert!(pairs.iter().any(|(d, p)| d.contains("GROW CIDER") && *p == 27_900));
+        assert!(!pairs.iter().any(|(d, p)| d == "DEPOSIT 1" && *p == 27_900));
+    }
+
+    /// A duplicate code row that repeats the previous item's price must lend that
+    /// price to the following unpriced item.
+    #[test]
+    fn assigns_duplicate_code_row_price_to_next_unpriced_item() {
+        let lines = vec![
+            line("27-PRODUCE CANTALOUPE MRJ 1.99", vec![
+                word("27-PRODUCE", 0.017, 0.493, 0.205, 0.514),
+                word("CANTALOUPE", 0.318, 0.510, 0.496, 0.529),
+                word("MRJ", 0.676, 0.510, 0.738, 0.529),
+                word("1.99", 0.817, 0.507, 0.896, 0.528),
+            ]),
+            line("4050 1.99", vec![
+                word("4050", 0.055, 0.513, 0.132, 0.532),
+                word("1.99", 0.784, 0.525, 0.862, 0.547),
+            ]),
+            line("81363501124 BLACKBERRIES 60Z MRJ", vec![
+                word("81363501124", 0.054, 0.531, 0.254, 0.551),
+                word("BLACKBERRIES 60Z", 0.319, 0.528, 0.602, 0.549),
+                word("MRJ", 0.641, 0.528, 0.704, 0.547),
+            ]),
+            line("TOTAL 3.98", vec![
+                word("TOTAL", 0.090, 0.600, 0.180, 0.612),
+                word("3.98", 0.880, 0.600, 0.950, 0.612),
+            ]),
+        ];
+        let pairs = pairs_of(lines);
+        assert!(pairs.contains(&("CANTALOUPE".to_string(), 19_900)));
+        assert!(pairs.contains(&("BLACKBERRIES 60Z".to_string(), 19_900)));
+    }
+
+    /// Two rows whose price is embedded in an OCR-garbled trailing word
+    /// ("gnigoQq bn14.99") must both surface as priced items.
+    #[test]
+    fn accepts_embedded_trailing_price_word() {
+        let lines = vec![
+            line("2146010 SEAFOOD CNTR gnigoQq bn14.99", vec![
+                word("2146010", 0.056, 0.568, 0.190, 0.589),
+                word("SEAFOOD CNTR", 0.320, 0.565, 0.539, 0.585),
+                word("gnigoQq bn14.99", 0.567, 0.564, 0.899, 0.586),
+            ]),
+            line("2146010b SEAFOOD CNTR noitqQ 14.99", vec![
+                word("2146010b", 0.060, 0.586, 0.233, 0.606),
+                word("SEAFOOD CNTR", 0.320, 0.584, 0.534, 0.606),
+                word("noitqQ", 0.581, 0.586, 0.706, 0.611),
+                word("14.99", 0.803, 0.584, 0.898, 0.606),
+            ]),
+            line("TOTAL 29.98", vec![
+                word("TOTAL", 0.090, 0.650, 0.180, 0.662),
+                word("29.98", 0.880, 0.650, 0.950, 0.662),
+            ]),
+        ];
+        let pairs = pairs_of(lines);
+        let seafood = pairs.iter().filter(|(d, p)| d.contains("SEAFOOD CNTR") && *p == 149_900).count();
+        assert_eq!(seafood, 2);
+    }
 }

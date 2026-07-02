@@ -1,1 +1,5 @@
 /target
+
+# OCR models are provisioned out-of-band (CI downloads them from the
+# ocr-models-v1 release; devs run scripts to fetch). Not vendored — too large.
+/models
