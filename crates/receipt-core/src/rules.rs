@@ -176,6 +176,31 @@ pub fn default_parser_rule_layers() -> ParserRuleLayers {
     }
 }
 
+/// Build item-category rule layers from the bundled default classifier plus zero
+/// or more override classifier TOMLs (later layers win, same as the desktop
+/// `classifier_configs=(default, override)` layering). Used by the private E2E
+/// harness, which asserts a few categories that live in an out-of-tree
+/// `private_rules.toml` rather than the public defaults. Merchant rules are
+/// unaffected (still the public defaults). Panics if an override TOML is invalid.
+pub fn parser_rule_layers_with_overrides(override_classifier_tomls: &[&str]) -> ParserRuleLayers {
+    let mut configs = vec![to_build_config(parse_classifier(DEFAULT_ITEM_CLASSIFIER_TOML))];
+    for text in override_classifier_tomls {
+        let parsed: ClassifierToml =
+            toml::from_str(text).expect("override classifier TOML must be valid");
+        configs.push(to_build_config(parsed));
+    }
+    let category_rules = build_rule_layers(default_category_accounts(), configs, vec![]);
+    let account_mapping = category_rules
+        .account_mapping
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    ParserRuleLayers {
+        category_rules,
+        account_mapping,
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct MerchantRuleToml {
     #[serde(default)]
