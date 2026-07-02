@@ -29,9 +29,14 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      # Runs the inline unit tests AND the vendored public cached E2E corpus
-      # (tests/receipts_e2e). No token needed: the private E2E skips when
-      # BEANBEAVER_PRIVATE_TESTS_DIR is unset. See private-regression.yml for the
-      # token-gated private corpus.
-      - name: Test
-        run: cargo test -p receipt-core -- --nocapture
+      # Fast gate: the inline `#[cfg(test)]` lib unit tests only. Runs first so a
+      # broken unit test fails the job in seconds, before the slower E2E corpus.
+      - name: Unit tests
+        run: cargo test -p receipt-core --lib -- --nocapture
+
+      # Slower gate: the vendored public cached E2E corpus (tests/receipts_e2e),
+      # reusing the artifacts compiled above. `private_e2e` is included so it stays
+      # compile-checked here; it SKIPS at runtime when BEANBEAVER_PRIVATE_TESTS_DIR
+      # is unset. See private-regression.yml for the token-gated private corpus.
+      - name: Public E2E corpus
+        run: cargo test -p receipt-core --test public_e2e --test private_e2e -- --nocapture
