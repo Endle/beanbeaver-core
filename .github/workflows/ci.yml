@@ -14,9 +14,13 @@ permissions:
 
 jobs:
   receipt-core:
-    name: receipt-core (test)
-    runs-on: ubuntu-latest
+    name: receipt-core (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - name: Check out core (public)
         uses: actions/checkout@v4
@@ -29,14 +33,22 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      # Fast gate: the inline `#[cfg(test)]` lib unit tests only. Runs first so a
-      # broken unit test fails the job in seconds, before the slower E2E corpus.
+      # Fast gate: the inline `#[cfg(test)]` lib unit tests only. Runs on both
+      # Linux and macOS to catch platform-specific divergence (float formatting,
+      # path handling); fails in seconds before the slower E2E corpus.
       - name: Unit tests
         run: cargo test -p receipt-core --lib -- --nocapture
 
-      # Slower gate: the vendored public cached E2E corpus (tests/receipts_e2e),
-      # reusing the artifacts compiled above. `private_e2e` is included so it stays
-      # compile-checked here; it SKIPS at runtime when BEANBEAVER_PRIVATE_TESTS_DIR
-      # is unset. See private-regression.yml for the token-gated private corpus.
-      - name: Public E2E corpus
-        run: cargo test -p receipt-core --test public_e2e --test private_e2e -- --nocapture
+      # Slower gate: the vendored public E2E corpus (tests/receipts_e2e) in CACHED
+      # mode only — it replays checked-in `.ocr.json` snapshots (no OCR model, no
+      # network). The trailing `cached` filter pins this to `*_cached_e2e` tests so
+      # a future live-mode test can't slip into this step. Linux only: the crate is
+      # pure Rust with no native deps, so a second macOS run would be redundant with
+      # the unit tests above (and macOS runner minutes bill at 10x).
+      #
+      # `private_e2e` is included so it stays compile-checked; it SKIPS at runtime
+      # when BEANBEAVER_PRIVATE_TESTS_DIR is unset. See private-regression.yml for
+      # the token-gated private corpus.
+      - name: Public E2E corpus (cached mode)
+        if: runner.os == 'Linux'
+        run: cargo test -p receipt-core --test public_e2e --test private_e2e -- --nocapture cached
