@@ -19,7 +19,9 @@ use std::path::{Path, PathBuf};
 use receipt_core::ocr_transform::{transform, RawDetection};
 use receipt_core::receipt_categories::resolve_account_target;
 use receipt_core::receipt_parser::parse_receipt;
-use receipt_core::rules::{default_known_merchants, parser_rule_layers_with_overrides};
+use receipt_core::rules::{
+    default_known_merchants, default_merchant_families, parser_rule_layers_with_overrides,
+};
 use serde_json::Value;
 
 /// Reference date (year, month, day). Only affects placeholder/2-digit-year
@@ -159,6 +161,7 @@ pub fn run_cached_corpus(receipts_dir: &Path, overrides: &[&str]) -> CorpusResul
     let layers = parser_rule_layers_with_overrides(overrides);
     let mapping: HashMap<String, String> = layers.account_mapping.iter().cloned().collect();
     let merchants = default_known_merchants();
+    let merchant_families = default_merchant_families();
 
     let mut expected_files = Vec::new();
     collect_expected(receipts_dir, &mut expected_files);
@@ -192,6 +195,7 @@ pub fn run_cached_corpus(receipts_dir: &Path, overrides: &[&str]) -> CorpusResul
             &layers,
             &format!("{stem}.jpg"),
             &merchants,
+            &merchant_families,
             TODAY_YEAR,
         );
 

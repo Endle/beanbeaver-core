@@ -7,6 +7,7 @@
 //! on this crate; the only output it produces is plain beancount-format text.
 
 pub mod detection_normalization;
+pub mod merchant_match;
 pub mod ocr_line_grouping;
 pub mod ocr_transform;
 pub mod process;

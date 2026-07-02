@@ -14,7 +14,7 @@ use crate::receipt_formatter::{
     FormatterWarningInput,
 };
 use crate::receipt_parser::{parse_receipt, ParsedReceiptData, ParserRuleLayers};
-use crate::rules::{default_known_merchants, default_parser_rule_layers};
+use crate::rules::{default_known_merchants, default_merchant_families, default_parser_rule_layers};
 
 const DEFAULT_ITEM_ACCOUNT: &str = "Expenses:FIXME";
 
@@ -92,6 +92,7 @@ pub fn process_receipt(
 ) -> ProcessedReceipt {
     let rule_layers: ParserRuleLayers = default_parser_rule_layers();
     let merchants = known_merchants.unwrap_or_else(default_known_merchants);
+    let merchant_families = default_merchant_families();
 
     let ocr = transform(detections, padded_width, padded_height, padding);
 
@@ -102,6 +103,7 @@ pub fn process_receipt(
         &rule_layers,
         image_filename,
         &merchants,
+        &merchant_families,
         today.0,
     );
 

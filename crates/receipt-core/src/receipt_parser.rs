@@ -36,7 +36,12 @@ pub struct ParsedReceiptTender {
 
 #[derive(Clone, Debug)]
 pub struct ParsedReceiptData {
+    /// Display merchant name: the canonical family when confidently resolved,
+    /// otherwise the raw OCR text. Equal to `merchant_match.display()`.
     pub merchant: String,
+    /// Full merchant resolution (raw OCR text, canonical family, confidence),
+    /// for consumers that want to surface the correction to the user.
+    pub merchant_match: crate::merchant_match::MerchantMatch,
     pub date: Option<(i32, u32, u32)>,
     pub date_is_placeholder: bool,
     pub total: String,
@@ -131,6 +136,7 @@ pub fn parse_receipt(
     rule_layers: &ParserRuleLayers,
     image_filename: &str,
     known_merchants: &[String],
+    merchant_families: &[crate::merchant_match::MerchantFamily],
     current_year: i32,
 ) -> ParsedReceiptData {
     let lines = full_text
@@ -140,12 +146,14 @@ pub fn parse_receipt(
         .map(str::to_string)
         .collect::<Vec<_>>();
 
-    let merchant = receipt_parse_helpers::extract_merchant(
+    let merchant_match = receipt_parse_helpers::extract_merchant_match(
         &lines,
         full_text,
         pages_for_helper,
         known_merchants,
+        merchant_families,
     );
+    let merchant = merchant_match.display().to_string();
     let parsed_date = receipt_fields::extract_date(&lines, full_text, current_year);
     let date = parsed_date.map(|value| (value.year, value.month, value.day));
     let date_is_placeholder = date.is_none();
@@ -258,6 +266,7 @@ pub fn parse_receipt(
 
     ParsedReceiptData {
         merchant,
+        merchant_match,
         date,
         date_is_placeholder,
         total: cents_to_fixed(total_cents),

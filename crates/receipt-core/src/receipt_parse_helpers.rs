@@ -1,6 +1,7 @@
 use regex::Regex;
-use std::cmp::Reverse;
 use std::sync::OnceLock;
+
+use crate::merchant_match::{self, MerchantFamily, MerchantMatch};
 
 #[derive(Clone, Debug)]
 pub struct MerchantWordInput {
@@ -82,54 +83,12 @@ pub fn extract_merchant_with_confidence(pages: &[MerchantPageInput]) -> Option<S
     None
 }
 
-pub fn extract_merchant(
-    lines: &[String],
-    full_text: &str,
-    pages: &[MerchantPageInput],
-    known_merchants: &[String],
-) -> String {
-    let full_text_upper = full_text.to_ascii_uppercase();
-    let mut merchant_candidates: Vec<String> = known_merchants.to_vec();
-    merchant_candidates.sort_by_key(|merchant| Reverse(merchant.len()));
-    for merchant in merchant_candidates {
-        let pattern = format!(r"\b{}\b", regex::escape(&merchant.to_ascii_uppercase()));
-        if Regex::new(&pattern)
-            .ok()
-            .is_some_and(|regex| regex.is_match(&full_text_upper))
-        {
-            return merchant;
-        }
-    }
-
-    // Costco's name is frequently OCR'd with the leading "C" dropped or an
-    // O/0 confusable ("OSTCO", "C0STCO"), so the exact \bCOSTCO\b match above
-    // misses. The "WHOLESALE" banner is unmistakably Costco, so when it
-    // co-occurs with such a token, canonicalize to COSTCO. This branch only
-    // runs after the exact known-merchant match has already failed, so a real
-    // "COSTCO" receipt never reaches here and ordinary merchants (no
-    // "WHOLESALE") are never rewritten.
-    if full_text_upper.contains("WHOLESALE")
-        && (full_text_upper.contains("OSTCO") || full_text_upper.contains("C0STCO"))
-    {
-        return "COSTCO".to_string();
-    }
-
-    // FreshCo's banner line is often OCR'd with a trailing confusable
-    // ("FRESHCC"), but the correct "FreshCo" reliably reappears in the store
-    // address/footer (e.g. "123 Example St FreshCo"). The confidence
-    // fallback below would otherwise return the mis-OCR'd banner line, so
-    // prefer the canonical spelling whenever it occurs anywhere in the text.
-    if full_text_upper.contains("FRESHCO") {
-        return "FRESHCO".to_string();
-    }
-
-    // Foody Mart's banner runs the store name into the branch/address on one
-    // OCR line ("FOODY MART(Branch) 123 Example Rd"), so the confidence
-    // fallback returns a long noisy string. Collapse to the canonical name.
-    if full_text_upper.contains("FOODY MART") {
-        return "FOODY MART".to_string();
-    }
-
+/// Best-effort OCR'd merchant name straight from the receipt header, *before*
+/// any canonicalization — prefer the highest-confidence early line, then fall
+/// back to the first plausible non-date line. This is the `raw` the matcher
+/// preserves; `"UNKNOWN_MERCHANT"` is the last-resort sentinel (kept for parity
+/// with the prior behavior).
+fn ocr_header_candidate(lines: &[String], pages: &[MerchantPageInput]) -> String {
     if let Some(confident) = extract_merchant_with_confidence(pages) {
         return confident;
     }
@@ -144,6 +103,22 @@ pub fn extract_merchant(
     }
 
     "UNKNOWN_MERCHANT".to_string()
+}
+
+/// Resolve the receipt's merchant to a `MerchantMatch`: the raw OCR header plus,
+/// when we can determine it safely, the canonical family and how much to trust
+/// it. Generalizes the former hardcoded Costco/FreshCo/Foody Mart branches via
+/// the data-driven [`merchant_match`] matcher.
+pub fn extract_merchant_match(
+    lines: &[String],
+    full_text: &str,
+    pages: &[MerchantPageInput],
+    known_merchants: &[String],
+    families: &[MerchantFamily],
+) -> MerchantMatch {
+    let raw = ocr_header_candidate(lines, pages);
+    let full_text_upper = full_text.to_ascii_uppercase();
+    merchant_match::resolve(&raw, &full_text_upper, known_merchants, families)
 }
 
 pub fn has_useful_bbox_data(pages: &[MerchantPageInput]) -> bool {
@@ -183,49 +158,57 @@ pub fn is_spatial_layout_receipt(full_text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_merchant;
+    use super::extract_merchant_match;
+    use crate::merchant_match::MerchantFamily;
+
+    fn families() -> Vec<MerchantFamily> {
+        vec![
+            MerchantFamily {
+                canonical: "COSTCO".to_string(),
+                aliases: vec!["COSTCO WHOLESALE".to_string(), "COSICO".to_string()],
+                corroborators: vec!["WHOLESALE".to_string()],
+            },
+            MerchantFamily {
+                canonical: "FRESHCO".to_string(),
+                aliases: vec!["FRESHCO".to_string()],
+                corroborators: vec![],
+            },
+            MerchantFamily {
+                canonical: "FOODY MART".to_string(),
+                aliases: vec!["FOODY MART".to_string()],
+                corroborators: vec![],
+            },
+        ]
+    }
+
+    fn display(full_text: &str) -> String {
+        let lines: Vec<String> = full_text.lines().map(str::to_string).collect();
+        extract_merchant_match(&lines, full_text, &[], &["COSTCO".to_string()], &families())
+            .display()
+            .to_string()
+    }
 
     #[test]
     fn canonicalizes_costco_ocr_dropped_leading_c() {
         // OCR dropped the leading C; "WHOLESALE" banner confirms Costco.
-        let full_text = "OSTCO\nWHOLESALE\nBranch #001\n1268728 UNREAL 17.99";
-        let lines: Vec<String> = full_text.lines().map(str::to_string).collect();
-        assert_eq!(
-            extract_merchant(&lines, full_text, &[], &["COSTCO".to_string()]),
-            "COSTCO"
-        );
+        assert_eq!(display("OSTCO\nWHOLESALE\nBranch #001\n1268728 UNREAL 17.99"), "COSTCO");
     }
 
     #[test]
     fn canonicalizes_freshco_from_address_when_banner_misocrd() {
         // Banner OCR'd as "FRESHCC"; correct spelling appears in the address.
-        let full_text = "FRESHCC\n123 Example St FreshCo\nCilantro $0.99";
-        let lines: Vec<String> = full_text.lines().map(str::to_string).collect();
-        assert_eq!(
-            extract_merchant(&lines, full_text, &[], &["COSTCO".to_string()]),
-            "FRESHCO"
-        );
+        assert_eq!(display("FRESHCC\n123 Example St FreshCo\nCilantro $0.99"), "FRESHCO");
     }
 
     #[test]
     fn canonicalizes_foody_mart_from_noisy_banner() {
         // Banner runs name into branch/address on one OCR line.
-        let full_text = "FOODY MART(Branch) 123 Example Rd\nAsahi 1.99";
-        let lines: Vec<String> = full_text.lines().map(str::to_string).collect();
-        assert_eq!(
-            extract_merchant(&lines, full_text, &[], &["COSTCO".to_string()]),
-            "FOODY MART"
-        );
+        assert_eq!(display("FOODY MART(Branch) 123 Example Rd\nAsahi 1.99"), "FOODY MART");
     }
 
     #[test]
     fn does_not_rewrite_unrelated_merchants() {
         // Neither a Costco banner nor a FreshCo token: keep the OCR'd line.
-        let full_text = "SHOPRITE\n123 Main Street\nMilk $2.99";
-        let lines: Vec<String> = full_text.lines().map(str::to_string).collect();
-        assert_eq!(
-            extract_merchant(&lines, full_text, &[], &["COSTCO".to_string()]),
-            "SHOPRITE"
-        );
+        assert_eq!(display("SHOPRITE\n123 Main Street\nMilk $2.99"), "SHOPRITE");
     }
 }
