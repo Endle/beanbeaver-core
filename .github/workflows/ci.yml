@@ -13,10 +13,10 @@ permissions:
   contents: read
 
 jobs:
-  receipt-core:
-    name: receipt-core (${{ matrix.os }})
+  test:
+    name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -52,3 +52,24 @@ jobs:
       - name: Public E2E corpus (cached mode)
         if: runner.os == 'Linux'
         run: cargo test -p receipt-core --test public_e2e --test private_e2e -- --nocapture cached
+
+      # Live gate: the FULL on-device pipeline (image -> ONNX OCR -> parse ->
+      # beancount) over the vendored redacted receipts. Runs on BOTH Linux and
+      # macOS so the real det/rec/cls path is exercised on each. The PP-OCRv5
+      # mobile models are not vendored (too large); pull them from the public
+      # ocr-models-v1 release. CoreML stays OFF (iOS ships CPU), so macOS here
+      # uses the same CPU ORT path as production.
+      - name: Download OCR models
+        run: |
+          mkdir -p models
+          base="https://github.com/Endle/beanbeaver/releases/download/ocr-models-v1"
+          for m in PP-OCRv5_mobile_det.onnx PP-OCRv5_mobile_rec.onnx PP-LCNet_x1_0_textline_ori.onnx; do
+            curl -sSfL -o "models/$m" "$base/$m"
+          done
+          ls -la models
+
+      # Loose by design: the pipeline must finish end-to-end for 2 randomly-picked
+      # fixtures; parse divergences vs. the baseline are reported as warnings, not
+      # failures (live OCR is nondeterministic across mac/linux).
+      - name: Public live E2E (on-device OCR)
+        run: cargo test -p ocr-paddle --test public_live_e2e -- --nocapture
