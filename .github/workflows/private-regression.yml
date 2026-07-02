@@ -1,0 +1,73 @@
+name: Private Regression
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  private-cached-e2e:
+    name: Private cached E2E (receipt-core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Fine-grained PAT or GitHub App token with read-only access to the
+      # private test repository contents. Add it in the repo's Actions secrets.
+      PRIVATE_TESTS_TOKEN: ${{ secrets.BEANBEAVER_PRIVATE_TESTS_READ_TOKEN }}
+      # Update this if the private test repository lives elsewhere.
+      PRIVATE_TESTS_REPO: Endle/beanbeaver-private-test
+    steps:
+      - name: Validate secret configuration
+        run: |
+          if [ -z "${PRIVATE_TESTS_TOKEN}" ]; then
+            echo "Missing secret: BEANBEAVER_PRIVATE_TESTS_READ_TOKEN" >&2
+            exit 1
+          fi
+
+      - name: Check out core (public)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check out private tests
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_TESTS_REPO }}
+          token: ${{ env.PRIVATE_TESTS_TOKEN }}
+          path: .private-tests-src
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Stage private tests outside the repo workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/beanbeaver-private-tests"
+          cp -R .private-tests-src/. "${RUNNER_TEMP}/beanbeaver-private-tests/"
+          rm -rf .private-tests-src
+
+      - name: Run cached private E2E (receipt-core)
+        shell: bash
+        env:
+          BEANBEAVER_PRIVATE_TESTS_DIR: ${{ runner.temp }}/beanbeaver-private-tests
+        run: |
+          set -euo pipefail
+          cargo test -p receipt-core --test private_e2e -- --nocapture
+
+      - name: Scrub private test checkout
+        if: always()
+        shell: bash
+        run: rm -rf "${RUNNER_TEMP}/beanbeaver-private-tests"
