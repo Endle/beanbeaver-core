@@ -125,6 +125,13 @@ pub struct ReceiptResult {
     pub items: Vec<ReceiptItem>,
     pub warnings: Vec<String>,
     pub beancount: String,
+    /// Greppable identity embedded in `beancount` (`bb-<yyyymmdd>-<sha8>`), or
+    /// `None` if the image hash could not be computed.
+    pub beanbeaver_id: Option<String>,
+    /// Path the receipt image should be saved under, relative to the ledger's
+    /// documents root (`beanbeaver/<name>.jpg`) — exactly the value written into
+    /// the `document:` metadata. Save the scanned JPEG here so the link resolves.
+    pub document_relpath: Option<String>,
     /// Per-stage timings for this scan (on-device profiling).
     pub timings: ScanTimings,
 }
@@ -193,6 +200,11 @@ impl OcrSession {
             .map_err(|e| ScanError::ImageDecode { msg: e.to_string() })?
             .to_rgb8();
 
+        // Content hash of the exact encoded bytes we were handed. The receipt's
+        // portable identity (`beanbeaver-id` / `document:` filename) is derived
+        // from this, and the app saves the same bytes, so the link resolves.
+        let image_sha256 = sha256_hex(&image_bytes);
+
         let mut engine = self
             .engine
             .lock()
@@ -204,7 +216,7 @@ impl OcrSession {
             "receipt.jpg",
             (today.year, today.month, today.day),
             &credit_card_account,
-            None,
+            Some(&image_sha256),
         )
         .map_err(|e| ScanError::Inference { msg: e.to_string() })?;
 
@@ -235,8 +247,22 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
             .collect(),
         warnings: d.warnings.into_iter().map(|w| w.message).collect(),
         beancount: p.beancount,
+        beanbeaver_id: p.beanbeaver_id,
+        document_relpath: p.document_relpath,
         timings,
     }
+}
+
+/// Lowercase hex SHA-256 of `bytes`, the receipt's content identity.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
 }
 
 #[cfg(test)]

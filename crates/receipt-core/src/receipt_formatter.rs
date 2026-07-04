@@ -277,13 +277,6 @@ pub fn format_parsed_receipt(
             lines.push(format!("; @tax: {}", cents_to_fixed(tax_cents)));
         }
     }
-    if !receipt.image_filename.is_empty() {
-        lines.push(format!("; @image: {}", receipt.image_filename));
-        lines.push(format!("; @image_filename: {}", receipt.image_filename));
-    }
-    if let Some(image_sha256) = image_sha256.filter(|value| !value.is_empty()) {
-        lines.push(format!("; @image_sha256: {image_sha256}"));
-    }
     lines.push(String::new());
 
     let merchant_clean = receipt.merchant.replace('"', "'");
@@ -291,6 +284,26 @@ pub fn format_parsed_receipt(
         r#"{} * "{}" "Receipt scan""#,
         receipt.date_iso, merchant_clean
     ));
+
+    // Real beancount metadata (not `;` comments) so a consumer can find every
+    // BeanBeaver-generated entry with `grep -R beanbeaver-id <ledger-root>`, and
+    // a specific receipt by its content-hash token. `document:` is beancount's
+    // native link and is resolved by each user against their own
+    // `option "documents"` root, so it stays correct across arbitrary layouts.
+    if let Some(id) = beanbeaver_id(&receipt.date_iso, receipt.date_is_placeholder, image_sha256) {
+        lines.push(format!("  beanbeaver-id: \"{id}\""));
+    }
+    if let Some(sha) = image_sha256.filter(|value| !value.is_empty()) {
+        lines.push(format!("  beanbeaver-image-sha256: \"{sha}\""));
+    }
+    if let Some(doc) = beanbeaver_document_relpath(
+        &receipt.date_iso,
+        receipt.date_is_placeholder,
+        &receipt.merchant,
+        image_sha256,
+    ) {
+        lines.push(format!("  document: \"{doc}\""));
+    }
 
     let mut postings = build_payment_postings(receipt, credit_card_account, total_cents);
     let payment_posting_count = postings.len();
@@ -447,18 +460,15 @@ pub fn format_draft_beancount(
     lines.join("\n")
 }
 
-pub fn generate_filename(
-    date_iso: &str,
-    date_is_placeholder: bool,
-    merchant: &str,
-) -> String {
-    let date_str = if date_is_placeholder {
-        "unknown-date"
-    } else {
-        date_iso
-    };
+/// Subdirectory, relative to the ledger's `option "documents"` root, that
+/// BeanBeaver writes scanned receipt images into. Kept out of the ledger root so
+/// exporting receipts never pollutes the user's own directory layout.
+pub const BEANBEAVER_DOC_SUBDIR: &str = "beanbeaver";
 
-    let mut merchant_clean = String::new();
+/// Lowercase, dash-collapsed slug of a merchant name for use in filenames/ids
+/// (e.g. `COSTCO WHOLESALE #123` -> `costco-wholesale-123`). Never empty.
+fn merchant_slug(merchant: &str) -> String {
+    let mut slug = String::new();
     let mut previous_dash = false;
     for ch in merchant.to_ascii_lowercase().chars() {
         let normalized = if ch.is_ascii_alphanumeric() { ch } else { '-' };
@@ -470,20 +480,88 @@ pub fn generate_filename(
         } else {
             previous_dash = false;
         }
-        merchant_clean.push(normalized);
+        slug.push(normalized);
     }
-    merchant_clean = merchant_clean.trim_matches('-').to_string();
-    if merchant_clean.is_empty() {
-        merchant_clean = "unknown".to_string();
+    slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        slug = "unknown".to_string();
     }
+    slug
+}
 
-    format!("{date_str}-{merchant_clean}.beancount")
+/// The 8-char content-hash token shared by the `beanbeaver-id`, the `document:`
+/// path, and the image filename, derived from the full image SHA-256. `None`
+/// when no (non-empty) hash is available, so callers omit the metadata entirely.
+fn sha_token(image_sha256: Option<&str>) -> Option<String> {
+    let sha = image_sha256?.trim();
+    if sha.is_empty() {
+        return None;
+    }
+    Some(sha.chars().take(8).collect())
+}
+
+/// Stable, greppable identifier stamped on every BeanBeaver-generated
+/// transaction: `bb-<yyyymmdd>-<sha8>` (date compacted so the token is one
+/// word). `unknowndate` stands in for a placeholder date.
+pub fn beanbeaver_id(
+    date_iso: &str,
+    date_is_placeholder: bool,
+    image_sha256: Option<&str>,
+) -> Option<String> {
+    let token = sha_token(image_sha256)?;
+    let date_str = if date_is_placeholder {
+        "unknowndate".to_string()
+    } else {
+        date_iso.replace('-', "")
+    };
+    Some(format!("bb-{date_str}-{token}"))
+}
+
+/// Path of a receipt image relative to the documents root:
+/// `beanbeaver/<date>-<merchant>-<sha8>.jpg`. This is exactly the value written
+/// into the `document:` metadata, so the caller that saves the JPEG must use it
+/// verbatim as the destination path. `None` when no image hash is available.
+pub fn beanbeaver_document_relpath(
+    date_iso: &str,
+    date_is_placeholder: bool,
+    merchant: &str,
+    image_sha256: Option<&str>,
+) -> Option<String> {
+    let token = sha_token(image_sha256)?;
+    let date_str = if date_is_placeholder {
+        "unknown-date"
+    } else {
+        date_iso
+    };
+    Some(format!(
+        "{BEANBEAVER_DOC_SUBDIR}/{date_str}-{}-{token}.jpg",
+        merchant_slug(merchant)
+    ))
+}
+
+pub fn generate_filename(
+    date_iso: &str,
+    date_is_placeholder: bool,
+    merchant: &str,
+) -> String {
+    let date_str = if date_is_placeholder {
+        "unknown-date"
+    } else {
+        date_iso
+    };
+
+    format!("{date_str}-{}.beancount", merchant_slug(merchant))
 }
 
 pub fn format_enriched_transaction(
     receipt: &FormatterReceiptInput,
     match_input: &EnrichedMatchInput,
     default_expense: &str,
+    // Carried forward from the receipt entry being matched so the merged
+    // transaction keeps the same greppable identity and image link. `None` for
+    // receipts predating the metadata (e.g. an older scan without a hash).
+    beanbeaver_id: Option<&str>,
+    document: Option<&str>,
 ) -> String {
     let receipt_total_cents = decimal_to_cents(&receipt.total);
     let tax_cents = receipt.tax.as_deref().map(decimal_to_cents);
@@ -508,6 +586,15 @@ pub fn format_enriched_transaction(
         r#"{} * "{}" "{}""#,
         match_input.transaction_date_iso, payee_clean, narration_clean
     ));
+
+    // Carry the receipt's identity onto the merged transaction so `grep -R
+    // beanbeaver-id` still finds it and the image link survives the match.
+    if let Some(id) = beanbeaver_id.filter(|value| !value.trim().is_empty()) {
+        lines.push(format!("  beanbeaver-id: \"{id}\""));
+    }
+    if let Some(doc) = document.filter(|value| !value.trim().is_empty()) {
+        lines.push(format!("  document: \"{doc}\""));
+    }
 
     let mut cc_account: Option<String> = None;
     let mut cc_amount_cents: Option<i64> = None;
@@ -688,8 +775,9 @@ mod tests {
         assert!(out.contains("; @total: 20.00"));
         assert!(out.contains("; @items: 1"));
         assert!(out.contains("; @tax: 1.00"));
-        assert!(out.contains("; @image: costco.jpg"));
-        assert!(!out.contains("@image_sha256"), "no sha passed => no sha line");
+        // With no image hash, no BeanBeaver identity/document metadata is emitted.
+        assert!(!out.contains("beanbeaver-id"), "no sha passed => no id line");
+        assert!(!out.contains("document:"), "no sha passed => no document line");
         assert!(out.contains(r#"2026-02-18 * "COSTCO" "Receipt scan""#));
 
         // payment posting: fallback CC, negative total, card ****last4 comment
@@ -713,11 +801,37 @@ mod tests {
         assert!(out.contains("; **** 1234"));
     }
 
-    /// A passed image sha renders its own metadata line.
+    /// A passed image sha renders the greppable BeanBeaver metadata block: a
+    /// stable id, the full sha, and a `document:` link under `beanbeaver/`. The
+    /// 8-char content token is shared by the id and the document filename.
     #[test]
-    fn parsed_receipt_includes_image_sha_when_present() {
-        let out = format_parsed_receipt(&base(), CC, Some("abc123"));
-        assert!(out.contains("; @image_sha256: abc123"));
+    fn parsed_receipt_includes_beanbeaver_metadata_when_sha_present() {
+        let out = format_parsed_receipt(&base(), CC, Some("a1b2c3d4e5f6a7b8"));
+        assert!(out.contains(r#"  beanbeaver-id: "bb-20260218-a1b2c3d4""#), "{out}");
+        assert!(out.contains(r#"  beanbeaver-image-sha256: "a1b2c3d4e5f6a7b8""#));
+        assert!(out.contains(r#"  document: "beanbeaver/2026-02-18-costco-a1b2c3d4.jpg""#));
+        // The id and the document filename share the same 8-char content token,
+        // so grepping it finds both the ledger entry and the image file.
+        assert!(out.matches("a1b2c3d4").count() >= 2);
+    }
+
+    /// Placeholder-date receipts still get identity/document metadata, using the
+    /// `unknowndate` / `unknown-date` stand-ins.
+    #[test]
+    fn beanbeaver_metadata_handles_placeholder_date() {
+        let id = beanbeaver_id("2026-02-18", true, Some("a1b2c3d4e5")).unwrap();
+        assert_eq!(id, "bb-unknowndate-a1b2c3d4");
+        let doc =
+            beanbeaver_document_relpath("2026-02-18", true, "COSTCO #42", Some("a1b2c3d4e5")).unwrap();
+        assert_eq!(doc, "beanbeaver/unknown-date-costco-42-a1b2c3d4.jpg");
+    }
+
+    /// No hash => the identity helpers yield nothing (metadata is omitted).
+    #[test]
+    fn beanbeaver_identity_absent_without_hash() {
+        assert!(beanbeaver_id("2026-02-18", false, None).is_none());
+        assert!(beanbeaver_id("2026-02-18", false, Some("  ")).is_none());
+        assert!(beanbeaver_document_relpath("2026-02-18", false, "COSTCO", None).is_none());
     }
 
     /// Placeholder dates surface an UNKNOWN marker plus a FIXME note.
@@ -827,13 +941,22 @@ mod tests {
             match_details: "amount+date".to_string(),
         };
 
-        let out = format_enriched_transaction(&r, &match_input, "Expenses:FIXME");
+        let out = format_enriched_transaction(
+            &r,
+            &match_input,
+            "Expenses:FIXME",
+            Some("bb-20260218-a1b2c3d4"),
+            Some("beanbeaver/2026-02-18-costco-a1b2c3d4.jpg"),
+        );
 
         assert!(out.contains("; === ENRICHED TRANSACTION - REVIEW NEEDED ==="));
         assert!(out.contains("; Receipt: costco.jpg"));
         assert!(out.contains("; Matched: ledger.beancount:42"));
         assert!(out.contains("; Confidence: 90% (amount+date)"));
         assert!(out.contains(r#"2026-02-20 * "COSTCO WHOLESALE" "Purchase""#));
+        // receipt identity carried forward onto the merged transaction
+        assert!(out.contains(r#"  beanbeaver-id: "bb-20260218-a1b2c3d4""#));
+        assert!(out.contains(r#"  document: "beanbeaver/2026-02-18-costco-a1b2c3d4.jpg""#));
         // matched CC posting reused (negative number -> credit posting)
         assert!(out.contains("Liabilities:CreditCard:Visa"));
         assert!(out.contains("-20.00 CAD"));
@@ -841,5 +964,27 @@ mod tests {
         assert!(out.contains("Expenses:Food:Grocery:Drink:CocaCola"));
         assert!(out.contains("; remaining/unitemized"));
         assert!(out.contains("; --- Original Transaction (to be replaced) ---"));
+    }
+
+    /// Identity args are optional: omit them and no metadata line appears.
+    #[test]
+    fn enriched_transaction_omits_identity_when_absent() {
+        let match_input = EnrichedMatchInput {
+            transaction_date_iso: "2026-02-20".to_string(),
+            payee: "COSTCO".to_string(),
+            narration: String::new(),
+            postings: vec![EnrichedPostingInput {
+                account: "Liabilities:CreditCard:Visa".to_string(),
+                number: Some("-20.00".to_string()),
+                currency: Some("CAD".to_string()),
+            }],
+            file_path: "ledger.beancount".to_string(),
+            line_number: 1,
+            confidence: 0.9,
+            match_details: "amount".to_string(),
+        };
+        let out = format_enriched_transaction(&base(), &match_input, "Expenses:FIXME", None, None);
+        assert!(!out.contains("beanbeaver-id"));
+        assert!(!out.contains("document:"));
     }
 }

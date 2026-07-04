@@ -22,6 +22,8 @@ ocr-paddle = { path = "../ocr-paddle" }
 receipt-core = { path = "../receipt-core" }
 # Decode JPEG/PNG bytes handed across the FFI into an RgbImage.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# Content hash of the received image bytes -> the receipt's portable identity.
+sha2 = "0.10"
 # UniFFI proc-macro bindings ("cli" provides uniffi_bindgen_main for the bin).
 uniffi = { version = "0.28", features = ["cli"] }
 
