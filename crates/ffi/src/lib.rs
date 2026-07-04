@@ -159,15 +159,22 @@ pub struct OcrSession {
 
 #[uniffi::export]
 impl OcrSession {
-    /// Load the three PP-OCRv5 models from `model_dir` (the bundle directory
-    /// holding `PP-OCRv5_mobile_det.onnx`, `_rec.onnx`, `PP-LCNet…_ori.onnx`).
+    /// Load the PP-OCRv5 models from `model_dir` (the bundle directory holding
+    /// `PP-OCRv5_mobile_det.onnx`, `_rec.onnx`, `PP-LCNet…_ori.onnx`).
+    ///
+    /// When `use_orientation_cls` is false the textline-orientation classifier is
+    /// not loaded or run: it fixes 180°-flipped lines, but captures from an
+    /// upright document scan rarely need it, and skipping it removes the per-crop
+    /// classify pass (~23% of on-device scan time). The caller reloads the
+    /// session to change this.
     #[uniffi::constructor]
-    pub fn new(model_dir: String) -> Result<Arc<Self>, ScanError> {
+    pub fn new(model_dir: String, use_orientation_cls: bool) -> Result<Arc<Self>, ScanError> {
         let dir = std::path::Path::new(&model_dir);
+        let cls_model = use_orientation_cls.then(|| dir.join(CLS_MODEL));
         let engine = OcrEngine::from_paths(
             dir.join(DET_MODEL),
             dir.join(REC_MODEL),
-            Some(dir.join(CLS_MODEL)),
+            cls_model,
         )
         .map_err(|e| ScanError::ModelLoad { msg: e.to_string() })?;
         Ok(Arc::new(Self {
@@ -242,7 +249,7 @@ mod tests {
     #[test]
     #[ignore = "needs converted models + fixture"]
     fn scan_costco_fixture_end_to_end() {
-        let session = OcrSession::new("../../models".to_string()).expect("load models");
+        let session = OcrSession::new("../../models".to_string(), true).expect("load models");
         let bytes = std::fs::read("../../tests/receipts_e2e/costco_20260218_redact.jpg")
             .expect("read fixture");
 
