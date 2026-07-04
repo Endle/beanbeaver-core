@@ -23,6 +23,13 @@ const DEFAULT_ITEM_ACCOUNT: &str = "Expenses:FIXME";
 pub struct ProcessedReceipt {
     pub parsed: ParsedReceiptData,
     pub beancount: String,
+    /// Greppable identity stamped into `beancount` (`bb-<yyyymmdd>-<sha8>`), and
+    /// the receipt image's path relative to the documents root
+    /// (`beanbeaver/<name>.jpg`) written into the `document:` metadata. Both are
+    /// `None` when no image hash was supplied. Surfaced here so a caller (e.g.
+    /// the iOS app saving the JPEG) uses the *same* values embedded in the text.
+    pub beanbeaver_id: Option<String>,
+    pub document_relpath: Option<String>,
 }
 
 /// Round a decimal string to 2 places using banker's rounding (round-half-even),
@@ -160,7 +167,26 @@ pub fn process_receipt(
 
     let beancount = format_parsed_receipt(&formatter_input, credit_card_account, image_sha256);
 
-    ProcessedReceipt { parsed, beancount }
+    // Derived from the same fields the formatter used, so the returned values
+    // are guaranteed identical to the `beanbeaver-id` / `document:` in `beancount`.
+    let beanbeaver_id = crate::receipt_formatter::beanbeaver_id(
+        &formatter_input.date_iso,
+        formatter_input.date_is_placeholder,
+        image_sha256,
+    );
+    let document_relpath = crate::receipt_formatter::beanbeaver_document_relpath(
+        &formatter_input.date_iso,
+        formatter_input.date_is_placeholder,
+        &formatter_input.merchant,
+        image_sha256,
+    );
+
+    ProcessedReceipt {
+        parsed,
+        beancount,
+        beanbeaver_id,
+        document_relpath,
+    }
 }
 
 #[cfg(test)]
