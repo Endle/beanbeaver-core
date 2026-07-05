@@ -4,6 +4,11 @@
   "total": "72.41",
   "critical_items": [
     {
+      "description": "KS ORG",
+      "price": "10.29",
+      "category": "Expenses:Food:Grocery:Dairy"
+    },
+    {
       "description": "2% FINE-FILT",
       "price": "6.69",
       "category": "Expenses:Food:Grocery:Dairy"
