@@ -6,6 +6,12 @@
       "description": "Soft Drink Orange",
       "price": "44.95",
       "category": "Expenses:Food:Grocery:Drink"
+    },
+    {
+      "description": "Tom Diced",
+      "price": "10.76",
+      "category": "Expenses:Food:Grocery:Vegetable"
     }
-  ]
+  ],
+  "known_failures": ["critical_items"]
 }
