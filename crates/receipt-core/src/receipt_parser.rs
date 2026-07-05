@@ -18,6 +18,12 @@ pub struct ParsedReceiptItem {
     pub price: String,
     pub quantity: i32,
     pub category: Option<String>,
+    /// The beanbeaver-internal semantic classification for this line — a
+    /// multi-tag view (e.g. `["grocery", "meat", "chicken"]`) that is upstream
+    /// of, and richer than, the single `category` beancount account. Consumers
+    /// (the app UI) can present or filter on tags without reverse-engineering
+    /// the account path. Empty when no classifier rule matched.
+    pub tags: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -129,6 +135,13 @@ fn categorize_description(description: &str, rule_layers: &ParserRuleLayers) -> 
     resolve_account_target(category_key.as_deref(), rule_layers, None)
 }
 
+/// The internal semantic tags for an item description — the multi-tag layer that
+/// sits upstream of the single beancount account `categorize_description`
+/// resolves. Classified from the same source string so the two agree.
+fn item_tags(description: &str, rule_layers: &ParserRuleLayers) -> Vec<String> {
+    receipt_categories::classify_item_tags(description, &rule_layers.category_rules)
+}
+
 pub fn parse_receipt(
     full_text: &str,
     pages_for_helper: &[receipt_parse_helpers::MerchantPageInput],
@@ -187,6 +200,7 @@ pub fn parse_receipt(
                         price: cents_to_fixed(item.price_cents),
                         quantity: item.quantity,
                         category: categorize_description(&item.category_source, rule_layers),
+                        tags: item_tags(&item.category_source, rule_layers),
                     })
                     .collect(),
                 warnings
@@ -207,6 +221,7 @@ pub fn parse_receipt(
                         price: scaled_to_fixed(item.price_scaled, 10_000),
                         quantity: 1,
                         category: categorize_description(&item.description, rule_layers),
+                        tags: item_tags(&item.description, rule_layers),
                     })
                     .collect(),
                 spatial_outcome
@@ -229,6 +244,7 @@ pub fn parse_receipt(
                     price: cents_to_fixed(item.price_cents),
                     quantity: item.quantity,
                     category: categorize_description(&item.category_source, rule_layers),
+                    tags: item_tags(&item.category_source, rule_layers),
                 })
                 .collect(),
             warnings
@@ -282,7 +298,24 @@ pub fn parse_receipt(
 
 #[cfg(test)]
 mod tests {
-    use super::is_unsigned_discount_line;
+    use super::{is_unsigned_discount_line, item_tags};
+    use crate::rules::default_parser_rule_layers;
+
+    #[test]
+    fn item_tags_are_the_multi_tag_classification() {
+        let layers = default_parser_rule_layers();
+        // A rotisserie chicken matches several rules — the meat rule
+        // (grocery, meat), the semantic chicken tag, and the prepared-meal rule
+        // — and their tags accumulate (deduped, first-seen order) onto one item.
+        assert_eq!(
+            item_tags("ROTISSERIE CHICKEN", &layers),
+            vec!["grocery", "meat", "chicken", "prepared", "meal"]
+        );
+        // Milk carries the dairy rule's tags plus its own semantic "milk" tag.
+        assert_eq!(item_tags("MILK", &layers), vec!["grocery", "dairy", "milk"]);
+        // An unrecognized line classifies to no tags rather than a guess.
+        assert!(item_tags("ZZQW UNKNOWN ITEM", &layers).is_empty());
+    }
 
     #[test]
     fn flags_unsigned_savings_lines() {
