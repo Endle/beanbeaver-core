@@ -21,6 +21,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     steps:
       - name: Check out core (public)
         uses: actions/checkout@v4
@@ -29,6 +32,9 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       # macos-latest runners ship an Xcode whose compiler-rt resource dir is NOT
       # where rustc guesses it: linking the ort/onnxruntime-backed live-E2E binary
