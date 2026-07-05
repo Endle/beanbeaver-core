@@ -23,6 +23,8 @@ jobs:
       PRIVATE_TESTS_TOKEN: ${{ secrets.BEANBEAVER_PRIVATE_TESTS_READ_TOKEN }}
       # Update this if the private test repository lives elsewhere.
       PRIVATE_TESTS_REPO: Endle/beanbeaver-private-test
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     steps:
       - name: Validate secret configuration
         run: |
@@ -38,6 +40,9 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
