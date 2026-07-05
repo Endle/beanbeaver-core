@@ -1,0 +1,27 @@
+{
+  "merchant": "COSTCO",
+  "date": "2026-05-20",
+  "total": "74.22",
+  "critical_items": [
+    {
+      "description": "2% FINE-FILT",
+      "price": "6.69",
+      "category": "Expenses:Food:Grocery:Dairy"
+    },
+    {
+      "description": "MINI CUKES",
+      "price": "3.79",
+      "category": "Expenses:Food:Grocery:Vegetable"
+    },
+    {
+      "description": "COLGATE PR",
+      "price": "18.99",
+      "category": "Expenses:PersonalCare:Tooth"
+    },
+    {
+      "description": "XL EGGS",
+      "price": "9.69",
+      "category": "Expenses:Food:Grocery:Dairy"
+    }
+  ]
+}
