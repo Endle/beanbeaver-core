@@ -238,9 +238,14 @@ pub fn run_cached_corpus(receipts_dir: &Path, overrides: &[&str]) -> CorpusResul
             }
         }
 
-        // critical items — description + price + HARD category
+        // critical items — description + price + HARD category. Each item may
+        // carry `"known_failure": true` to tolerate *its own* divergence (finer
+        // than the check-level `known_failures: ["critical_items"]`, which
+        // umbrellas the whole block); a marked item that unexpectedly matches is
+        // reported so the stale marker gets removed.
         if let Some(items) = expected.get("critical_items").and_then(Value::as_array) {
-            let mut msg: Option<String> = None;
+            let mut msgs: Vec<String> = Vec::new();
+            let mut real_failure = false;
             for ci in items {
                 assert!(
                     ci.get("category_optional").is_none(),
@@ -249,6 +254,7 @@ pub fn run_cached_corpus(receipts_dir: &Path, overrides: &[&str]) -> CorpusResul
                 let desc = ci.get("description").and_then(Value::as_str).unwrap_or_default();
                 let price = ci.get("price").and_then(Value::as_str).unwrap_or_default();
                 let want_cat = ci.get("category").and_then(Value::as_str);
+                let item_known = ci.get("known_failure").and_then(Value::as_bool).unwrap_or(false);
                 let matched: Vec<_> =
                     parsed.items.iter().filter(|it| item_desc_matches(&it.description, desc)).collect();
                 let price_ok = matched.iter().any(|it| price_matches(price, &it.price));
@@ -258,18 +264,23 @@ pub fn run_cached_corpus(receipts_dir: &Path, overrides: &[&str]) -> CorpusResul
                         .filter(|it| price_matches(price, &it.price))
                         .any(|it| it.category.as_deref().is_some_and(|k| category_matches(c, k, &mapping)))
                 });
-                if matched.is_empty() || !price_ok || !cat_ok {
+                let item_failed = matched.is_empty() || !price_ok || !cat_ok;
+                if item_failed && !item_known {
                     let got: Vec<_> = matched
                         .iter()
                         .map(|it| (it.description.as_str(), it.price.as_str(), it.category.as_deref()))
                         .collect();
-                    msg = Some(format!("item '{desc}' (price {price}, cat {want_cat:?}) unmatched; candidates {got:?}"));
-                    break;
+                    msgs.push(format!("item '{desc}' (price {price}, cat {want_cat:?}) unmatched; candidates {got:?}"));
+                    real_failure = true;
+                } else if !item_failed && item_known {
+                    msgs.push(format!("item '{desc}' marked known_failure but matched — remove the marker"));
                 }
             }
-            if let Some(m) = msg {
+            if real_failure {
                 failed.insert("critical_items");
-                if !known.contains("critical_items") {
+            }
+            if !known.contains("critical_items") {
+                for m in msgs {
                     case_fail.push(m);
                 }
             }

@@ -10,8 +10,8 @@
     {
       "description": "Tom Diced",
       "price": "10.76",
-      "category": "Expenses:Food:Grocery:Vegetable"
+      "category": "Expenses:Food:Grocery:Vegetable",
+      "known_failure": true
     }
-  ],
-  "known_failures": ["critical_items"]
+  ]
 }
