@@ -36,6 +36,11 @@ pub struct ReceiptItem {
     pub price: String,
     pub quantity: i32,
     pub category: Option<String>,
+    /// Beanbeaver-internal semantic tags for this line (e.g.
+    /// `["grocery", "meat", "chicken"]`) — the multi-tag classification the app
+    /// drives its category display from, upstream of the single `category`
+    /// beancount account. Empty when no classifier rule matched.
+    pub tags: Vec<String>,
 }
 
 /// Per-stage on-device timings (milliseconds) for one scan, for profiling.
@@ -243,6 +248,7 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
                 price: i.price,
                 quantity: i.quantity,
                 category: i.category,
+                tags: i.tags,
             })
             .collect(),
         warnings: d.warnings.into_iter().map(|w| w.message).collect(),
