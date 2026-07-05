@@ -1,0 +1,11 @@
+{
+  "merchant": "FRESHCO",
+  "total": "55.90",
+  "critical_items": [
+    {
+      "description": "Soft Drink Orange",
+      "price": "44.95",
+      "category": "Expenses:Food:Grocery:Drink"
+    }
+  ]
+}

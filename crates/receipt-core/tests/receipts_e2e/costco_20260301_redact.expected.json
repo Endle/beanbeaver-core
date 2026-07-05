@@ -1,0 +1,27 @@
+{
+  "merchant": "COSTCO",
+  "date": "2026-03-01",
+  "total": "72.41",
+  "critical_items": [
+    {
+      "description": "2% FINE-FILT",
+      "price": "6.69",
+      "category": "Expenses:Food:Grocery:Dairy"
+    },
+    {
+      "description": "XL EGGS",
+      "price": "19.38",
+      "category": "Expenses:Food:Grocery:Dairy"
+    },
+    {
+      "description": "CHAMP SHORT",
+      "price": "17.99",
+      "category": "Expenses:Shopping:Clothing"
+    },
+    {
+      "description": "KS BAGS 60",
+      "price": "12.99",
+      "category": "Expenses:Home:HouseholdSupply"
+    }
+  ]
+}
