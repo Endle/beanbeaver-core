@@ -180,7 +180,14 @@ fn reconcile_total_with_charge(lines: &[String], candidate: i64) -> i64 {
     let mut payment_amounts: Vec<i64> = Vec::new();
     for (idx, line) in lines.iter().enumerate() {
         let upper = line.to_ascii_uppercase();
-        let is_payment = upper.contains("AMOUNT:") || matches!(classify_tender_line(&upper), Some("card"));
+        // "CREDIT TN" is the Loblaws-family card slip's echo of the charged
+        // amount, corroborating the "Account: VISA …" line above it. It is
+        // recognized here only — adding it to `classify_tender_line` would
+        // make `extract_tenders` double-count the charge against the card
+        // tender it echoes.
+        let is_payment = upper.contains("AMOUNT:")
+            || upper.contains("CREDIT TN")
+            || matches!(classify_tender_line(&upper), Some("card"));
         if is_payment {
             if let Some(cents) = tender_amount_for_line(lines, idx) {
                 if cents > 0 {
@@ -644,6 +651,25 @@ mod tests {
             "MasterCard 245.87".to_string(),
         ];
         assert_eq!(extract_total(&lines), 24_587);
+    }
+
+    #[test]
+    fn total_reconciles_from_credit_tn_echo_when_total_digits_garbled() {
+        // No Frills 2026-04-23_nofrills_11_15: bleed-through from the reverse
+        // side garbles the digits on the SUBTOTAL/TOTAL rows ("1 1.1 5" /
+        // "1 11 5"), so the label scan yields 0. The clean amount survives on
+        // the card slip's "Account: VISA" line and its "CREDIT TN" echo —
+        // two corroborating payment lines.
+        let lines = vec![
+            "SUBTOTALbemutord yom eaib1 1.1 5".to_string(),
+            "TOTAL dtiw eeorotuqto yobA nir1 11 5".to_string(),
+            "yob Al oto ylno egnorox3.gnigoxbq bnd apot".to_string(),
+            "Trans.Type: PURCHASE qqo anoitqeoxe amo2".to_string(),
+            "Account: VISA CAD$ 11. 15".to_string(),
+            "Card Type: CREDIT".to_string(),
+            "CREDIT TN 11.15".to_string(),
+        ];
+        assert_eq!(extract_total(&lines), 1_115);
     }
 
     #[test]
