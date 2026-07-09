@@ -76,6 +76,21 @@ fn is_code_stub_label(text: &str) -> bool {
     rest.len() >= 9 && rest.chars().all(|ch| ch.is_ascii_digit())
 }
 
+/// True for POS transaction-id header rows: the word "Transaction" followed by
+/// nothing but a digit run (Clover prints "Transaction 037972" directly above
+/// the first item). Like code stubs, the row never carries an amount, so it
+/// must not steal the first item's price when the right column leans up
+/// (Jin Lian unknown-date_jin_lian_food_39_99: the header overlapped
+/// FESHRIMP PASTE's $11.92 at ~0.32 and claimed it, dropping the item).
+fn is_transaction_id_label(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.len() < 11 || !trimmed[..11].eq_ignore_ascii_case("TRANSACTION") {
+        return false;
+    }
+    let rest = trimmed[11..].trim_start_matches([' ', '#', ':']).trim();
+    rest.len() >= 4 && rest.chars().all(|ch| ch.is_ascii_digit())
+}
+
 fn line_y_span(dets: &[Detection], line: &[usize]) -> (f64, f64) {
     let mut min_y = f64::INFINITY;
     let mut max_y = f64::NEG_INFINITY;
@@ -179,7 +194,7 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
     // own amount, so they must not steal the next row's price (Costco prints
     // "PC <code>" between "LCBO CARD" and its 400.00, overlapping both).
     for &left_index in &left {
-        if is_code_stub_label(&dets[left_index].text) {
+        if is_code_stub_label(&dets[left_index].text) || is_transaction_id_label(&dets[left_index].text) {
             lines.push(vec![left_index]);
             continue;
         }
@@ -345,6 +360,32 @@ mod tests {
         assert!(rendered.contains(&"SUBTOTAL 573.31".to_string()), "{rendered:?}");
         assert!(rendered.contains(&"TAX 5.13".to_string()), "{rendered:?}");
         assert!(rendered.contains(&"***TOTAL 578.44".to_string()), "{rendered:?}");
+    }
+
+    #[test]
+    fn transaction_id_header_does_not_claim_first_items_price() {
+        // Jin Lian (Clover POS) unknown-date_jin_lian_food_39_99: the right
+        // column leans up, so the first item's $11.92 overlaps the
+        // "Transaction 037972" header row above it (~0.32) before it overlaps
+        // its own item row (~0.85). First-fit let the header claim the price
+        // and FESHRIMP PASTE was dropped. Real pixel geometry, width 1600.
+        let dets = vec![
+            det_span("Transaction 037972", 53.0, 720.0, 808.0),
+            det_span("$11.92", 1291.0, 783.0, 862.0),
+            det_span("FESHRIMP PASTE150g", 174.0, 795.0, 886.0),
+        ];
+        let lines = group_detections_into_lines(&dets, 1600.0);
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|&i| dets[i].text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect();
+        assert!(rendered.contains(&"Transaction 037972".to_string()), "{rendered:?}");
+        assert!(rendered.contains(&"FESHRIMP PASTE150g $11.92".to_string()), "{rendered:?}");
     }
 
     #[test]

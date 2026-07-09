@@ -44,12 +44,13 @@ fn re_month_name_date() -> &'static Regex {
     })
 }
 
-// Day-first month-name dates, e.g. "22-May-2026" or "22 May 2026".
+// Day-first month-name dates, e.g. "22-May-2026" or "22 May 2026". The month
+// may carry an abbreviation period ("02-Apr.-2026", Clover's format).
 fn re_dmy_month_name_date() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)\b(\d{1,2})[-\s]+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*[-\s]+(\d{4})\b",
+            r"(?i)\b(\d{1,2})[-\s]+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\.?[-\s]+(\d{4})\b",
         )
         .unwrap()
     })
@@ -567,6 +568,14 @@ mod tests {
         let lines = vec!["22-May-2026 3:22:42p.m.".to_string()];
         let parsed = extract_date(&lines, "", 2026).expect("date should parse");
         assert_eq!((parsed.year, parsed.month, parsed.day), (2026, 5, 22));
+    }
+
+    #[test]
+    fn date_parses_dotted_month_abbreviation() {
+        // Clover also prints an abbreviation period: "02-Apr.-2026 2:27:39p.m."
+        let lines = vec!["02-Apr.-2026 2:27:39p.m.".to_string()];
+        let parsed = extract_date(&lines, "", 2026).expect("date should parse");
+        assert_eq!((parsed.year, parsed.month, parsed.day), (2026, 4, 2));
     }
 
     #[test]
