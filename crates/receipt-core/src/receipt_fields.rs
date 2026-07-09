@@ -189,10 +189,23 @@ fn reconcile_total_with_charge(lines: &[String], candidate: i64) -> i64 {
             }
         }
     }
+    // A zero-change line means the card tender IS the grand total, so a single
+    // payment line suffices as corroboration (a mis-grouped TOTAL row can pick
+    // up the tax amount, leaving the true total only on the tender line). With
+    // change due, cash tendered can legitimately exceed the total, so the
+    // two-line corroboration requirement stays.
+    let zero_change = lines.iter().any(|line| {
+        let upper = line.to_ascii_uppercase();
+        upper.contains("CHANGE") && normalize_decimal_spacing(line).trim_end().ends_with("0.00")
+    });
+    let min_corroboration = if zero_change { 1 } else { 2 };
     let mut corroborated: Vec<i64> = payment_amounts
         .iter()
         .copied()
-        .filter(|&a| a > candidate && payment_amounts.iter().filter(|&&b| b == a).count() >= 2)
+        .filter(|&a| {
+            a > candidate
+                && payment_amounts.iter().filter(|&&b| b == a).count() >= min_corroboration
+        })
         .collect();
     corroborated.sort_unstable();
     corroborated.dedup();
@@ -550,6 +563,22 @@ mod tests {
         ];
 
         assert_eq!(extract_subtotal(&lines), Some(15_908));
+    }
+
+    #[test]
+    fn total_prefers_single_tender_when_change_due_is_zero() {
+        // Pharmasave 2026-07-07_pharmasave_12_19: line grouping handed the
+        // TOTAL row the HST amount. With CHANGE DUE at $0.00 the lone VISA
+        // tender is the grand total by definition.
+        let lines = vec![
+            "SUBTOTAL".to_string(),
+            "HST $10.79".to_string(),
+            "TOTAL $1.40".to_string(),
+            "VISA $12.19".to_string(),
+            "CHANGE DUE $12.19 $0.00".to_string(),
+        ];
+
+        assert_eq!(extract_total(&lines), 1_219);
     }
 
     #[test]

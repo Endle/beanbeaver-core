@@ -70,6 +70,13 @@ fn re_total_word() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"(?i)\bTOTAL\b").unwrap())
 }
 
+fn re_tender_label() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)^\s*(VISA|MASTERCARD|MASTER\s*CARD|AMEX|DEBIT|INTERAC)\b").unwrap()
+    })
+}
+
 fn re_digits_only() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^\d+$").unwrap())
@@ -1060,6 +1067,10 @@ pub fn extract_text_items(
             && !upper.contains("TOTAL ITEMS")
             && !upper.contains("TOTAL SAVINGS")
             && !upper.contains("TOTAL SAVED")
+            // A column-header row ("DESCRIPTION QTY UNIT TOTAL") is not the
+            // grand total; treating it as one truncates the whole item region.
+            && !upper.contains("QTY")
+            && !upper.contains("DESCRIPTION")
     });
 
     // Authoritative receipt total, when a grand-total line carries a price.
@@ -1073,7 +1084,7 @@ pub fn extract_text_items(
         .iter()
         .filter(|line| {
             let upper = line.to_ascii_uppercase();
-            re_total_word().is_match(line)
+            let is_total_line = re_total_word().is_match(line)
                 && !upper.contains("SUBTOTAL")
                 && !upper.contains("TOTAL TAX")
                 && !upper.contains("TOTAL NUMBER")
@@ -1081,7 +1092,12 @@ pub fn extract_text_items(
                 && !upper.contains("TOTAL ITEMS")
                 && !upper.contains("TOTAL SAVINGS")
                 && !upper.contains("TOTAL SAVED")
-                && !upper.contains("TOTAL POINTS")
+                && !upper.contains("TOTAL POINTS");
+            // A card tender is an equally valid ceiling: the charge is never
+            // less than any single item. This keeps the cap honest when the
+            // TOTAL row picked up a neighbouring smaller amount during line
+            // grouping (Pharmasave's "TOTAL $1.40" carrying the HST).
+            is_total_line || re_tender_label().is_match(line)
         })
         .filter_map(|line| extract_trailing_price_cents(line).map(|(c, _, _)| c))
         .filter(|c| *c > 0)
@@ -2189,5 +2205,36 @@ mod tests {
         let prices: Vec<i64> = items.iter().map(|it| it.price_cents).collect();
         assert!(!prices.contains(&8158), "81.58 outlier should be dropped: {prices:?}");
         assert!(prices.contains(&388), "valid Tx1 item should remain: {prices:?}");
+    }
+
+    #[test]
+    fn column_header_total_is_not_the_grand_total_and_tender_backstops_the_cap() {
+        // Pharmasave 2026-07-07_pharmasave_12_19: the "DESCRIPTION QTY UNIT
+        // TOTAL" column header must not terminate the item region, and with
+        // the TOTAL row mis-grouped to the HST amount ($1.40) the VISA tender
+        // has to backstop the implausible-price ceiling so the $10.79 item
+        // survives.
+        let lines: Vec<String> = vec![
+            "GRAND GENESIS", "PHARMASAVE", "HAVE GREAT DAY!",
+            "DESCRIPTION QTY UNIT TOTAL",
+            "TOOTHPASTE 1 $10.79 PRICE PRICE",
+            "06081503923 $10.79 G",
+            "SUBTOTAL",
+            "HST $10.79",
+            "TOTAL $1.40",
+            "VISA $12.19",
+            "CHANGE DUE $12.19 $0.00",
+            "Items = 1",
+        ].into_iter().map(String::from).collect();
+        let summary = HashSet::from([1079, 140, 1219]);
+        let (items, _warnings) = extract_text_items(&lines, &summary);
+        let observed: Vec<(String, i64)> = items
+            .into_iter()
+            .map(|item| (item.description, item.price_cents))
+            .collect();
+        assert!(
+            observed.iter().any(|(d, p)| d.contains("TOOTHPASTE") && *p == 1079),
+            "{observed:?}"
+        );
     }
 }
