@@ -204,6 +204,18 @@ priority = 1
 exact_only = false
 
 [[rules]]
+# Same collision family as juice_brands: "Sprite Sugar Free Berry" embeds
+# BEER across the "...freE BERry..." word boundary — the compacted window
+# "EEBER" contains every bigram of BEER (similarity 1.0) — so the priority-1
+# alcohol rule would otherwise win. Priority 1 + the exact SPRITE match wins.
+id = "soda_brands"
+keywords = ["SPRITE"]
+category = "grocery_drink_cocacola"
+tags = ["grocery", "drink", "cocacola"]
+priority = 1
+exact_only = false
+
+[[rules]]
 id = "legacy_0026"
 keywords = ["COFFEE BEAN", "GROUND COFFEE", "INSTANT COFFEE", "COFFEE PODS", "K-CUP", "NESPRESSO", "TEA", "TEA BAG", "GREEN TEA", "BLACK TEA", "HERBAL TEA", "CHAMOMILE", "EARL GREY", "OOLONG TEA", "OOLONG"]
 category = "grocery_drink_coffee"
