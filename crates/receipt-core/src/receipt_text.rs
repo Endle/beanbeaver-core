@@ -130,6 +130,19 @@ fn re_trailing_total_presence() -> &'static Regex {
     })
 }
 
+// "<desc> <unit-price> <flags> <ext-price>" rows (e.g. Shoppers'
+// "VICKS SINUS CO 20.99 GP 20.99") leave the unit price and tax flags
+// dangling at the end of desc_part once the trailing extended price is
+// consumed. The flag letters are mandatory here: a single-price line with
+// flags is already fully consumed by re_trailing_price, so a bare trailing
+// number never matches this and stays untouched.
+fn re_embedded_unit_price_suffix() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"\s+\$?\d+\.\d{2}\s*\*?[CcFfGgHhJjPpTtXx]{1,3}\d{0,2}\s*$").unwrap()
+    })
+}
+
 fn re_tail_token() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -1360,6 +1373,10 @@ pub fn extract_text_items(
             {
                 let desc_alpha = alpha_ratio(desc_part.trim());
                 let desc_clean = strip_sale_price_subtext(&desc_part);
+                let desc_clean = re_embedded_unit_price_suffix()
+                    .replace(&desc_clean, "")
+                    .trim()
+                    .to_string();
                 deferred.push(DeferredTextOutcome::Item(ParsedTextItem {
                     description: desc_clean.clone(),
                     category_source: desc_clean,
@@ -1970,6 +1987,25 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].price_cents, 99);
         assert!(items[0].description.contains("Plum Juice"));
+    }
+
+    #[test]
+    fn strips_embedded_unit_price_and_tax_flags_from_description() {
+        // Shoppers 2026-06-30_shoppers_23_72: "VICKS SINUS CO 20.99 GP 20.99"
+        // (description, unit price + tax flags, extended price on one row).
+        let lines = vec![
+            "SCO CheckOut".to_string(),
+            "VICKS SINUS CO 20.99 GP 20.99".to_string(),
+            "SUBTOTAL: 20.99".to_string(),
+            "TOTAL: $23.72".to_string(),
+        ];
+        let summary_amounts = HashSet::from([2099, 2372]);
+
+        let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].description, "VICKS SINUS CO");
+        assert_eq!(items[0].price_cents, 2099);
     }
 
     #[test]

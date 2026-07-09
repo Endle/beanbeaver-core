@@ -317,7 +317,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0041"
-keywords = ["KS IBU", "KIRKLAND IBU", "IBUPROFEN", "IBU 400M", "LUTEIN", "IRONKIDS", "MULTIVITAMIN", "VITAMIN", "VIT B100", "VIT B12"]
+keywords = ["KS IBU", "KIRKLAND IBU", "IBUPROFEN", "IBU 400M", "LUTEIN", "IRONKIDS", "MULTIVITAMIN", "VITAMIN", "VIT B100", "VIT B12", "VICKS", "SINUS", "TYLENOL", "ADVIL"]
 category = "health_pharmacy"
 tags = ["health", "pharmacy"]
 priority = 0
