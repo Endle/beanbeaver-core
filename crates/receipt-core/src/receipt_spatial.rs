@@ -738,7 +738,12 @@ fn is_valid_item_line(line: &ParsedLine, total_line_y: Option<f64>) -> bool {
     if re_multibuy_parenthetical().is_match(&line.left_text) {
         return false;
     }
-    if re_short_parenthetical_code().is_match(&line.left_text) && line.left_text.len() < 12 {
+    if re_short_parenthetical_code().is_match(&line.left_text)
+        && line.left_text.len() < 12
+        && !is_short_alpha_item(&clean_description(&line.left_text))
+    {
+        // "(4001)"-style code stubs are not items, but a short name behind a
+        // strippable promo marker — e.g. T&T's "(SALE) NAPA" — still is.
         return false;
     }
     true
@@ -1486,6 +1491,77 @@ mod tests {
 
         assert!(observed.contains(&("Napa".to_string(), 31_700)));
         assert!(observed.contains(&("Soybean Sprout".to_string(), 10_300)));
+    }
+
+    #[test]
+    fn keeps_sale_marker_short_produce_name_as_qty_row_target() {
+        // T&T 2026-06-29_t_t_supermarket_49_59: "(SALE) NAPA" is 11 chars, so
+        // the short-parenthetical stub check rejected it as an item line. Its
+        // weight-row price $4.75 then skipped to "(SALE) STRAWBERRY" below,
+        // and strawberry's own $5.00 cascaded onto the garbled "TMERE" line.
+        let page = PageInput {
+            lines: vec![
+                LineInput {
+                    text: "PRODUCE".to_string(),
+                    words: vec![word("PRODUCE", 0.05, 0.326, 0.16, 0.337)],
+                },
+                LineInput {
+                    text: "(SALE) NAPA".to_string(),
+                    words: vec![word("(SALE) NAPA", 0.05, 0.336, 0.22, 0.347)],
+                },
+                LineInput {
+                    text: "2.200 kg @ $2.16/kg W $4.75".to_string(),
+                    words: vec![
+                        word("2.200 kg @ $2.16/kg", 0.06, 0.345, 0.36, 0.359),
+                        word("W $4.75", 0.72, 0.345, 0.83, 0.359),
+                    ],
+                },
+                LineInput {
+                    text: "(SALE) STRAWBERRY".to_string(),
+                    words: vec![word("(SALE) STRAWBERRY", 0.06, 0.376, 0.31, 0.387)],
+                },
+                LineInput {
+                    text: "594143 2 @2/$5.00 W $5.00".to_string(),
+                    words: vec![
+                        word("594143 2 @2/$5.00", 0.06, 0.385, 0.36, 0.398),
+                        word("W $5.00", 0.72, 0.385, 0.83, 0.398),
+                    ],
+                },
+                LineInput {
+                    text: "DELI".to_string(),
+                    words: vec![word("DELI", 0.05, 0.414, 0.13, 0.426)],
+                },
+                LineInput {
+                    text: "T&T PRESERVED DUCK EGGS W $5.99".to_string(),
+                    words: vec![
+                        word("T&T PRESERVED DUCK EGGS", 0.06, 0.424, 0.41, 0.436),
+                        word("W $5.99", 0.72, 0.424, 0.83, 0.436),
+                    ],
+                },
+                LineInput {
+                    text: "TMERE".to_string(),
+                    words: vec![word("TMERE", 0.06, 0.434, 0.27, 0.448)],
+                },
+            ],
+        };
+
+        let outcome = extract_spatial_items(vec![page]);
+        let observed = outcome
+            .items
+            .into_iter()
+            .map(|item| (item.description, item.price_scaled))
+            .collect::<Vec<_>>();
+
+        assert!(observed.contains(&("NAPA".to_string(), 47_500)), "{observed:?}");
+        assert!(observed.contains(&("STRAWBERRY".to_string(), 50_000)), "{observed:?}");
+        assert!(
+            observed.contains(&("T&T PRESERVED DUCK EGGS".to_string(), 59_900)),
+            "{observed:?}"
+        );
+        assert!(
+            !observed.iter().any(|(desc, _)| desc.contains("TMERE")),
+            "{observed:?}"
+        );
     }
 
     #[test]
