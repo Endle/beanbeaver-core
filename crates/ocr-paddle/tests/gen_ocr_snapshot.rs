@@ -7,6 +7,11 @@
 //! shape the cached harness consumes (padded-image coordinate space, matching
 //! `process_image`'s `resize_and_pad` -> `recognize_image_timed`). Ignored so it
 //! never runs in normal `cargo test`.
+//!
+//! Target corpus: the vendored public fixtures by default, or the out-of-tree
+//! private corpus when `BEANBEAVER_PRIVATE_TESTS_DIR` is set (same env var
+//! `receipt-core`'s `private_e2e` reads, so one export drives both). Subdirectories
+//! are walked, which the private corpus needs — it partitions fixtures by merchant.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,10 +24,27 @@ fn manifest_rel(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(rel)
 }
 
+/// Recursively collect `*.jpg` under `dir`.
+fn collect_jpgs(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_jpgs(&path, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("jpg") {
+            out.push(path);
+        }
+    }
+}
+
 #[test]
 #[ignore = "generator, not a gate: run with --ignored to (re)build .ocr.json snapshots"]
 fn gen_ocr_snapshot() {
-    let fixtures = manifest_rel("../receipt-core/tests/receipts_e2e");
+    let fixtures = match std::env::var_os("BEANBEAVER_PRIVATE_TESTS_DIR") {
+        Some(root) => PathBuf::from(root).join("receipts_e2e"),
+        None => manifest_rel("../receipt-core/tests/receipts_e2e"),
+    };
+    assert!(fixtures.is_dir(), "no fixtures dir at {}", fixtures.display());
     let models = manifest_rel("../../models");
     let (det, rec, cls) = (
         models.join("PP-OCRv5_mobile_det.onnx"),
@@ -40,9 +62,12 @@ fn gen_ocr_snapshot() {
 
     let mut engine = OcrEngine::from_paths(&det, &rec, Some(&cls)).expect("load PP-OCRv5 models");
 
+    let mut jpgs = Vec::new();
+    collect_jpgs(&fixtures, &mut jpgs);
+    jpgs.sort();
+
     let mut made = 0;
-    for entry in fs::read_dir(&fixtures).expect("read fixtures") {
-        let path = entry.unwrap().path();
+    for path in jpgs {
         let Some(stem) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".jpg")) else {
             continue;
         };
@@ -50,7 +75,7 @@ fn gen_ocr_snapshot() {
         if !wanted.is_empty() && !wanted.iter().any(|w| stem.contains(w.as_str())) {
             continue;
         }
-        let out = fixtures.join(format!("{stem}.ocr.json"));
+        let out = path.with_file_name(format!("{stem}.ocr.json"));
         if wanted.is_empty() && out.exists() {
             continue; // don't clobber an existing snapshot in bulk mode
         }
