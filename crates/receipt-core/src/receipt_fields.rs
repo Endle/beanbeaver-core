@@ -292,11 +292,20 @@ fn extract_total_raw(lines: &[String]) -> i64 {
             }
             if idx > 0 {
                 let prev_line_upper = lines[idx - 1].to_ascii_uppercase();
-                if !prev_line_upper.contains("TAX")
-                    && !prev_line_upper.contains("HST")
-                    && !prev_line_upper.contains("GST")
-                {
+                let prev_is_tax_row = prev_line_upper.contains("TAX")
+                    || prev_line_upper.contains("HST")
+                    || prev_line_upper.contains("GST");
+                if !prev_is_tax_row {
                     if let Some(amount) = extract_price_from_line(&lines[idx - 1]) {
+                        return amount;
+                    }
+                } else if let Some(amount) = extract_price_from_line(&lines[idx - 1]) {
+                    // Up-leaned line grouping shifts the whole summary block
+                    // one row: SUBTOTAL shows the tax, TAX shows the total,
+                    // TOTAL is bare. A genuine tax can never exceed the
+                    // subtotal amount, so a larger value on the TAX row is
+                    // the drifted grand total.
+                    if extract_subtotal(lines).is_some_and(|subtotal| amount > subtotal) {
                         return amount;
                     }
                 }
@@ -563,6 +572,35 @@ mod tests {
         ];
 
         assert_eq!(extract_subtotal(&lines), Some(15_908));
+    }
+
+    #[test]
+    fn bare_total_takes_tax_row_amount_when_it_exceeds_the_subtotal() {
+        // Costco 2026-07-08_costco_112_95: up-leaned line grouping left the
+        // TOTAL row bare and put the grand total on the TAX row (and the tax
+        // on SUBTOTAL). A real tax can never exceed the subtotal amount.
+        let lines = vec![
+            "TOTAL NUMBER OF ITEMS SOLD = 9 104.77".to_string(),
+            "SUBTOTAL 8.18".to_string(),
+            "TAX 112.95".to_string(),
+            "**** TOTAL".to_string(),
+            "XXXXXXXXXXXX7735".to_string(),
+        ];
+
+        assert_eq!(extract_total(&lines), 11_295);
+    }
+
+    #[test]
+    fn bare_total_still_ignores_a_plausible_tax_row_above() {
+        // The TAX guard must keep holding when the tax amount is smaller than
+        // the subtotal (the normal case for a bare TOTAL line).
+        let lines = vec![
+            "SUBTOTAL 104.77".to_string(),
+            "TAX 8.18".to_string(),
+            "**** TOTAL".to_string(),
+        ];
+
+        assert_eq!(extract_total(&lines), 0);
     }
 
     #[test]

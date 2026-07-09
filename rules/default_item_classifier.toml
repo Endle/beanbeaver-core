@@ -213,7 +213,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0027"
-keywords = ["WATER", "SPARKLING WATER", "MINERAL WATER", "SPRING WATER", "COCONUT WATER", "SPORTS DRINK", "SOFT DRINK", "GATORADE", "POWERADE", "ENERGY DRINK", "RED BULL", "MONSTER", "CRUSH", "FANTA STRAUBERRY", "FANTA STRAWBERRY", "FANTA", "PEACE TEA", "DRINK", "BEVERAGE"]
+keywords = ["WATER", "SPARKLING WATER", "MINERAL WATER", "SPRING WATER", "COCONUT WATER", "SPORTS DRINK", "SOFT DRINK", "GATORADE", "POWERADE", "ENERGY DRINK", "RED BULL", "MONSTER", "CRUSH", "FANTA STRAUBERRY", "FANTA STRAWBERRY", "FANTA", "PEACE TEA", "DRINK", "BEVERAGE", "ZOA", "BIOSTEEL"]
 category = "grocery_drink"
 tags = ["grocery", "drink"]
 priority = 0
@@ -397,7 +397,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0051"
-keywords = ["1944033 CHAMP SHORT", "CHAMP SHORT"]
+keywords = ["1944033 CHAMP SHORT", "CHAMP SHORT", "BACKPACK"]
 category = "shopping_clothing"
 tags = ["shopping", "clothing"]
 priority = -80
