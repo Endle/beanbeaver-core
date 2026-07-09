@@ -184,7 +184,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0025"
-keywords = ["ORANGE JUICE", "APPLE JUICE", "GRAPE JUICE", "FRUIT PUNCH", "CRANBERRY", "LEMONADE", "SMOOTHIE", "JUICE", "V8"]
+keywords = ["ORANGE JUICE", "APPLE JUICE", "GRAPE JUICE", "FRUIT PUNCH", "CRANBERRY", "LEMONADE", "SMOOTHIE", "JUICE", "V8", "PC OJ"]
 category = "grocery_drink_juice"
 tags = ["grocery", "drink", "juice"]
 priority = 0

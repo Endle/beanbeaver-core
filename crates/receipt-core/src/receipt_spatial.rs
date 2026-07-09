@@ -260,6 +260,26 @@ fn re_leading_short_code() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^\d{3,5}\s+(?P<rest>\S)").unwrap())
 }
 
+// Scale weight-block lines on weighed-produce receipts: No Frills prints
+// "0.985 kg Gross" / "-0.010 kg Tare =" / "0.975 kg Net @ $4.39/kg" under a
+// single produce label, once per weighing. Never descriptions; a contiguous
+// run of them means the label above is shared by several priced weighings.
+// Prefix match: OCR mangles the tail freely ("Grosks", "Gros ed ...").
+fn re_weight_info_line() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)^-?\d+(?:[.,]\d+)?\s*kg\s+(?:gro|tare|net)").unwrap())
+}
+
+// "<weight> kg @ $<unit>/kg" with both numbers capturable, to check whether a
+// weighed qty row's trailing price is actually its own line total.
+fn re_weight_at_unit_price() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)^\s*(\d+(?:\.\d+)?)\s*(?:kg|k9|kg\.|lb|1b|lk|1k)\s*@\s*\$?(\d+(?:\.\d+)?)")
+            .unwrap()
+    })
+}
+
 fn re_sale_marker() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"\(SALE\)\s*").unwrap())
@@ -746,7 +766,22 @@ fn is_valid_item_line(line: &ParsedLine, total_line_y: Option<f64>) -> bool {
         // strippable promo marker — e.g. T&T's "(SALE) NAPA" — still is.
         return false;
     }
+    if re_weight_info_line().is_match(line.left_text.trim()) {
+        return false;
+    }
     true
+}
+
+/// Whether a weighed qty row's own math (`<w> kg @ $<u>/kg`) reproduces
+/// `price_scaled`. `None` when the row isn't that shape. `Some(false)` means
+/// the trailing price drifted in from another row during line grouping.
+fn weight_row_price_reconciles(left_text: &str, price_scaled: i64) -> Option<bool> {
+    let captures = re_weight_at_unit_price().captures(left_text.trim())?;
+    let weight: f64 = captures.get(1)?.as_str().parse().ok()?;
+    let unit: f64 = captures.get(2)?.as_str().parse().ok()?;
+    let expected_cents = (weight * unit * 100.0).round() as i64;
+    let price_cents = (price_scaled as f64 / 100.0).round() as i64;
+    Some((expected_cents - price_cents).abs() <= 1)
 }
 
 fn has_nearby_quantity_expression_above(all_lines: &[ParsedLine], line_index: usize) -> bool {
@@ -1070,7 +1105,39 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
                 .max_by(|(_, left), (_, right)| left.line_y.partial_cmp(&right.line_y).unwrap())
                 .is_some();
 
-        if source_line_is_quantity_expression {
+        // A priced scale-weight row belongs to the produce label sitting above
+        // its contiguous weight block, however tall the block is (No Frills
+        // prints four gross/tare/net weighings under one "CHERRIES RED" label).
+        // Content-verified, so it bypasses the geometric distance gates, and
+        // the label is deliberately reusable across the block's weighings.
+        if re_weight_info_line().is_match(source_line.left_text.trim()) {
+            let mut j = price_candidate.source_line_index;
+            while j > 0 {
+                j -= 1;
+                let candidate = &all_lines[j];
+                let candidate_text = candidate.left_text.trim();
+                if candidate_text.is_empty()
+                    || re_weight_info_line().is_match(candidate_text)
+                    || looks_like_quantity_expression(candidate_text)
+                {
+                    continue;
+                }
+                let cleaned = strip_leading_receipt_codes(candidate_text);
+                if !is_section_header_text(candidate_text)
+                    && !is_summary_line(candidate_text)
+                    && !is_summary_line(&candidate.full_text)
+                    && !line_has_trailing_price(&candidate.full_text)
+                    && !cleaned.is_empty()
+                    && alpha_ratio(&cleaned) >= 0.5
+                {
+                    chosen_line_index = Some(j);
+                    chosen_distance = 0.0;
+                }
+                break;
+            }
+        }
+
+        if source_line_is_quantity_expression && chosen_line_index.is_none() {
             let source_modifier = parse_quantity_modifier(&source_line.left_text);
             let mut nearest_unpriced_above = None;
             let mut nearest_unpriced_below = None;
@@ -1141,10 +1208,20 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
                 }
             }
 
+            // A weighed qty row usually sits under its item label, so with a
+            // real quantity modifier the label above wins. But when the row's
+            // own math does not reproduce the trailing price, that price
+            // drifted in from another row during line grouping (No Frills'
+            // "1.775 kg @ $1.52/kg" carrying the 5.99 of the melon below), so
+            // fall back to plain nearest-line resolution.
+            let own_price = weight_row_price_reconciles(
+                &source_line.left_text,
+                price_candidate.price_scaled,
+            );
             chosen_line_index = match (
                 nearest_unpriced_above,
                 nearest_unpriced_below,
-                source_modifier,
+                source_modifier && own_price != Some(false),
             ) {
                 (Some((index, distance)), Some(_), true) => {
                     chosen_distance = distance;
@@ -1560,6 +1637,68 @@ mod tests {
         );
         assert!(
             !observed.iter().any(|(desc, _)| desc.contains("TMERE")),
+            "{observed:?}"
+        );
+    }
+
+    #[test]
+    fn weight_block_prices_reuse_produce_label_and_drifted_qty_price_pairs_nearest() {
+        // No Frills 2026-07-02_no_frills_52_16: one "CHERRIES RED" label with
+        // four gross/tare/net weighings (each priced), and a banana qty row
+        // that absorbed the melon's 5.99 during line grouping (its own math
+        // says 1.775 x 1.52 = 2.70).
+        fn row(text: &str, y: f64, price: Option<&str>) -> LineInput {
+            let mut words = vec![word(text, 0.06, y, 0.45, y + 0.012)];
+            let mut full = text.to_string();
+            if let Some(p) = price {
+                words.push(word(p, 0.80, y, 0.90, y + 0.012));
+                full = format!("{text} {p}");
+            }
+            LineInput { text: full, words }
+        }
+        let page = PageInput {
+            lines: vec![
+                row("4011 BANANA MRJ", 0.300, Some("2.70")),
+                row("1.775 kg @ $1.52/kg", 0.317, Some("5.99")),
+                row("4032 WMELON RED SOLS MRJ", 0.334, None),
+                row("4045 CHERRIES RED MRJ", 0.351, None),
+                row("0.985 kg Grosks", 0.368, None),
+                row("-0.010 kg Tare =", 0.385, Some("4.28")),
+                row("0.975 kg Net @ $4.39/kg", 0.402, None),
+                row("1.035 kg Gross", 0.419, None),
+                row("-0.010 kg Tare =", 0.436, Some("4.50")),
+                row("1.025 kg Net @ $4.39/k9", 0.453, None),
+                row("1.105 kg Gross", 0.470, None),
+                row("-0.010 kg Tare =", 0.487, Some("4.81")),
+                row("1.095 kg Net @ $4.39/k9", 0.504, None),
+                row("1.020 kg Gros ed", 0.521, None),
+                row("-0.010 kg Tare =", 0.538, None),
+                row("1.010 kg Net @ $4.39/kg", 0.555, Some("4.43")),
+                row("4403 PEACH YELLOW MRJ", 0.572, None),
+                row("0.900 kg @ $2.18/kg", 0.589, Some("1.96")),
+            ],
+        };
+
+        let outcome = extract_spatial_items(vec![page]);
+        let observed = outcome
+            .items
+            .into_iter()
+            .map(|item| (item.description, item.price_scaled))
+            .collect::<Vec<_>>();
+
+        let has = |needle: &str, price: i64| {
+            observed
+                .iter()
+                .any(|(desc, p)| desc.contains(needle) && *p == price)
+        };
+        assert!(has("BANANA", 27_000), "{observed:?}");
+        assert!(has("WMELON RED SOLS", 59_900), "{observed:?}");
+        for price in [42_800, 45_000, 48_100, 44_300] {
+            assert!(has("CHERRIES RED", price), "missing CHERRIES RED {price}: {observed:?}");
+        }
+        assert!(has("PEACH YELLOW", 19_600), "{observed:?}");
+        assert!(
+            !observed.iter().any(|(desc, _)| desc.contains("Tare") || desc.contains("Gro")),
             "{observed:?}"
         );
     }
