@@ -464,10 +464,23 @@ fn re_sale_price_subtext() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\s+\S*\)@\d+\.\d{2}.*$").unwrap())
 }
 
+fn re_size_paren_residue() -> &'static Regex {
+    // Bare "<size>)" tail left when OCR drops the CJK text of a parenthetical
+    // size line and its remainder merges into the description above
+    // ("Shirakiku - Frozen Imitat 500g)"). The mandatory `)` keeps legitimate
+    // size-bearing names like "POTATO 10LB" intact.
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)\s+\d+(?:\.\d+)?\s*(?:KG|G|LB|L|ML|OZ)\)\s*$").unwrap())
+}
+
 /// Strip the OCR-glued `<size>)@<unit>(<qty>/$<deal>)` sale-price subtext
 /// that some receipts append to item descriptions.
 fn strip_sale_price_subtext(text: &str) -> String {
-    re_sale_price_subtext().replace(text, "").trim().to_string()
+    let stripped = re_sale_price_subtext().replace(text, "");
+    re_size_paren_residue()
+        .replace(&stripped, "")
+        .trim()
+        .to_string()
 }
 
 fn is_section_header_text(text: &str) -> bool {
@@ -1102,21 +1115,42 @@ pub fn extract_text_items(
                 .captures_iter(line)
                 .filter_map(|caps| caps.get(1).and_then(|m| parse_cents(m.as_str())))
                 .collect();
-            if prices.len() >= 2 {
+            // The orphan must be a genuine trailing price, not the tail of a
+            // parenthetical deal ("(2/$3.50)" ends the coriander line; that
+            // 3.50 is subtext, not a drifted amount).
+            let trailing = extract_trailing_price_cents(line).map(|(c, _, _)| c);
+            if prices.len() >= 2 && trailing == prices.last().copied() {
                 let orphan_cents = *prices.last().unwrap();
                 let reconciles_as_own_total = parse_quantity_modifier(line)
                     .map(|modifier| validate_quantity_price(orphan_cents, &modifier))
                     .unwrap_or(false);
                 if orphan_cents > 0 && !reconciles_as_own_total {
-                    if let Some(next_line) = normalized_lines.get(i + 1) {
-                        let next_trimmed = next_line.trim();
-                        // Skip if the next line was already consumed by an
+                    // The descriptive line can sit a row or two further down
+                    // when the block carries its own qty row: Foody Mart prints
+                    // "(<size>)@<unit>(<deal>) <orphan>" / "1 @ $2.99" /
+                    // "<item name>". Skip qty rows; never leap over a priced
+                    // row (that's another item's territory).
+                    let mut desc_line_idx = None;
+                    for j in (i + 1)..normalized_lines.len().min(i + 4) {
+                        let candidate = normalized_lines[j].trim();
+                        if candidate.is_empty() || looks_like_quantity_expression(candidate) {
+                            continue;
+                        }
+                        if line_has_trailing_price(candidate) {
+                            break;
+                        }
+                        desc_line_idx = Some(j);
+                        break;
+                    }
+                    if let Some(next_idx) = desc_line_idx {
+                        let next_trimmed = normalized_lines[next_idx].trim();
+                        // Skip if the line was already consumed by an
                         // earlier price's search — avoids cross-row leak.
                         // Do NOT mark used here: this orphan-qty pairing is a
                         // low-confidence OCR-column-merge heuristic, so a later
                         // higher-confidence search (backward / weak-desc forward)
                         // is allowed to claim the same description.
-                        if !used_text_lines[i + 1] && is_descriptive_candidate(next_trimmed) {
+                        if !used_text_lines[next_idx] && is_descriptive_candidate(next_trimmed) {
                             let desc = strip_sale_price_subtext(
                                 &strip_leading_receipt_codes(next_trimmed),
                             );
@@ -1126,23 +1160,23 @@ pub fn extract_text_items(
                                 price_cents: orphan_cents,
                                 quantity: 1,
                             }));
-                            // If the line two below also carries a trailing
-                            // price equal to orphan_cents (the typical Asian-
-                            // grocery `desc / size+price / qty / ...` layout
-                            // where the qty repeats the unit price), the
-                            // pairing is confirmed: mark next-line used so the
-                            // following iteration's weak-desc backward search
-                            // can't re-claim it (bug H/K). If next-next does
-                            // NOT match, the pairing is speculative — leave
-                            // next-line unmarked so a later higher-confidence
-                            // backward search can still reach it.
+                            // If the line right after the description also
+                            // carries a trailing price equal to orphan_cents
+                            // (the typical Asian-grocery `desc / size+price /
+                            // qty / ...` layout where the qty repeats the unit
+                            // price), the pairing is confirmed: mark the desc
+                            // line used so the following iteration's weak-desc
+                            // backward search can't re-claim it (bug H/K). If
+                            // it does NOT match, the pairing is speculative —
+                            // leave the line unmarked so a later
+                            // higher-confidence backward search can reach it.
                             let confirms = normalized_lines
-                                .get(i + 2)
+                                .get(next_idx + 1)
                                 .and_then(|l| extract_trailing_price_cents(l.trim()))
                                 .map(|(c, _, _)| c.abs() == orphan_cents.abs())
                                 .unwrap_or(false);
                             if confirms {
-                                used_text_lines[i + 1] = true;
+                                used_text_lines[next_idx] = true;
                             }
                             // The orphan-qty path just paired this line's
                             // trailing price with the description below. Don't
@@ -1987,6 +2021,45 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].price_cents, 99);
         assert!(items[0].description.contains("Plum Juice"));
+    }
+
+    #[test]
+    fn orphan_deal_line_price_skips_qty_row_to_reach_description_below() {
+        // Foody Mart 2026-07-03_foody_mart_83_54 frozen section: the deal
+        // subtext line carries the NEXT block's price, with that block's own
+        // qty row in between. The coriander deal line ends inside its
+        // parenthetical, so its 3.50 is subtext — not an orphan price.
+        let lines = vec![
+            "Fresh Corianders 1.99".to_string(),
+            "(FE)@1.99(2/$3.50)".to_string(),
+            "1 @ $1.99".to_string(),
+            "Searay - Tofu Fish 5.96".to_string(),
+            "(# 250g)@4.99(1/$2.98) 2.99".to_string(),
+            "2 @ $2.98".to_string(),
+            "Ten Ten - Shangdong Style".to_string(),
+            "(R#5 LL 600g) @4.99 (2/$7.98) 4.99".to_string(),
+            "1 @ $2.99".to_string(),
+            "Ten Ten - Pork Bun".to_string(),
+            "(RR#50# 360g)@4.99(2/$7.98)".to_string(),
+            "1 @ $4.99".to_string(),
+            "Sub Total 15.44".to_string(),
+        ];
+        let summary_amounts = HashSet::from([1544]);
+
+        let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+        let observed: Vec<(String, i64)> = items
+            .into_iter()
+            .map(|item| (item.description, item.price_cents))
+            .collect();
+
+        assert!(observed.contains(&("Fresh Corianders".to_string(), 199)), "{observed:?}");
+        assert!(observed.contains(&("Searay - Tofu Fish".to_string(), 596)), "{observed:?}");
+        assert!(
+            observed.contains(&("Ten Ten - Shangdong Style".to_string(), 299)),
+            "{observed:?}"
+        );
+        assert!(observed.contains(&("Ten Ten - Pork Bun".to_string(), 499)), "{observed:?}");
+        assert_eq!(observed.len(), 4, "{observed:?}");
     }
 
     #[test]

@@ -48,7 +48,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0005"
-keywords = ["SEAFOOD"]
+keywords = ["SEAFOOD", "FROZEN IMITAT", "IMITATION CRAB"]
 category = "grocery_seafood"
 tags = ["grocery", "seafood"]
 priority = 0
