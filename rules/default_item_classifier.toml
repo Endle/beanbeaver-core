@@ -136,7 +136,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0017"
-keywords = ["RICE", "PASTA", "NOODLE", "NOODLES", "DRIED NOOD", "SPAGHETTI", "MACARONI", "PENNE", "FLOUR", "SUGAR", "SALT", "OIL", "OLIVE OIL", "CANOLA OIL", "VINEGAR", "OATMEAL", "OATS", "CEREAL", "QUINOA", "COUSCOUS", "BARLEY", "LENTIL", "LENTILS", "CHICKPEA", "BEAN", "BEANS", "BLACK BEAN", "KIDNEY BEAN", "PINTO BEAN", "INSTANT NOODLE", "INSTANT NOODLES", "LONGKOU", "VERMICELLI", "RAMEN", "DANDAN"]
+keywords = ["RICE", "PASTA", "NOODLE", "NOODLES", "DRIED NOOD", "SPAGHETTI", "MACARONI", "PENNE", "FLOUR", "SUGAR", "SALT", "OIL", "OLIVE OIL", "CANOLA OIL", "VINEGAR", "OATMEAL", "OATS", "CEREAL", "QUINOA", "COUSCOUS", "BARLEY", "MILLET", "LENTIL", "LENTILS", "CHICKPEA", "BEAN", "BEANS", "BLACK BEAN", "KIDNEY BEAN", "PINTO BEAN", "INSTANT NOODLE", "INSTANT NOODLES", "LONGKOU", "VERMICELLI", "RAMEN", "DANDAN"]
 category = "grocery_staple"
 tags = ["grocery", "staple"]
 priority = 0
@@ -216,6 +216,17 @@ priority = 1
 exact_only = false
 
 [[rules]]
+# Beverage brands whose product names otherwise classify elsewhere:
+# "Nongfuspring - Orange Pee(l)" is a bottled tea, not fruit — ORANGE would
+# otherwise win at priority 0.
+id = "beverage_brands"
+keywords = ["NONGFU"]
+category = "grocery_drink"
+tags = ["grocery", "drink"]
+priority = 1
+exact_only = false
+
+[[rules]]
 id = "legacy_0026"
 keywords = ["COFFEE BEAN", "GROUND COFFEE", "INSTANT COFFEE", "COFFEE PODS", "K-CUP", "NESPRESSO", "TEA", "TEA BAG", "GREEN TEA", "BLACK TEA", "HERBAL TEA", "CHAMOMILE", "EARL GREY", "OOLONG TEA", "OOLONG"]
 category = "grocery_drink_coffee"
@@ -225,7 +236,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0027"
-keywords = ["WATER", "SPARKLING WATER", "MINERAL WATER", "SPRING WATER", "COCONUT WATER", "SPORTS DRINK", "SOFT DRINK", "GATORADE", "POWERADE", "ENERGY DRINK", "RED BULL", "MONSTER", "CRUSH", "FANTA STRAUBERRY", "FANTA STRAWBERRY", "FANTA", "PEACE TEA", "DRINK", "BEVERAGE", "ZOA", "BIOSTEEL"]
+keywords = ["WATER", "SPARKLING WATER", "MINERAL WATER", "SPRING WATER", "COCONUT WATER", "SPORTS DRINK", "SOFT DRINK", "GATORADE", "POWERADE", "ENERGY DRINK", "RED BULL", "MONSTER", "CRUSH", "FANTA STRAUBERRY", "FANTA STRAWBERRY", "FANTA", "PEACE TEA", "DRINK", "BEVERAGE", "ZOA", "BIOSTEEL", "MILK TEA", "BUBBLE TEA"]
 category = "grocery_drink"
 tags = ["grocery", "drink"]
 priority = 0
