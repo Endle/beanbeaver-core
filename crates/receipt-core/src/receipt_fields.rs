@@ -845,6 +845,11 @@ fn is_leap_year(year: i32) -> bool {
 }
 
 fn safe_date(year: i32, month: i32, day: i32) -> Option<SimpleDate> {
+    // A digit run that decodes to an implausible year is an SKU or barcode,
+    // not a date (LCBO's Baby Duck SKU "00001123" parsed as 0000-11-23).
+    if !(1990..=2100).contains(&year) {
+        return None;
+    }
     if !(1..=12).contains(&month) || day < 1 {
         return None;
     }
