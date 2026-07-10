@@ -765,7 +765,35 @@ fn nearest_desc_above_consumed(
         {
             continue;
         }
-        return used_text_lines[j];
+        // A priced junk row ("(WRER)  10.04" — mangled subtext carrying a
+        // price) is not the description; the walk continues to the real
+        // name above it.
+        if let Some((_, _, price_start)) = extract_trailing_price_cents(prev) {
+            let head = prev[..price_start].trim();
+            if head.starts_with('(') || alpha_ratio(head) < 0.4 {
+                continue;
+            }
+        }
+        if used_text_lines[j] {
+            return true;
+        }
+        // An unclaimed priceless row directly under a used, priced
+        // description is that item's multi-line name continuation
+        // ("Natrel  4.98" / "1 - 2% Partly Skimme"), not a new item — keep
+        // walking. Any other unclaimed description owns the row below it.
+        let is_continuation = j > 0 && used_text_lines[j - 1] && {
+            let above = normalized_lines[j - 1].trim();
+            match extract_trailing_price_cents(above) {
+                Some((_, _, price_start)) => {
+                    let head = above[..price_start].trim();
+                    !head.starts_with('(') && alpha_ratio(head) >= 0.4
+                }
+                None => false,
+            }
+        };
+        if !is_continuation {
+            return false;
+        }
     }
     false
 }
@@ -796,6 +824,19 @@ fn looks_like_quantity_expression(text: &str) -> bool {
     if upper.starts_with('(') && upper.contains('@') && upper.contains("/$") {
         let alpha_count = upper.chars().filter(|ch| ch.is_ascii_alphabetic()).count();
         if alpha_count <= 2 {
+            return true;
+        }
+    }
+
+    // Deal-subtext shape "(<size>)<@|0><unit>(<deal>)" where OCR read the `@`
+    // as `0` (or kept it) and the parenthetical noise carries more letters
+    // than the alpha caps allow: "(HEARH)03.99(1/$0.98)". The `)<price>(`
+    // bridge plus the `/$` deal marker make the shape unambiguous.
+    if upper.starts_with('(') && upper.contains("/$") {
+        static RE_PRICE_BRIDGE: OnceLock<Regex> = OnceLock::new();
+        let re_price_bridge = RE_PRICE_BRIDGE
+            .get_or_init(|| Regex::new(r"\)\s*[0@]?\d+\.\d{2}\s*\(").unwrap());
+        if re_price_bridge.is_match(&upper) {
             return true;
         }
     }
@@ -1271,17 +1312,23 @@ pub fn extract_text_items(
                 let reconciles_as_own_total = parse_quantity_modifier(line)
                     .map(|modifier| validate_quantity_price(orphan_cents, &modifier))
                     .unwrap_or(false);
-                // Under receipt-level drift, a trailing price that
-                // coincidentally reconciles as this row's own total ("1 @
-                // $1.99  1.99" where the next item also costs 1.99) is still
-                // the next item's price — but only when the description above
-                // is already priced, so this row has nothing left to donate
-                // upward. An unclaimed description above (weight rows:
-                // "Broccoli (Crowns)" / "0.41 lb @ $1.98/lb  0.81") keeps the
-                // reconciling total as its own.
-                let echo_is_drifted = price_drift
-                    && nearest_desc_above_consumed(&normalized_lines, &used_text_lines, i);
-                if orphan_cents > 0 && (!reconciles_as_own_total || echo_is_drifted) {
+                // The downward pairing is only valid when the description
+                // above is already priced, so this row has nothing left to
+                // donate upward. An unclaimed description above keeps the
+                // trailing price as its own — whether the row reconciles
+                // ("Broccoli (Crowns)" / "0.41 lb @ $1.98/lb  0.81") or not
+                // ("HLY - Potato Chips Honey" / "(...)@3.99(1/$0.98)  5.88H",
+                // where 5.88 is Honey's own price on its deal-subtext row).
+                // Under receipt-level drift even a coincidentally-reconciling
+                // echo ("1 @ $1.99  1.99" where the next item also costs
+                // 1.99) is the next item's price.
+                let above_consumed =
+                    nearest_desc_above_consumed(&normalized_lines, &used_text_lines, i);
+                let echo_is_drifted = price_drift && above_consumed;
+                if orphan_cents > 0
+                    && above_consumed
+                    && (!reconciles_as_own_total || echo_is_drifted)
+                {
                     // The descriptive line can sit a row or two further down
                     // when the block carries its own qty row: Foody Mart prints
                     // "(<size>)@<unit>(<deal>) <orphan>" / "1 @ $2.99" /
@@ -1335,19 +1382,15 @@ pub fn extract_text_items(
                             // it does NOT match, the pairing is speculative —
                             // leave the line unmarked so a later
                             // higher-confidence backward search can reach it.
-                            let confirms = normalized_lines
-                                .get(next_idx + 1)
-                                .and_then(|l| extract_trailing_price_cents(l.trim()))
-                                .map(|(c, _, _)| c.abs() == orphan_cents.abs())
-                                .unwrap_or(false);
-                            // Established receipt-level drift is as strong a
-                            // confirmation as the next-line echo: without the
-                            // used-mark, the paren-subtext row below the
-                            // description back-walks to it and emits the same
-                            // item again at the drifted (wrong) price.
-                            if confirms || price_drift {
-                                used_text_lines[next_idx] = true;
-                            }
+                            // Mark the claimed description so the next link
+                            // of the chain sees it as consumed: the row below
+                            // it can then donate ITS trailing price downward
+                            // (nearest_desc_above_consumed), and the paren
+                            // back-walk can't emit the same item again at a
+                            // drifted price. The pairing itself was already
+                            // gated on the description above being consumed,
+                            // so this is no longer speculative.
+                            used_text_lines[next_idx] = true;
                             // The orphan-qty path just paired this line's
                             // trailing price with the description below. Don't
                             // also let the regular extract path pair the same
@@ -1699,7 +1742,13 @@ pub fn extract_text_items(
                             continue;
                         }
                         let cleaned_next = strip_leading_receipt_codes(next_line);
-                        if cleaned_next.is_empty() || is_section_header_text(&cleaned_next) {
+                        // Bare counter labels ("Meat" below a priced
+                        // "&& 03-Meat" banner) are the item the header's
+                        // drifted price belongs to, not another banner.
+                        if cleaned_next.is_empty()
+                            || (is_section_header_text(&cleaned_next)
+                                && !is_generic_counter_label(&cleaned_next))
+                        {
                             continue;
                         }
                         // The `&& <Dept> price` section-header signal is strong:
@@ -2401,6 +2450,7 @@ mod tests {
         // glued it onto Pork Lard as a duplicate. The unclaimed-description
         // case must keep walking backward ("Fresh Chicken Wings"-style).
         let lines = vec![
+            "Genuine - Fried Soya Cake 1.98".to_string(),
             "1 @ $1.98 3.98".to_string(),
             "Sanquan - Yellow Millet C".to_string(),
             "(360g)@5.99(1/$3.98)".to_string(),
@@ -2413,9 +2463,9 @@ mod tests {
             "Pak Fok - Fried Tofu".to_string(),
             "(150g)@3.59(1/$2.98)".to_string(),
             "1 @ $2.98".to_string(),
-            "Sub Total 12.23".to_string(),
+            "Sub Total 14.21".to_string(),
         ];
-        let summary_amounts = HashSet::from([1223]);
+        let summary_amounts = HashSet::from([1421]);
 
         let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
         let observed: Vec<(String, i64)> = items
@@ -2548,6 +2598,74 @@ mod tests {
             "{observed:?}"
         );
         assert_eq!(observed.len(), 1, "{observed:?}");
+    }
+
+    #[test]
+    fn subtext_price_stays_with_unclaimed_item_above() {
+        // Foody Mart 2026-05-21_foody_mart_53_05: each HLY block prints its
+        // OWN price on its deal-subtext row ("(43H)@3.99(1/$0.98)  5.88H")
+        // with the name above still unclaimed — the downward orphan pairing
+        // must not steal it for the next block. Also covers the OCR `@`→`0`
+        // deal-row shape ("(HEARH)03.99(…)"), which must still read as a
+        // quantity expression so the price walks back to Origin.
+        let lines = vec![
+            "HLY - Potato Chips Honey".to_string(),
+            "(43H)@3.99(1/$0.98) 5.88H".to_string(),
+            "6 @ $0.98".to_string(),
+            "HLY - Potato Chips Origin".to_string(),
+            "(HEARH)03.99(1/$0.98) 2.94H".to_string(),
+            "3 @ $0.98".to_string(),
+            "Sub Total 8.82".to_string(),
+        ];
+        let summary_amounts = HashSet::from([882]);
+
+        let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+        let observed: Vec<(String, i64)> = items
+            .into_iter()
+            .map(|item| (item.description, item.price_cents))
+            .collect();
+
+        assert!(
+            observed.iter().any(|(d, p)| d.starts_with("HLY - Potato Chips Honey") && *p == 588),
+            "{observed:?}"
+        );
+        assert!(
+            observed.iter().any(|(d, p)| d.starts_with("HLY - Potato Chips Origin") && *p == 294),
+            "{observed:?}"
+        );
+        assert_eq!(observed.len(), 2, "{observed:?}");
+    }
+
+    #[test]
+    fn multiline_name_continuation_does_not_block_orphan_pairing() {
+        // Foody Mart 2026-04-24_foody_mart_70_68: Natrel's name wraps onto a
+        // second, unclaimed row. The consumed-above walk must read through
+        // the continuation to the claimed first row, or the qty row's
+        // drifted 7.59 never reaches Gray Ridge below.
+        let lines = vec![
+            "Natrel 4.98".to_string(),
+            "1 - 2% Partly Skimme".to_string(),
+            "((015640541)@8.99(1/$4.98)".to_string(),
+            "1 @$4.98 7.59".to_string(),
+            "Gray Ridge - White Fegs E".to_string(),
+            "Sub Total 12.57".to_string(),
+        ];
+        let summary_amounts = HashSet::from([1257]);
+
+        let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+        let observed: Vec<(String, i64)> = items
+            .into_iter()
+            .map(|item| (item.description, item.price_cents))
+            .collect();
+
+        assert!(
+            observed.iter().any(|(d, p)| d.starts_with("Natrel") && *p == 498),
+            "{observed:?}"
+        );
+        assert!(
+            observed.iter().any(|(d, p)| d.starts_with("Gray Ridge") && *p == 759),
+            "{observed:?}"
+        );
     }
 
     #[test]
