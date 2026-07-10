@@ -281,6 +281,15 @@ fn re_weight_at_price() -> &'static Regex {
     })
 }
 
+fn re_weight_rate_no_at() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // OCR-dropped `@` variant: "1.86 lb  $2.49/lb". The `/unit` tail is
+    // required so a bare "weight + total" line can't masquerade as a rate.
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)^(\d+\.?\d*)\s*(?:lb|lk|kg|k[g9]|1b|1k)\s+\$?(\d+\.\d{2})\s*/").unwrap()
+    })
+}
+
 fn re_multi_for_price() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"(?i)^\(?(\d+)\s*/\s*for\s+\$?(\d+\.\d{2})\)?").unwrap())
@@ -622,7 +631,10 @@ fn parse_quantity_modifier(line: &str) -> Option<QuantityModifier> {
         });
     }
 
-    if let Some(captures) = re_weight_at_price().captures(&normalized) {
+    if let Some(captures) = re_weight_at_price()
+        .captures(&normalized)
+        .or_else(|| re_weight_rate_no_at().captures(&normalized))
+    {
         return Some(QuantityModifier {
             quantity: 1,
             unit_price_cents: captures.get(2).and_then(|m| parse_cents(m.as_str())),
@@ -1600,13 +1612,24 @@ pub fn extract_text_items(
             if !desc_part.is_empty()
                 && re_mangled_reg_marker().is_match(desc_part.trim())
             {
-                continue;
+                // Under drift with the description above already priced, the
+                // REG amount lives inside the marker itself and the trailing
+                // price is the NEXT item's ("(-EG4.99  2.99" above "LKS Dried
+                // Cod Fish Slice") — forward it; in every other shape the
+                // trailing price is the suggested-retail amount, so keep
+                // suppressing the row.
+                if drift_paren_forward {
+                    skip_if_no_forward_desc = true;
+                } else {
+                    continue;
+                }
             }
 
             if !desc_part.is_empty()
                 && desc_part.len() > 2
                 && !is_qty_expr
                 && !force_backward
+                && !drift_paren_forward
                 && !looks_like_summary_line(desc_part.trim())
             {
                 let desc_alpha = alpha_ratio(desc_part.trim());
@@ -2460,6 +2483,71 @@ mod tests {
         );
         assert!(observed.contains(&("Dim Sum".to_string(), 298)), "{observed:?}");
         assert_eq!(observed.len(), 4, "{observed:?}");
+    }
+
+    #[test]
+    fn mangled_reg_row_forwards_drifted_price_under_drift() {
+        // Bestco 2026-06-25_fresh_183_77: "(-EG4.99  2.99" is a mangled
+        // @REG$4.99 marker whose TRAILING price is the next item's (LKS).
+        // Suppressing the row (the straight-receipt behavior) dropped LKS;
+        // pairing backward glued 2.99 onto Yang Guo Fu. Three priced section
+        // headers establish the drift.
+        let lines = vec![
+            "&& Grocery 6.99".to_string(),
+            "Hot Bean Sauce 450g".to_string(),
+            "&& Taxed Grocery 2.59".to_string(),
+            "Heytea Kale Plant Beverag".to_string(),
+            "&& Vegetable 4.79".to_string(),
+            "Green Long Hot Pepper".to_string(),
+            "*Yang Guo Fu Spicy Hot Pot 3.99".to_string(),
+            "(-EG4.99 2.99".to_string(),
+            "LKS Dried Cod Fish Slice".to_string(),
+            "*DongBei Sticky Spicy Hot 4.99".to_string(),
+            "Sub Total 26.34".to_string(),
+        ];
+        let summary_amounts = HashSet::from([2634]);
+
+        let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+        let observed: Vec<(String, i64)> = items
+            .into_iter()
+            .map(|item| (item.description, item.price_cents))
+            .collect();
+
+        assert!(
+            observed.contains(&("LKS Dried Cod Fish Slice".to_string(), 299)),
+            "{observed:?}"
+        );
+        assert!(
+            observed.contains(&("*Yang Guo Fu Spicy Hot Pot".to_string(), 399)),
+            "{observed:?}"
+        );
+        assert!(observed.contains(&("Hot Bean Sauce 450g".to_string(), 699)), "{observed:?}");
+    }
+
+    #[test]
+    fn weight_rate_row_with_dropped_at_still_prices_item_above() {
+        // Bestco 2026-06-25_fresh_183_77: OCR dropped the '@' from Fresh
+        // Ginger's weight row ("1.86 lb  $2.49/lb  4.63"), so it wasn't a
+        // quantity expression and became a phantom item with the weight text
+        // as its description. The '/unit' tail licenses the no-@ rate form.
+        let lines = vec![
+            "Fresh Ginger".to_string(),
+            "1.86 1b  $2.49/1b 4.63".to_string(),
+            "Sub Total 4.63".to_string(),
+        ];
+        let summary_amounts = HashSet::from([463]);
+
+        let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+        let observed: Vec<(String, i64)> = items
+            .into_iter()
+            .map(|item| (item.description, item.price_cents))
+            .collect();
+
+        assert!(
+            observed.iter().any(|(d, p)| d.starts_with("Fresh Ginger") && *p == 463),
+            "{observed:?}"
+        );
+        assert_eq!(observed.len(), 1, "{observed:?}");
     }
 
     #[test]
