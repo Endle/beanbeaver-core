@@ -272,7 +272,13 @@ fn re_count_at_price() -> &'static Regex {
 
 fn re_weight_at_price() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)^(\d+\.?\d*)\s*(?:lb|lk|kg|k[g9]|1b|1k)\s*@").unwrap())
+    // The per-unit rate is captured (when readable) so the row's own total
+    // is computable: "3.37 lb @ $2.98/lb" costs 10.04, so a trailing 7.45 on
+    // that row can be recognized as another item's drifted price.
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)^(\d+\.?\d*)\s*(?:lb|lk|kg|k[g9]|1b|1k)\s*@(?:\s*\$?(\d+\.\d{2}))?")
+            .unwrap()
+    })
 }
 
 fn re_multi_for_price() -> &'static Regex {
@@ -584,13 +590,21 @@ fn looks_like_onsale_marker(text: &str) -> bool {
         .is_match(&compact)
 }
 
+/// Bare counter labels that double as section-header words. As a standalone
+/// line about to receive a price they are real items (Foody Mart's meat
+/// counter prints "Meat" over a Chinese subtext per cut); as part of a
+/// department banner ("&& 03-Meat") they are headers.
+fn is_generic_counter_label(text: &str) -> bool {
+    matches!(
+        text.trim().to_ascii_uppercase().as_str(),
+        "MEAT" | "BAKERY" | "FROZEN"
+    )
+}
+
 fn is_priced_generic_item_label(left_text: &str, full_text: &str) -> bool {
     !left_text.is_empty()
         && line_has_trailing_price(full_text)
-        && matches!(
-            left_text.trim().to_ascii_uppercase().as_str(),
-            "MEAT" | "BAKERY" | "FROZEN"
-        )
+        && is_generic_counter_label(left_text)
 }
 
 fn parse_quantity_modifier(line: &str) -> Option<QuantityModifier> {
@@ -611,7 +625,7 @@ fn parse_quantity_modifier(line: &str) -> Option<QuantityModifier> {
     if let Some(captures) = re_weight_at_price().captures(&normalized) {
         return Some(QuantityModifier {
             quantity: 1,
-            unit_price_cents: None,
+            unit_price_cents: captures.get(2).and_then(|m| parse_cents(m.as_str())),
             weight_text: Some(captures.get(1)?.as_str().to_string()),
             deal_price_cents: None,
             pattern_type: QuantityPatternType::WeightAtPrice,
@@ -646,8 +660,90 @@ fn validate_quantity_price(total_price_cents: i64, modifier: &QuantityModifier) 
             .deal_price_cents
             .map(|deal| (deal - total_price_cents).abs() <= tolerance)
             .unwrap_or(false),
-        QuantityPatternType::WeightAtPrice => true,
+        QuantityPatternType::WeightAtPrice => {
+            // When both the weight and the per-unit rate are readable, the
+            // row's own total is weight × rate; a trailing price that doesn't
+            // reconcile is another item's drifted price, not this row's total.
+            // When either is unreadable, keep the historical benefit of the
+            // doubt (always-own-total).
+            let computed = modifier.unit_price_cents.and_then(|unit| {
+                modifier
+                    .weight_text
+                    .as_deref()
+                    .and_then(|weight| weight.parse::<f64>().ok())
+                    .map(|weight| (weight * unit as f64).round() as i64)
+            });
+            match computed {
+                Some(own_total) => (own_total - total_price_cents).abs() <= 3,
+                None => true,
+            }
+        }
     }
+}
+
+/// Minimum count of drift witnesses before receipt-level price drift is
+/// assumed. Three keeps one or two OCR flukes on a straight receipt from
+/// flipping the pairing direction.
+const PRICE_DRIFT_EVIDENCE_MIN: usize = 3;
+
+/// Count qty rows whose trailing price fails to reconcile as the row's own
+/// qty×unit total — each is a witness that the price column drifted one row
+/// up relative to the text column (see `price_drift` in
+/// `extract_text_items`).
+fn count_price_drift_evidence(lines: &[String]) -> usize {
+    lines
+        .iter()
+        .filter(|line| {
+            let line = line.trim();
+            if !looks_like_quantity_expression(line) {
+                return false;
+            }
+            let prices: Vec<i64> = re_find_prices()
+                .captures_iter(line)
+                .filter_map(|caps| caps.get(1).and_then(|m| parse_cents(m.as_str())))
+                .collect();
+            if prices.len() < 2 {
+                return false;
+            }
+            let trailing = extract_trailing_price_cents(line).map(|(c, _, _)| c);
+            if trailing != prices.last().copied() {
+                return false;
+            }
+            let Some(orphan) = trailing else {
+                return false;
+            };
+            orphan > 0
+                && !parse_quantity_modifier(line)
+                    .map(|modifier| validate_quantity_price(orphan, &modifier))
+                    .unwrap_or(false)
+        })
+        .count()
+}
+
+/// True when the nearest description-like line above `i` has already been
+/// consumed by an earlier pairing. Under receipt-level drift this decides a
+/// row's donation direction: a qty/paren row below an *unclaimed* description
+/// still owes it its price ("Broccoli (Crowns)" / "0.41 lb @ $1.98/lb 0.81"),
+/// while one below an already-priced description carries the NEXT item's
+/// drifted price ("Pork Lard" priced from above, so "(3 380g) 2.98" belongs
+/// to Pak Fok below).
+fn nearest_desc_above_consumed(
+    normalized_lines: &[String],
+    used_text_lines: &[bool],
+    i: usize,
+) -> bool {
+    for j in (i.saturating_sub(3)..i).rev() {
+        let prev = normalized_lines[j].trim();
+        if prev.is_empty()
+            || looks_like_quantity_expression(prev)
+            || re_parenthetical_only().is_match(prev)
+            || re_skip_patterns().is_match(prev)
+        {
+            continue;
+        }
+        return used_text_lines[j];
+    }
+    false
 }
 
 fn looks_like_quantity_expression(text: &str) -> bool {
@@ -1103,6 +1199,17 @@ pub fn extract_text_items(
         .filter(|c| *c > 0)
         .max();
 
+    // Receipt-level evidence that the right price column drifted one row up
+    // (photo shear on two-column Asian-grocery receipts): count qty rows whose
+    // trailing price does NOT reconcile as the row's own qty×unit total. On a
+    // straight receipt this is ~0; on a leaning one ("1 @ $2.59  0.91H", …)
+    // nearly every deal block contributes one. With systematic drift
+    // established, a qty row whose trailing price *coincidentally* equals its
+    // own total ("1 @ $1.99  1.99" where the next item also costs 1.99) is
+    // still treated as carrying the next item's price, and paren-subtext rows
+    // pair forward instead of backward.
+    let price_drift = count_price_drift_evidence(&normalized_lines) >= PRICE_DRIFT_EVIDENCE_MIN;
+
     for (i, line) in normalized_lines.iter().enumerate() {
         if total_line_idx.is_some_and(|total_idx| i > total_idx) {
             break;
@@ -1140,7 +1247,17 @@ pub fn extract_text_items(
                 let reconciles_as_own_total = parse_quantity_modifier(line)
                     .map(|modifier| validate_quantity_price(orphan_cents, &modifier))
                     .unwrap_or(false);
-                if orphan_cents > 0 && !reconciles_as_own_total {
+                // Under receipt-level drift, a trailing price that
+                // coincidentally reconciles as this row's own total ("1 @
+                // $1.99  1.99" where the next item also costs 1.99) is still
+                // the next item's price — but only when the description above
+                // is already priced, so this row has nothing left to donate
+                // upward. An unclaimed description above (weight rows:
+                // "Broccoli (Crowns)" / "0.41 lb @ $1.98/lb  0.81") keeps the
+                // reconciling total as its own.
+                let echo_is_drifted = price_drift
+                    && nearest_desc_above_consumed(&normalized_lines, &used_text_lines, i);
+                if orphan_cents > 0 && (!reconciles_as_own_total || echo_is_drifted) {
                     // The descriptive line can sit a row or two further down
                     // when the block carries its own qty row: Foody Mart prints
                     // "(<size>)@<unit>(<deal>) <orphan>" / "1 @ $2.99" /
@@ -1166,7 +1283,15 @@ pub fn extract_text_items(
                         // low-confidence OCR-column-merge heuristic, so a later
                         // higher-confidence search (backward / weak-desc forward)
                         // is allowed to claim the same description.
-                        if !used_text_lines[next_idx] && is_descriptive_candidate(next_trimmed) {
+                        // A bare counter label ("Meat" above its mangled
+                        // Chinese subtext) is a real item here — the orphan
+                        // price arriving from this qty row is what prices it.
+                        // `is_priced_generic_item_label`'s trailing-price
+                        // requirement can't see a price delivered from above.
+                        if !used_text_lines[next_idx]
+                            && (is_descriptive_candidate(next_trimmed)
+                                || is_generic_counter_label(next_trimmed))
+                        {
                             let desc = strip_sale_price_subtext(
                                 &strip_leading_receipt_codes(next_trimmed),
                             );
@@ -1191,7 +1316,12 @@ pub fn extract_text_items(
                                 .and_then(|l| extract_trailing_price_cents(l.trim()))
                                 .map(|(c, _, _)| c.abs() == orphan_cents.abs())
                                 .unwrap_or(false);
-                            if confirms {
+                            // Established receipt-level drift is as strong a
+                            // confirmation as the next-line echo: without the
+                            // used-mark, the paren-subtext row below the
+                            // description back-walks to it and emits the same
+                            // item again at the drifted (wrong) price.
+                            if confirms || price_drift {
                                 used_text_lines[next_idx] = true;
                             }
                             // The orphan-qty path just paired this line's
@@ -1307,6 +1437,19 @@ pub fn extract_text_items(
             let weak_inline_desc = is_weak_inline_description(&desc_part);
             let mut force_backward =
                 line_upper.contains("REG$") || line_upper.contains("@REG") || weak_inline_desc;
+            // Under receipt-level drift a paren-subtext row's trailing price
+            // belongs to the item BELOW when the description above is already
+            // priced ("Pork Lard" claimed from its qty row, so "(3 380g)
+            // 2.98" is Pak Fok's) — search forward, stopping at the first
+            // priced row rather than leaping over it. When the description
+            // above is still unclaimed, the price is its own ("Fresh Chicken
+            // Wings" / "(WRER)  10.04") and the backward walk stays correct.
+            let drift_paren_forward = price_drift
+                && desc_part.trim_start().starts_with('(')
+                && nearest_desc_above_consumed(&normalized_lines, &used_text_lines, i);
+            if drift_paren_forward {
+                prefer_forward_desc = true;
+            }
             if has_reg_marker
                 && force_backward
                 && i > 0
@@ -1495,17 +1638,27 @@ pub fn extract_text_items(
                             break;
                         }
                         let next_line = normalized_lines[j].trim();
+                        if line_has_trailing_price(next_line) {
+                            if drift_paren_forward {
+                                break;
+                            }
+                            continue;
+                        }
                         if next_line.is_empty()
                             || re_skip_patterns().is_match(next_line)
                             || looks_like_summary_line(next_line)
                             || looks_like_quantity_expression(next_line)
                             || looks_like_onsale_marker(next_line)
-                            || line_has_trailing_price(next_line)
                         {
                             continue;
                         }
                         let cleaned_next = strip_leading_receipt_codes(next_line);
-                        if cleaned_next.is_empty() || is_section_header_text(&cleaned_next) {
+                        // Bare counter labels ("Meat") are items about to be
+                        // priced by this row, not department banners.
+                        if cleaned_next.is_empty()
+                            || (is_section_header_text(&cleaned_next)
+                                && !is_generic_counter_label(&cleaned_next))
+                        {
                             continue;
                         }
                         if alpha_ratio(&cleaned_next) < 0.5 {
@@ -2076,6 +2229,129 @@ mod tests {
         );
         assert!(observed.contains(&("Ten Ten - Pork Bun".to_string(), 499)), "{observed:?}");
         assert_eq!(observed.len(), 4, "{observed:?}");
+    }
+
+    #[test]
+    fn weight_row_total_validates_against_rate_and_frees_drifted_price() {
+        // Foody Mart 2026-07-09_foody_mart_137_73 meat cluster: the wings'
+        // weight row carries the NEXT item's 7.45 (3.37 × $2.98 = 10.04, so
+        // the trailing price can't be the row's own total), and the bare
+        // "Meat" counter label below is the item it prices. Works without
+        // receipt-level drift — the weight math alone frees the orphan.
+        let lines = vec![
+            "Fresh Chicken Wings".to_string(),
+            "(WRER) 10.04".to_string(),
+            "3.37 1b @ $2.98/1b 7.45".to_string(),
+            "Meat".to_string(),
+            "Meat 4.19".to_string(),
+            "Sub Total 21.68".to_string(),
+        ];
+        let summary_amounts = HashSet::from([2168]);
+
+        let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+        let observed: Vec<(String, i64)> = items
+            .into_iter()
+            .map(|item| (item.description, item.price_cents))
+            .collect();
+
+        assert!(
+            observed.iter().any(|(d, p)| d.starts_with("Fresh Chicken Wings") && *p == 1004),
+            "{observed:?}"
+        );
+        assert!(observed.contains(&("Meat".to_string(), 745)), "{observed:?}");
+        assert!(observed.contains(&("Meat".to_string(), 419)), "{observed:?}");
+    }
+
+    #[test]
+    fn coincidental_qty_echo_pairs_downward_under_receipt_drift() {
+        // Foody Mart 2026-07-09_foody_mart_137_73: on a receipt whose price
+        // column systematically leans up (three non-reconciling qty rows
+        // establish it), "1 @ $1.99  1.99" coincidentally equals its own
+        // total but is really TCMC's price — the Margina item above is
+        // already priced, so the row has nothing left to donate upward.
+        let lines = vec![
+            "HLY - Fish Cracker Seawee 2.59".to_string(),
+            "(33g)@2.59(2/$3.50)".to_string(),
+            "1 @ $2.59 0.91".to_string(),
+            "HLY - Fish Cracker Seawee".to_string(),
+            "(33g)@2.59(2/$3.50)".to_string(),
+            "1 @ $0.91 2.99".to_string(),
+            "NX - Dried Sweet Potato V".to_string(),
+            "(500g)@2.99(2/$5.00)".to_string(),
+            "1 @ $2.99 1.99".to_string(),
+            "Margina Strawberry Flavor".to_string(),
+            "(95g)@1.99(2/$2.50)".to_string(),
+            "1 @ $1.99 1.99".to_string(),
+            "TCMC - Strawberry Flavore".to_string(),
+            "Sub Total 9.47".to_string(),
+        ];
+        let summary_amounts = HashSet::from([947]);
+
+        let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+        let observed: Vec<(String, i64)> = items
+            .into_iter()
+            .map(|item| (item.description, item.price_cents))
+            .collect();
+
+        assert!(
+            observed.contains(&("TCMC - Strawberry Flavore".to_string(), 199)),
+            "{observed:?}"
+        );
+        assert!(
+            observed.contains(&("Margina Strawberry Flavor".to_string(), 199)),
+            "{observed:?}"
+        );
+    }
+
+    #[test]
+    fn paren_subtext_price_pairs_forward_when_description_above_consumed() {
+        // Foody Mart 2026-07-09_foody_mart_137_73 frozen section: "Pork Lard"
+        // is priced by the qty row above it, so the trailing 2.98 on its size
+        // subtext "(3 380g)" belongs to Pak Fok below — the old backward walk
+        // glued it onto Pork Lard as a duplicate. The unclaimed-description
+        // case must keep walking backward ("Fresh Chicken Wings"-style).
+        let lines = vec![
+            "1 @ $1.98 3.98".to_string(),
+            "Sanquan - Yellow Millet C".to_string(),
+            "(360g)@5.99(1/$3.98)".to_string(),
+            "1 @ $3.98 1.28".to_string(),
+            "LBT - Frozen Sandwich".to_string(),
+            "(13)@2.99(1/$1.28)".to_string(),
+            "1 @ $1.28 3.99".to_string(),
+            "Pork Lard".to_string(),
+            "(3 380g) 2.98".to_string(),
+            "Pak Fok - Fried Tofu".to_string(),
+            "(150g)@3.59(1/$2.98)".to_string(),
+            "1 @ $2.98".to_string(),
+            "Sub Total 12.23".to_string(),
+        ];
+        let summary_amounts = HashSet::from([1223]);
+
+        let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+        let observed: Vec<(String, i64)> = items
+            .into_iter()
+            .map(|item| (item.description, item.price_cents))
+            .collect();
+
+        assert!(observed.contains(&("Pork Lard".to_string(), 399)), "{observed:?}");
+        assert!(
+            observed.iter().any(|(d, p)| d.starts_with("Pak Fok - Fried Tofu") && *p == 298),
+            "{observed:?}"
+        );
+        assert!(
+            observed.iter().any(|(d, p)| d.starts_with("LBT - Frozen Sandwich") && *p == 128),
+            "{observed:?}"
+        );
+        assert!(
+            observed.iter().any(|(d, p)| d.starts_with("Sanquan - Yellow Millet C") && *p == 398),
+            "{observed:?}"
+        );
+        // Pork Lard must not also appear at Pak Fok's price (the old
+        // backward-walk duplicate).
+        assert!(
+            !observed.iter().any(|(d, p)| d.starts_with("Pork Lard") && *p == 298),
+            "{observed:?}"
+        );
     }
 
     #[test]
