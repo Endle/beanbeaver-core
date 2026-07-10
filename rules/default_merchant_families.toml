@@ -39,3 +39,10 @@ aliases = ["FRESHCO"]
 [[families]]
 canonical = "FOODY MART"
 aliases = ["FOODY MART"]
+
+# Shoppers' banner row can sit under faint reversed bleed-through that OCR
+# reads as a garbage first line ("qqori"), which then wins the raw-header
+# slot; the exact alias match on the real banner text below recovers it.
+[[families]]
+canonical = "SHOPPERS DRUG MART"
+aliases = ["SHOPPERS DRUG MART"]
