@@ -227,6 +227,17 @@ priority = 1
 exact_only = false
 
 [[rules]]
+# Instant-noodle brands whose flavour names otherwise classify elsewhere:
+# "Nissin - Chicken Flavour" is ramen, not meat — CHICKEN would otherwise
+# win at priority 0.
+id = "noodle_brands"
+keywords = ["NISSIN"]
+category = "grocery_staple"
+tags = ["grocery", "staple"]
+priority = 1
+exact_only = false
+
+[[rules]]
 id = "legacy_0026"
 keywords = ["COFFEE BEAN", "GROUND COFFEE", "INSTANT COFFEE", "COFFEE PODS", "K-CUP", "NESPRESSO", "TEA", "TEA BAG", "GREEN TEA", "BLACK TEA", "HERBAL TEA", "CHAMOMILE", "EARL GREY", "OOLONG TEA", "OOLONG"]
 category = "grocery_drink_coffee"
