@@ -695,6 +695,18 @@ fn count_price_drift_evidence(lines: &[String]) -> usize {
         .iter()
         .filter(|line| {
             let line = line.trim();
+            // A section header carrying a trailing price is the strongest
+            // witness: straight receipts never price their "&& <Dept>" rows,
+            // so the amount can only be the first item's, drifted up. Bare
+            // counter labels ("Meat 4.19") are items, not headers.
+            if let Some((cents, _, price_start)) = extract_trailing_price_cents(line) {
+                let head = line[..price_start].trim();
+                if cents > 0 && !head.is_empty() && is_section_header_text(head)
+                    && !is_generic_counter_label(head)
+                {
+                    return true;
+                }
+            }
             if !looks_like_quantity_expression(line) {
                 return false;
             }
@@ -1360,6 +1372,39 @@ pub fn extract_text_items(
         }
 
         if let Some((price_cents, _is_discount, price_start)) = extract_trailing_price_cents(line) {
+            // A row already claimed as another pairing's description can
+            // still carry a trailing price — under drift it is the NEXT
+            // item's, drifted onto this name row ("S & B - Wasabi  2.68"
+            // right after the priced header claimed Wasabi at 5.59). Forward
+            // it to the next unclaimed description and consume this row.
+            if price_drift && used_text_lines[i] {
+                for j in (i + 1)..normalized_lines.len().min(i + 4) {
+                    if used_text_lines[j] {
+                        break;
+                    }
+                    let candidate = normalized_lines[j].trim();
+                    if line_has_trailing_price(candidate) {
+                        break;
+                    }
+                    if candidate.is_empty()
+                        || looks_like_quantity_expression(candidate)
+                        || !(is_descriptive_candidate(candidate)
+                            || is_generic_counter_label(candidate))
+                    {
+                        continue;
+                    }
+                    let desc = strip_sale_price_subtext(&strip_leading_receipt_codes(candidate));
+                    deferred.push(DeferredTextOutcome::Item(ParsedTextItem {
+                        category_source: desc.clone(),
+                        description: desc,
+                        price_cents,
+                        quantity: 1,
+                    }));
+                    used_text_lines[j] = true;
+                    break;
+                }
+                continue;
+            }
             let line_upper = line.to_ascii_uppercase();
             let mut desc_part = line[..price_start].trim().to_string();
             let compact_line = re_compact_space().replace_all(&line_upper, "").to_string();
@@ -1597,6 +1642,28 @@ pub fn extract_text_items(
                             break;
                         }
                         let next_line = normalized_lines[j].trim();
+                        // Under established drift the first item below a
+                        // priced header often carries the SECOND item's price
+                        // on its own name row ("&& 01-Grocery  5.59" / "S & B
+                        // - Wasabi  2.68"). The header's price belongs to that
+                        // name regardless; skipping it would cross the whole
+                        // section's pairing by one.
+                        if price_drift && re_trailing_price().is_match(next_line) {
+                            if let Some((_, _, price_start)) =
+                                extract_trailing_price_cents(next_line)
+                            {
+                                let head = next_line[..price_start].trim();
+                                let cleaned_head = strip_leading_receipt_codes(head);
+                                if !cleaned_head.is_empty()
+                                    && !is_section_header_text(&cleaned_head)
+                                    && alpha_ratio(&cleaned_head) >= 0.5
+                                {
+                                    found_desc = Some(cleaned_head);
+                                    found_desc_line_idx = Some(j);
+                                    break;
+                                }
+                            }
+                        }
                         if next_line.is_empty()
                             || re_skip_patterns().is_match(next_line)
                             || looks_like_summary_line(next_line)
@@ -2352,6 +2419,47 @@ mod tests {
             !observed.iter().any(|(d, p)| d.starts_with("Pork Lard") && *p == 298),
             "{observed:?}"
         );
+    }
+
+    #[test]
+    fn priced_header_chain_resolves_first_two_items_under_drift() {
+        // Foody Mart 2026-06-28_foody_mart_115_56: the header carries the
+        // first item's price AND the first item's name row carries the
+        // second item's — skipping priced rows in the header's forward search
+        // crossed the pairing (Nissin got 5.59, Wasabi got 2.68). The two
+        // priced headers plus the non-reconciling deal row establish drift.
+        let lines = vec![
+            "&& 01-Grocery # 5.59".to_string(),
+            "S & B - Wasabi 2.68".to_string(),
+            "( 90g)".to_string(),
+            "Nissin - Chicken Flavour".to_string(),
+            "(0T 5x100g)@4.99 (1/$2.68) 4.99".to_string(),
+            "1 @ $2.68".to_string(),
+            "Shodoshima - Asian Style".to_string(),
+            "(EMI620g)".to_string(),
+            "&& 19-Dim Sum 2.98".to_string(),
+            "Dim Sum".to_string(),
+            "Sub Total 16.24".to_string(),
+        ];
+        let summary_amounts = HashSet::from([1624]);
+
+        let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+        let observed: Vec<(String, i64)> = items
+            .into_iter()
+            .map(|item| (item.description, item.price_cents))
+            .collect();
+
+        assert!(observed.contains(&("S & B - Wasabi".to_string(), 559)), "{observed:?}");
+        assert!(
+            observed.contains(&("Nissin - Chicken Flavour".to_string(), 268)),
+            "{observed:?}"
+        );
+        assert!(
+            observed.contains(&("Shodoshima - Asian Style".to_string(), 499)),
+            "{observed:?}"
+        );
+        assert!(observed.contains(&("Dim Sum".to_string(), 298)), "{observed:?}");
+        assert_eq!(observed.len(), 4, "{observed:?}");
     }
 
     #[test]
