@@ -63,6 +63,34 @@ fn adaptive_middle_y_threshold(dets: &[Detection]) -> f64 {
     (median_height * 0.8).clamp(12.0, 30.0)
 }
 
+/// True for gift-card activation code rows: a "PC" prefix followed by nothing
+/// but a long digit run (e.g. Costco's "PC 339919953764897" printed between a
+/// gift-card label and its amount). The prefix is required: a bare digit run
+/// can be a UPC row that legitimately carries its multi-line item's price
+/// (Loblaw prints beer as "COORS LIGHT..." over "05716323055  13.99").
+fn is_code_stub_label(text: &str) -> bool {
+    let Some(rest) = text.trim().strip_prefix("PC") else {
+        return false;
+    };
+    let rest = rest.trim();
+    rest.len() >= 9 && rest.chars().all(|ch| ch.is_ascii_digit())
+}
+
+/// True for POS transaction-id header rows: the word "Transaction" followed by
+/// nothing but a digit run (Clover prints "Transaction 037972" directly above
+/// the first item). Like code stubs, the row never carries an amount, so it
+/// must not steal the first item's price when the right column leans up
+/// (Jin Lian unknown-date_jin_lian_food_39_99: the header overlapped
+/// FESHRIMP PASTE's $11.92 at ~0.32 and claimed it, dropping the item).
+fn is_transaction_id_label(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.len() < 11 || !trimmed[..11].eq_ignore_ascii_case("TRANSACTION") {
+        return false;
+    }
+    let rest = trimmed[11..].trim_start_matches([' ', '#', ':']).trim();
+    rest.len() >= 4 && rest.chars().all(|ch| ch.is_ascii_digit())
+}
+
 fn line_y_span(dets: &[Detection], line: &[usize]) -> (f64, f64) {
     let mut min_y = f64::INFINITY;
     let mut max_y = f64::NEG_INFINITY;
@@ -159,7 +187,17 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
     let mut lines: Vec<Vec<usize>> = Vec::new();
 
     // Each LEFT item claims the first unassigned RIGHT price that overlaps it.
+    // This sequential first-fit keeps the two columns monotonically aligned,
+    // which is the strongest signal on receipts (overlap-quality ranking was
+    // tried and mis-pairs receipts whose amounts lean a half-row down). The
+    // one exception: bare gift-card activation code stubs never carry their
+    // own amount, so they must not steal the next row's price (Costco prints
+    // "PC <code>" between "LCBO CARD" and its 400.00, overlapping both).
     for &left_index in &left {
+        if is_code_stub_label(&dets[left_index].text) || is_transaction_id_label(&dets[left_index].text) {
+            lines.push(vec![left_index]);
+            continue;
+        }
         let mut matched: Option<usize> = None;
         for (slot, &right_index) in right.iter().enumerate() {
             if assigned_prices[slot] {
@@ -271,6 +309,83 @@ mod tests {
         // top row first, item before price
         assert_eq!(lines[0], vec![0, 1]);
         assert_eq!(lines[1], vec![2, 3]);
+    }
+
+    fn det_span(text: &str, min_x: f64, y_min: f64, y_max: f64) -> Detection {
+        Detection {
+            confidence: 0.99,
+            text: text.to_string(),
+            center_y: (y_min + y_max) / 2.0,
+            y_min,
+            y_max,
+            min_x,
+            bbox: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn code_stub_rows_do_not_claim_next_rows_amount() {
+        // Costco 2026-07-02_costco_578_44 summary block (de-padded pixel
+        // geometry, image width 502): the "PC <code>" gift-card activation
+        // stubs interleave the LCBO/SUBTOTAL/TAX/TOTAL rows and overlap the
+        // next row's amount at ~0.4. When stubs may claim prices, each one
+        // stole the amount of the row below it and every summary line
+        // shifted by one.
+        let dets = vec![
+            det_span("399 DOORDASH2X50", 131.0, 844.0, 890.0),
+            det_span("79.99", 380.0, 837.0, 882.0),
+            det_span("PC 339919953764897", 25.0, 865.0, 915.0),
+            det_span("400.00", 361.0, 897.0, 938.0),
+            det_span("810 LCBO CARD", 130.0, 902.0, 945.0),
+            det_span("PC 381019522753105", 22.0, 921.0, 974.0),
+            det_span("573.31", 366.0, 952.0, 996.0),
+            det_span("SUBTOTAL", 117.0, 958.0, 1000.0),
+            det_span("5.13", 389.0, 982.0, 1024.0),
+            det_span("TAX", 121.0, 992.0, 1024.0),
+            det_span("578.44", 363.0, 1011.0, 1053.0),
+            det_span("***TOTAL", 60.0, 1013.0, 1054.0),
+        ];
+        let lines = group_detections_into_lines(&dets, 502.0);
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|&i| dets[i].text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect();
+        assert!(rendered.contains(&"399 DOORDASH2X50 79.99".to_string()), "{rendered:?}");
+        assert!(rendered.contains(&"810 LCBO CARD 400.00".to_string()), "{rendered:?}");
+        assert!(rendered.contains(&"SUBTOTAL 573.31".to_string()), "{rendered:?}");
+        assert!(rendered.contains(&"TAX 5.13".to_string()), "{rendered:?}");
+        assert!(rendered.contains(&"***TOTAL 578.44".to_string()), "{rendered:?}");
+    }
+
+    #[test]
+    fn transaction_id_header_does_not_claim_first_items_price() {
+        // Jin Lian (Clover POS) unknown-date_jin_lian_food_39_99: the right
+        // column leans up, so the first item's $11.92 overlaps the
+        // "Transaction 037972" header row above it (~0.32) before it overlaps
+        // its own item row (~0.85). First-fit let the header claim the price
+        // and FESHRIMP PASTE was dropped. Real pixel geometry, width 1600.
+        let dets = vec![
+            det_span("Transaction 037972", 53.0, 720.0, 808.0),
+            det_span("$11.92", 1291.0, 783.0, 862.0),
+            det_span("FESHRIMP PASTE150g", 174.0, 795.0, 886.0),
+        ];
+        let lines = group_detections_into_lines(&dets, 1600.0);
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|&i| dets[i].text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect();
+        assert!(rendered.contains(&"Transaction 037972".to_string()), "{rendered:?}");
+        assert!(rendered.contains(&"FESHRIMP PASTE150g $11.92".to_string()), "{rendered:?}");
     }
 
     #[test]

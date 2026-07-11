@@ -44,12 +44,13 @@ fn re_month_name_date() -> &'static Regex {
     })
 }
 
-// Day-first month-name dates, e.g. "22-May-2026" or "22 May 2026".
+// Day-first month-name dates, e.g. "22-May-2026" or "22 May 2026". The month
+// may carry an abbreviation period ("02-Apr.-2026", Clover's format).
 fn re_dmy_month_name_date() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)\b(\d{1,2})[-\s]+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*[-\s]+(\d{4})\b",
+            r"(?i)\b(\d{1,2})[-\s]+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\.?[-\s]+(\d{4})\b",
         )
         .unwrap()
     })
@@ -180,7 +181,14 @@ fn reconcile_total_with_charge(lines: &[String], candidate: i64) -> i64 {
     let mut payment_amounts: Vec<i64> = Vec::new();
     for (idx, line) in lines.iter().enumerate() {
         let upper = line.to_ascii_uppercase();
-        let is_payment = upper.contains("AMOUNT:") || matches!(classify_tender_line(&upper), Some("card"));
+        // "CREDIT TN" is the Loblaws-family card slip's echo of the charged
+        // amount, corroborating the "Account: VISA …" line above it. It is
+        // recognized here only — adding it to `classify_tender_line` would
+        // make `extract_tenders` double-count the charge against the card
+        // tender it echoes.
+        let is_payment = upper.contains("AMOUNT:")
+            || upper.contains("CREDIT TN")
+            || matches!(classify_tender_line(&upper), Some("card"));
         if is_payment {
             if let Some(cents) = tender_amount_for_line(lines, idx) {
                 if cents > 0 {
@@ -189,10 +197,23 @@ fn reconcile_total_with_charge(lines: &[String], candidate: i64) -> i64 {
             }
         }
     }
+    // A zero-change line means the card tender IS the grand total, so a single
+    // payment line suffices as corroboration (a mis-grouped TOTAL row can pick
+    // up the tax amount, leaving the true total only on the tender line). With
+    // change due, cash tendered can legitimately exceed the total, so the
+    // two-line corroboration requirement stays.
+    let zero_change = lines.iter().any(|line| {
+        let upper = line.to_ascii_uppercase();
+        upper.contains("CHANGE") && normalize_decimal_spacing(line).trim_end().ends_with("0.00")
+    });
+    let min_corroboration = if zero_change { 1 } else { 2 };
     let mut corroborated: Vec<i64> = payment_amounts
         .iter()
         .copied()
-        .filter(|&a| a > candidate && payment_amounts.iter().filter(|&&b| b == a).count() >= 2)
+        .filter(|&a| {
+            a > candidate
+                && payment_amounts.iter().filter(|&&b| b == a).count() >= min_corroboration
+        })
         .collect();
     corroborated.sort_unstable();
     corroborated.dedup();
@@ -279,11 +300,20 @@ fn extract_total_raw(lines: &[String]) -> i64 {
             }
             if idx > 0 {
                 let prev_line_upper = lines[idx - 1].to_ascii_uppercase();
-                if !prev_line_upper.contains("TAX")
-                    && !prev_line_upper.contains("HST")
-                    && !prev_line_upper.contains("GST")
-                {
+                let prev_is_tax_row = prev_line_upper.contains("TAX")
+                    || prev_line_upper.contains("HST")
+                    || prev_line_upper.contains("GST");
+                if !prev_is_tax_row {
                     if let Some(amount) = extract_price_from_line(&lines[idx - 1]) {
+                        return amount;
+                    }
+                } else if let Some(amount) = extract_price_from_line(&lines[idx - 1]) {
+                    // Up-leaned line grouping shifts the whole summary block
+                    // one row: SUBTOTAL shows the tax, TAX shows the total,
+                    // TOTAL is bare. A genuine tax can never exceed the
+                    // subtotal amount, so a larger value on the TAX row is
+                    // the drifted grand total.
+                    if extract_subtotal(lines).is_some_and(|subtotal| amount > subtotal) {
                         return amount;
                     }
                 }
@@ -541,6 +571,14 @@ mod tests {
     }
 
     #[test]
+    fn date_parses_dotted_month_abbreviation() {
+        // Clover also prints an abbreviation period: "02-Apr.-2026 2:27:39p.m."
+        let lines = vec!["02-Apr.-2026 2:27:39p.m.".to_string()];
+        let parsed = extract_date(&lines, "", 2026).expect("date should parse");
+        assert_eq!((parsed.year, parsed.month, parsed.day), (2026, 4, 2));
+    }
+
+    #[test]
     fn subtotal_tolerates_costco_subtctal_ocr_typo() {
         // Costco "SUBTOTAL" OCR'd as "SUBTCTAL" (inner O → C).
         let lines = vec![
@@ -550,6 +588,51 @@ mod tests {
         ];
 
         assert_eq!(extract_subtotal(&lines), Some(15_908));
+    }
+
+    #[test]
+    fn bare_total_takes_tax_row_amount_when_it_exceeds_the_subtotal() {
+        // Costco 2026-07-08_costco_112_95: up-leaned line grouping left the
+        // TOTAL row bare and put the grand total on the TAX row (and the tax
+        // on SUBTOTAL). A real tax can never exceed the subtotal amount.
+        let lines = vec![
+            "TOTAL NUMBER OF ITEMS SOLD = 9 104.77".to_string(),
+            "SUBTOTAL 8.18".to_string(),
+            "TAX 112.95".to_string(),
+            "**** TOTAL".to_string(),
+            "XXXXXXXXXXXX7735".to_string(),
+        ];
+
+        assert_eq!(extract_total(&lines), 11_295);
+    }
+
+    #[test]
+    fn bare_total_still_ignores_a_plausible_tax_row_above() {
+        // The TAX guard must keep holding when the tax amount is smaller than
+        // the subtotal (the normal case for a bare TOTAL line).
+        let lines = vec![
+            "SUBTOTAL 104.77".to_string(),
+            "TAX 8.18".to_string(),
+            "**** TOTAL".to_string(),
+        ];
+
+        assert_eq!(extract_total(&lines), 0);
+    }
+
+    #[test]
+    fn total_prefers_single_tender_when_change_due_is_zero() {
+        // Pharmasave 2026-07-07_pharmasave_12_19: line grouping handed the
+        // TOTAL row the HST amount. With CHANGE DUE at $0.00 the lone VISA
+        // tender is the grand total by definition.
+        let lines = vec![
+            "SUBTOTAL".to_string(),
+            "HST $10.79".to_string(),
+            "TOTAL $1.40".to_string(),
+            "VISA $12.19".to_string(),
+            "CHANGE DUE $12.19 $0.00".to_string(),
+        ];
+
+        assert_eq!(extract_total(&lines), 1_219);
     }
 
     #[test]
@@ -577,6 +660,25 @@ mod tests {
             "MasterCard 245.87".to_string(),
         ];
         assert_eq!(extract_total(&lines), 24_587);
+    }
+
+    #[test]
+    fn total_reconciles_from_credit_tn_echo_when_total_digits_garbled() {
+        // No Frills 2026-04-23_nofrills_11_15: bleed-through from the reverse
+        // side garbles the digits on the SUBTOTAL/TOTAL rows ("1 1.1 5" /
+        // "1 11 5"), so the label scan yields 0. The clean amount survives on
+        // the card slip's "Account: VISA" line and its "CREDIT TN" echo —
+        // two corroborating payment lines.
+        let lines = vec![
+            "SUBTOTALbemutord yom eaib1 1.1 5".to_string(),
+            "TOTAL dtiw eeorotuqto yobA nir1 11 5".to_string(),
+            "yob Al oto ylno egnorox3.gnigoxbq bnd apot".to_string(),
+            "Trans.Type: PURCHASE qqo anoitqeoxe amo2".to_string(),
+            "Account: VISA CAD$ 11. 15".to_string(),
+            "Card Type: CREDIT".to_string(),
+            "CREDIT TN 11.15".to_string(),
+        ];
+        assert_eq!(extract_total(&lines), 1_115);
     }
 
     #[test]
@@ -743,6 +845,11 @@ fn is_leap_year(year: i32) -> bool {
 }
 
 fn safe_date(year: i32, month: i32, day: i32) -> Option<SimpleDate> {
+    // A digit run that decodes to an implausible year is an SKU or barcode,
+    // not a date (LCBO's Baby Duck SKU "00001123" parsed as 0000-11-23).
+    if !(1990..=2100).contains(&year) {
+        return None;
+    }
     if !(1..=12).contains(&month) || day < 1 {
         return None;
     }
