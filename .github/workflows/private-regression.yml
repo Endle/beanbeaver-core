@@ -16,7 +16,9 @@ jobs:
   private-cached-e2e:
     name: Private cached E2E (receipt-core)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The debug-build corpus run takes ~11s/case on CI runners (108 cases ≈ 19
+    # min as of 2026-07); leave headroom for the corpus to keep growing.
+    timeout-minutes: 45
     env:
       # Fine-grained PAT or GitHub App token with read-only access to the
       # private test repository contents. Add it in the repo's Actions secrets.

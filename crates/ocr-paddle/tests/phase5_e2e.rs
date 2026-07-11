@@ -134,7 +134,7 @@ fn category_matches(expected: &str, actual: &str, mapping: &HashMap<String, Stri
 #[test]
 #[ignore = "needs converted models + fixtures"]
 fn phase5_on_device_vs_expected() {
-    let fixtures = repo_path("tests/receipts_e2e");
+    let fixtures = repo_path("crates/receipt-core/tests/receipts_e2e");
     let models = repo_path("models");
     let account_mapping: HashMap<String, String> =
         default_parser_rule_layers().account_mapping.into_iter().collect();
@@ -155,6 +155,7 @@ fn phase5_on_device_vs_expected() {
 
     let mut ran = 0;
     let mut known_gaps = 0;
+    let mut parser_gaps = 0;
     let mut failures: Vec<String> = Vec::new();
 
     for name in &names {
@@ -214,6 +215,11 @@ fn phase5_on_device_vs_expected() {
                 let category_optional = ci.get("category_optional").and_then(Value::as_bool).unwrap_or(false);
                 let category = if category_optional { None } else { ci.get("category").and_then(Value::as_str) };
                 let is_known_gap = KNOWN_ON_DEVICE_GAPS.contains(&(name.as_str(), desc));
+                // `"known_failure": true` marks a *parser* gap the cached harness
+                // already tolerates (it diverges on the frozen snapshot too), as
+                // opposed to KNOWN_ON_DEVICE_GAPS, which are live-OCR-only parity
+                // gaps. Honor it here so this gate stays about on-device parity.
+                let is_parser_gap = ci.get("known_failure").and_then(Value::as_bool).unwrap_or(false);
 
                 let matched: Vec<_> = d.items.iter().filter(|it| item_desc_matches(&it.description, desc)).collect();
                 let item_ok = matched.iter().any(|it| price_matches(price, &it.price))
@@ -225,6 +231,11 @@ fn phase5_on_device_vs_expected() {
                     });
 
                 if item_ok {
+                    continue;
+                }
+                if is_parser_gap {
+                    parser_gaps += 1;
+                    eprintln!("  ~ {name}: known parser gap '{desc}'");
                     continue;
                 }
                 if is_known_gap {
@@ -250,7 +261,10 @@ fn phase5_on_device_vs_expected() {
         }
     }
 
-    eprintln!("\nPhase 5: {ran} image fixtures, {known_gaps} known on-device gap(s), {} hard divergence(s)", failures.len());
+    eprintln!(
+        "\nPhase 5: {ran} image fixtures, {parser_gaps} known parser gap(s), {known_gaps} known on-device gap(s), {} hard divergence(s)",
+        failures.len()
+    );
     for f in &failures {
         eprintln!("  ✗ {f}");
     }
