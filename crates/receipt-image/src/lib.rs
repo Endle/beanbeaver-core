@@ -49,8 +49,7 @@ pub fn preprocess_image_bytes(
     quality: u8,
 ) -> Result<Vec<u8>, PreprocessError> {
     let rgb = decode_oriented_rgb(bytes)?;
-    let resized = resize_cap_long_side(&rgb, max_dim);
-    let padded = pad_white(&resized, padding);
+    let padded = resize_and_pad(&rgb, max_dim, padding);
     encode_jpeg(&padded, quality)
 }
 
