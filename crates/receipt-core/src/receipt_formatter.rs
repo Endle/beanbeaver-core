@@ -539,11 +539,7 @@ pub fn beanbeaver_document_relpath(
     ))
 }
 
-pub fn generate_filename(
-    date_iso: &str,
-    date_is_placeholder: bool,
-    merchant: &str,
-) -> String {
+pub fn generate_filename(date_iso: &str, date_is_placeholder: bool, merchant: &str) -> String {
     let date_str = if date_is_placeholder {
         "unknown-date"
     } else {
@@ -643,7 +639,8 @@ pub fn format_enriched_transaction(
                 comment,
             ));
         }
-    } else if let (Some(cc_account), Some(cc_amount_cents)) = (cc_account.clone(), cc_amount_cents) {
+    } else if let (Some(cc_account), Some(cc_amount_cents)) = (cc_account.clone(), cc_amount_cents)
+    {
         postings.push((
             cc_account,
             format!("{} CAD", cents_to_fixed(cc_amount_cents)),
@@ -765,7 +762,12 @@ mod tests {
         let mut r = base();
         r.tax = Some("1.00".to_string());
         r.raw_text = "COSTCO\n**** 1234".to_string();
-        r.items = vec![item("COKE ZERO", "17.19", 1, "Expenses:Food:Grocery:Drink:CocaCola")];
+        r.items = vec![item(
+            "COKE ZERO",
+            "17.19",
+            1,
+            "Expenses:Food:Grocery:Drink:CocaCola",
+        )];
 
         let out = format_parsed_receipt(&r, CC, None);
 
@@ -776,8 +778,14 @@ mod tests {
         assert!(out.contains("; @items: 1"));
         assert!(out.contains("; @tax: 1.00"));
         // With no image hash, no BeanBeaver identity/document metadata is emitted.
-        assert!(!out.contains("beanbeaver-id"), "no sha passed => no id line");
-        assert!(!out.contains("document:"), "no sha passed => no document line");
+        assert!(
+            !out.contains("beanbeaver-id"),
+            "no sha passed => no id line"
+        );
+        assert!(
+            !out.contains("document:"),
+            "no sha passed => no document line"
+        );
         assert!(out.contains(r#"2026-02-18 * "COSTCO" "Receipt scan""#));
 
         // payment posting: fallback CC, negative total, card ****last4 comment
@@ -807,7 +815,10 @@ mod tests {
     #[test]
     fn parsed_receipt_includes_beanbeaver_metadata_when_sha_present() {
         let out = format_parsed_receipt(&base(), CC, Some("a1b2c3d4e5f6a7b8"));
-        assert!(out.contains(r#"  beanbeaver-id: "bb-20260218-a1b2c3d4""#), "{out}");
+        assert!(
+            out.contains(r#"  beanbeaver-id: "bb-20260218-a1b2c3d4""#),
+            "{out}"
+        );
         assert!(out.contains(r#"  beanbeaver-image-sha256: "a1b2c3d4e5f6a7b8""#));
         assert!(out.contains(r#"  document: "beanbeaver/2026-02-18-costco-a1b2c3d4.jpg""#));
         // The id and the document filename share the same 8-char content token,
@@ -821,8 +832,8 @@ mod tests {
     fn beanbeaver_metadata_handles_placeholder_date() {
         let id = beanbeaver_id("2026-02-18", true, Some("a1b2c3d4e5")).unwrap();
         assert_eq!(id, "bb-unknowndate-a1b2c3d4");
-        let doc =
-            beanbeaver_document_relpath("2026-02-18", true, "COSTCO #42", Some("a1b2c3d4e5")).unwrap();
+        let doc = beanbeaver_document_relpath("2026-02-18", true, "COSTCO #42", Some("a1b2c3d4e5"))
+            .unwrap();
         assert_eq!(doc, "beanbeaver/unknown-date-costco-42-a1b2c3d4.jpg");
     }
 
@@ -860,7 +871,11 @@ mod tests {
         let mut r = base();
         r.raw_text = "**** 9999".to_string();
         r.tenders = vec![
-            FormatterTenderInput { amount: "15.00".to_string(), account: None, kind: "card".to_string() },
+            FormatterTenderInput {
+                amount: "15.00".to_string(),
+                account: None,
+                kind: "card".to_string(),
+            },
             FormatterTenderInput {
                 amount: "5.00".to_string(),
                 account: Some("Assets:GiftCards:Costco".to_string()),
@@ -895,7 +910,12 @@ mod tests {
     #[test]
     fn draft_beancount_uses_review_header_and_fixme_narration() {
         let mut r = base();
-        r.items = vec![item("COKE ZERO", "17.19", 1, "Expenses:Food:Grocery:Drink:CocaCola")];
+        r.items = vec![item(
+            "COKE ZERO",
+            "17.19",
+            1,
+            "Expenses:Food:Grocery:Drink:CocaCola",
+        )];
         let out = format_draft_beancount(&r, CC);
         assert!(out.contains("; === DRAFT - REVIEW NEEDED ==="));
         assert!(out.contains("; Source: costco.jpg"));
@@ -906,9 +926,18 @@ mod tests {
     /// all-punctuation merchants.
     #[test]
     fn generate_filename_slugifies_and_handles_edge_cases() {
-        assert_eq!(generate_filename("2026-02-18", false, "No Frills!"), "2026-02-18-no-frills.beancount");
-        assert_eq!(generate_filename("2026-02-18", true, "COSTCO"), "unknown-date-costco.beancount");
-        assert_eq!(generate_filename("2026-01-01", false, "!!!"), "2026-01-01-unknown.beancount");
+        assert_eq!(
+            generate_filename("2026-02-18", false, "No Frills!"),
+            "2026-02-18-no-frills.beancount"
+        );
+        assert_eq!(
+            generate_filename("2026-02-18", true, "COSTCO"),
+            "unknown-date-costco.beancount"
+        );
+        assert_eq!(
+            generate_filename("2026-01-01", false, "!!!"),
+            "2026-01-01-unknown.beancount"
+        );
     }
 
     /// `format_enriched_transaction`: reuses the matched CC posting/expense,
@@ -917,7 +946,12 @@ mod tests {
     fn enriched_transaction_reuses_match_and_itemizes() {
         let mut r = base();
         r.tax = Some("1.00".to_string());
-        r.items = vec![item("COKE ZERO", "17.19", 1, "Expenses:Food:Grocery:Drink:CocaCola")];
+        r.items = vec![item(
+            "COKE ZERO",
+            "17.19",
+            1,
+            "Expenses:Food:Grocery:Drink:CocaCola",
+        )];
 
         let match_input = EnrichedMatchInput {
             transaction_date_iso: "2026-02-20".to_string(),

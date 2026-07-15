@@ -83,11 +83,8 @@ pub fn transform(
     let pad = padding as f64;
     let mut detection_data: Vec<Detection> = Vec::with_capacity(detections.len());
     for det in detections {
-        let adjusted: Vec<(f64, f64)> = det
-            .points
-            .iter()
-            .map(|(x, y)| (x - pad, y - pad))
-            .collect();
+        let adjusted: Vec<(f64, f64)> =
+            det.points.iter().map(|(x, y)| (x - pad, y - pad)).collect();
         let y_coords: Vec<f64> = adjusted.iter().map(|(_, y)| *y).collect();
         let center_y = y_coords.iter().sum::<f64>() / y_coords.len() as f64;
         let y_min = y_coords.iter().cloned().fold(f64::INFINITY, f64::min);
@@ -123,10 +120,18 @@ pub fn transform(
             let xs: Vec<f64> = det.bbox.iter().map(|(x, _)| *x).collect();
             let ys: Vec<f64> = det.bbox.iter().map(|(_, y)| *y).collect();
             let bbox = BboxInput {
-                left: clamp_unit_interval(xs.iter().cloned().fold(f64::INFINITY, f64::min) / image_width),
-                top: clamp_unit_interval(ys.iter().cloned().fold(f64::INFINITY, f64::min) / image_height),
-                right: clamp_unit_interval(xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max) / image_width),
-                bottom: clamp_unit_interval(ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max) / image_height),
+                left: clamp_unit_interval(
+                    xs.iter().cloned().fold(f64::INFINITY, f64::min) / image_width,
+                ),
+                top: clamp_unit_interval(
+                    ys.iter().cloned().fold(f64::INFINITY, f64::min) / image_height,
+                ),
+                right: clamp_unit_interval(
+                    xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max) / image_width,
+                ),
+                bottom: clamp_unit_interval(
+                    ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max) / image_height,
+                ),
             };
             texts.push(det.text.clone());
             helper_words.push(MerchantWordInput {
@@ -153,8 +158,12 @@ pub fn transform(
 
     TransformedOcr {
         full_text: full_text_lines.join("\n"),
-        helper_pages: vec![MerchantPageInput { lines: helper_lines }],
-        spatial_pages: vec![PageInput { lines: spatial_lines }],
+        helper_pages: vec![MerchantPageInput {
+            lines: helper_lines,
+        }],
+        spatial_pages: vec![PageInput {
+            lines: spatial_lines,
+        }],
     }
 }
 
@@ -179,7 +188,14 @@ mod tests {
     #[test]
     fn filters_overlapping_bob_markers_keeps_real_item_lines() {
         let dets = vec![
-            rect(20.0, 200.0, 820.0, 240.0, "*xxxxxxxxxxBottom of Baske xxxxxxxxxxx", 0.95),
+            rect(
+                20.0,
+                200.0,
+                820.0,
+                240.0,
+                "*xxxxxxxxxxBottom of Baske xxxxxxxxxxx",
+                0.95,
+            ),
             rect(120.0, 210.0, 500.0, 250.0, "232952 COKE ZERO", 0.99),
             rect(760.0, 210.0, 920.0, 248.0, "17.19 H", 0.99),
             rect(40.0, 300.0, 500.0, 340.0, "*x*********BOB Count 3", 0.95),
@@ -191,10 +207,22 @@ mod tests {
         let out = transform(dets, 1000, 1200, 0);
         let full_text = &out.full_text;
 
-        assert!(!full_text.contains("Bottom of Baske"), "bob marker leaked: {full_text}");
-        assert!(!full_text.contains("BOB Count 3"), "bob marker leaked: {full_text}");
-        assert!(full_text.contains("232952 COKE ZERO 17.19 H"), "item row not grouped: {full_text}");
-        assert!(full_text.contains("305882 *KS IBU 400M 16.99"), "item row not grouped: {full_text}");
+        assert!(
+            !full_text.contains("Bottom of Baske"),
+            "bob marker leaked: {full_text}"
+        );
+        assert!(
+            !full_text.contains("BOB Count 3"),
+            "bob marker leaked: {full_text}"
+        );
+        assert!(
+            full_text.contains("232952 COKE ZERO 17.19 H"),
+            "item row not grouped: {full_text}"
+        );
+        assert!(
+            full_text.contains("305882 *KS IBU 400M 16.99"),
+            "item row not grouped: {full_text}"
+        );
 
         // One page each; spatial word bboxes are normalized into the unit interval.
         assert_eq!(out.helper_pages.len(), 1);
@@ -224,7 +252,12 @@ mod tests {
     fn padding_is_removed_before_normalization() {
         // padded 200x200 with padding 50 => original 100x100.
         // Rect (50,50)-(150,90) de-pads to (0,0)-(100,40) => left 0, right 1, bottom .4.
-        let out = transform(vec![rect(50.0, 50.0, 150.0, 90.0, "HELLO", 0.99)], 200, 200, 50);
+        let out = transform(
+            vec![rect(50.0, 50.0, 150.0, 90.0, "HELLO", 0.99)],
+            200,
+            200,
+            50,
+        );
         assert_eq!(out.full_text, "HELLO");
         let bbox = &out.spatial_pages[0].lines[0].words[0].bbox;
         assert!((bbox.left - 0.0).abs() < 1e-9, "left={}", bbox.left);

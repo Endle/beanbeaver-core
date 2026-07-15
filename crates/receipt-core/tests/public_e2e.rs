@@ -19,17 +19,34 @@ use e2e_harness::run_cached_corpus;
 
 #[test]
 fn public_cached_e2e() {
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("receipts_e2e");
-    assert!(fixtures.is_dir(), "vendored corpus missing at {}", fixtures.display());
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("receipts_e2e");
+    assert!(
+        fixtures.is_dir(),
+        "vendored corpus missing at {}",
+        fixtures.display()
+    );
 
     // Public rules only — no overrides. The vendored corpus MUST pass without any
     // private_rules.toml, which is exactly what keeps core on public rules alone.
     let result = run_cached_corpus(&fixtures, &[]);
 
-    eprintln!("public_cached_e2e: ran {} cached case(s), {} divergence(s)", result.ran, result.failures.len());
+    eprintln!(
+        "public_cached_e2e: ran {} cached case(s), {} divergence(s)",
+        result.ran,
+        result.failures.len()
+    );
     for f in &result.failures {
         eprintln!("  ✗ {f}");
     }
-    assert!(result.failures.is_empty(), "{} public cached check(s) diverged from expected", result.failures.len());
-    assert!(result.ran > 0, "no cached (.ocr.json) fixtures were executed");
+    assert!(
+        result.failures.is_empty(),
+        "{} public cached check(s) diverged from expected",
+        result.failures.len()
+    );
+    assert!(
+        result.ran > 0,
+        "no cached (.ocr.json) fixtures were executed"
+    );
 }

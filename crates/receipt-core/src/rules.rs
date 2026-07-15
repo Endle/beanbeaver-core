@@ -15,7 +15,8 @@ use crate::receipt_parser::ParserRuleLayers;
 
 const DEFAULT_ITEM_CLASSIFIER_TOML: &str =
     include_str!("../../../rules/default_item_classifier.toml");
-const DEFAULT_MERCHANT_RULES_TOML: &str = include_str!("../../../rules/default_merchant_rules.toml");
+const DEFAULT_MERCHANT_RULES_TOML: &str =
+    include_str!("../../../rules/default_merchant_rules.toml");
 const DEFAULT_MERCHANT_FAMILIES_TOML: &str =
     include_str!("../../../rules/default_merchant_families.toml");
 
@@ -26,21 +27,39 @@ pub fn default_category_accounts() -> HashMap<String, String> {
         ("grocery_dairy", "Expenses:Food:Grocery:Dairy"),
         ("grocery_meat", "Expenses:Food:Grocery:Meat"),
         ("grocery_seafood_fish", "Expenses:Food:Grocery:Seafood:Fish"),
-        ("grocery_seafood_shrimp", "Expenses:Food:Grocery:Seafood:Shrimp"),
+        (
+            "grocery_seafood_shrimp",
+            "Expenses:Food:Grocery:Seafood:Shrimp",
+        ),
         ("grocery_seafood", "Expenses:Food:Grocery:Seafood"),
         ("grocery_fruit", "Expenses:Food:Grocery:Fruit"),
         ("grocery_vegetable", "Expenses:Food:Grocery:Vegetable"),
-        ("grocery_vegetable_canned", "Expenses:Food:Grocery:Vegetable:Canned"),
-        ("grocery_frozen_dumpling", "Expenses:Food:Grocery:Frozen:Dumpling"),
-        ("grocery_frozen_icecream", "Expenses:Food:Grocery:Frozen:IceCream"),
+        (
+            "grocery_vegetable_canned",
+            "Expenses:Food:Grocery:Vegetable:Canned",
+        ),
+        (
+            "grocery_frozen_dumpling",
+            "Expenses:Food:Grocery:Frozen:Dumpling",
+        ),
+        (
+            "grocery_frozen_icecream",
+            "Expenses:Food:Grocery:Frozen:IceCream",
+        ),
         ("grocery_frozen", "Expenses:Food:Grocery:Frozen"),
-        ("grocery_prepared_meal", "Expenses:Food:Grocery:PreparedMeal"),
+        (
+            "grocery_prepared_meal",
+            "Expenses:Food:Grocery:PreparedMeal",
+        ),
         ("grocery_bakery", "Expenses:Food:Grocery:Bakery"),
         ("grocery_staple", "Expenses:Food:Grocery:Staple"),
         ("grocery_seasoning", "Expenses:Food:Grocery:Seasoning"),
         ("grocery_snacks", "Expenses:Food:Grocery:Snacks"),
         ("grocery_snacks_mint", "Expenses:Food:Grocery:Snacks:Mint"),
-        ("grocery_drink_cocacola", "Expenses:Food:Grocery:Drink:CocaCola"),
+        (
+            "grocery_drink_cocacola",
+            "Expenses:Food:Grocery:Drink:CocaCola",
+        ),
         ("grocery_drink_juice", "Expenses:Food:Grocery:Drink:Juice"),
         ("grocery_drink_coffee", "Expenses:Food:Grocery:Drink:Coffee"),
         ("grocery_drink", "Expenses:Food:Grocery:Drink"),
@@ -186,7 +205,9 @@ pub fn default_parser_rule_layers() -> ParserRuleLayers {
 /// `private_rules.toml` rather than the public defaults. Merchant rules are
 /// unaffected (still the public defaults). Panics if an override TOML is invalid.
 pub fn parser_rule_layers_with_overrides(override_classifier_tomls: &[&str]) -> ParserRuleLayers {
-    let mut configs = vec![to_build_config(parse_classifier(DEFAULT_ITEM_CLASSIFIER_TOML))];
+    let mut configs = vec![to_build_config(parse_classifier(
+        DEFAULT_ITEM_CLASSIFIER_TOML,
+    ))];
     for text in override_classifier_tomls {
         let parsed: ClassifierToml =
             toml::from_str(text).expect("override classifier TOML must be valid");
@@ -251,8 +272,8 @@ pub fn default_merchant_families() -> Vec<MerchantFamily> {
 /// file order. Mirrors `runtime/merchant_rules.py::load_known_merchant_keywords`
 /// for the default-only (no project override) case.
 pub fn default_known_merchants() -> Vec<String> {
-    let parsed: MerchantRulesToml =
-        toml::from_str(DEFAULT_MERCHANT_RULES_TOML).expect("bundled default_merchant_rules.toml is valid");
+    let parsed: MerchantRulesToml = toml::from_str(DEFAULT_MERCHANT_RULES_TOML)
+        .expect("bundled default_merchant_rules.toml is valid");
     parsed
         .rules
         .into_iter()
@@ -269,7 +290,11 @@ mod tests {
         let layers = default_parser_rule_layers();
         // Account mapping must include the ported defaults.
         assert_eq!(
-            layers.account_mapping.iter().find(|(k, _)| k == "grocery_dairy").map(|(_, v)| v.as_str()),
+            layers
+                .account_mapping
+                .iter()
+                .find(|(k, _)| k == "grocery_dairy")
+                .map(|(_, v)| v.as_str()),
             Some("Expenses:Food:Grocery:Dairy")
         );
         // Rules parsed from the bundled classifier TOML are non-empty.

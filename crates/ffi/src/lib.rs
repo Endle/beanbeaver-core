@@ -110,7 +110,12 @@ impl From<receipt_core::merchant_match::MerchantMatch> for MerchantMatch {
             CoreStatus::Suggested => MerchantMatchStatus::Suggested,
             CoreStatus::Unknown => MerchantMatchStatus::Unknown,
         };
-        Self { raw: m.raw, canonical: m.canonical, status, score: m.score }
+        Self {
+            raw: m.raw,
+            canonical: m.canonical,
+            status,
+            score: m.score,
+        }
     }
 }
 
@@ -183,12 +188,8 @@ impl OcrSession {
     pub fn new(model_dir: String, use_orientation_cls: bool) -> Result<Arc<Self>, ScanError> {
         let dir = std::path::Path::new(&model_dir);
         let cls_model = use_orientation_cls.then(|| dir.join(CLS_MODEL));
-        let engine = OcrEngine::from_paths(
-            dir.join(DET_MODEL),
-            dir.join(REC_MODEL),
-            cls_model,
-        )
-        .map_err(|e| ScanError::ModelLoad { msg: e.to_string() })?;
+        let engine = OcrEngine::from_paths(dir.join(DET_MODEL), dir.join(REC_MODEL), cls_model)
+            .map_err(|e| ScanError::ModelLoad { msg: e.to_string() })?;
         Ok(Arc::new(Self {
             engine: Mutex::new(engine),
         }))
@@ -210,10 +211,9 @@ impl OcrSession {
         // from this, and the app saves the same bytes, so the link resolves.
         let image_sha256 = sha256_hex(&image_bytes);
 
-        let mut engine = self
-            .engine
-            .lock()
-            .map_err(|e| ScanError::Inference { msg: format!("engine lock poisoned: {e}") })?;
+        let mut engine = self.engine.lock().map_err(|e| ScanError::Inference {
+            msg: format!("engine lock poisoned: {e}"),
+        })?;
 
         let (processed, timings) = process_image_timed(
             &mut engine,
@@ -288,7 +288,11 @@ mod tests {
         let r = session
             .scan(
                 bytes,
-                DateYmd { year: 2026, month: 2, day: 18 },
+                DateYmd {
+                    year: 2026,
+                    month: 2,
+                    day: 18,
+                },
                 "Liabilities:CreditCard".to_string(),
             )
             .expect("scan");
@@ -309,6 +313,11 @@ mod tests {
         );
         assert!(t.total_ms > 0.0, "total_ms should be positive");
         let stages = t.prep_ms + t.detect_ms + t.classify_ms + t.recognize_ms + t.parse_ms;
-        assert!(t.total_ms + 1.0 >= stages, "total {} < sum of stages {}", t.total_ms, stages);
+        assert!(
+            t.total_ms + 1.0 >= stages,
+            "total {} < sum of stages {}",
+            t.total_ms,
+            stages
+        );
     }
 }

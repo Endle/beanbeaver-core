@@ -125,16 +125,12 @@ const SKIP_PRICED_LINES_IN_BACKWARD_DESC_SEARCH: bool = true;
 
 fn re_trailing_price() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(&format!(r"(\d+\.\d{{2}})(-?)\s*{TAX_FLAG_CLASS}\s*$")).unwrap()
-    })
+    RE.get_or_init(|| Regex::new(&format!(r"(\d+\.\d{{2}})(-?)\s*{TAX_FLAG_CLASS}\s*$")).unwrap())
 }
 
 fn re_trailing_total_presence() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(&format!(r"\s+\d+\.\d{{2}}\s*{TAX_FLAG_CLASS}\s*$")).unwrap()
-    })
+    RE.get_or_init(|| Regex::new(&format!(r"\s+\d+\.\d{{2}}\s*{TAX_FLAG_CLASS}\s*$")).unwrap())
 }
 
 // "<desc> <unit-price> <flags> <ext-price>" rows (e.g. Shoppers'
@@ -184,9 +180,7 @@ fn re_compact_promo_ghost() -> &'static Regex {
 
 fn re_standalone_price_line() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(&format!(r"^\$?\d+\.\d{{2}}\s*{TAX_FLAG_CLASS}\s*$")).unwrap()
-    })
+    RE.get_or_init(|| Regex::new(&format!(r"^\$?\d+\.\d{{2}}\s*{TAX_FLAG_CLASS}\s*$")).unwrap())
 }
 
 fn re_long_digits_line() -> &'static Regex {
@@ -246,9 +240,7 @@ fn re_malformed_ocr_price() -> &'static Regex {
 
 fn re_trailing_noisy_price() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(&format!(r"(\d+)\.(\d{{3}})\s*{TAX_FLAG_CLASS}\s*$")).unwrap()
-    })
+    RE.get_or_init(|| Regex::new(&format!(r"(\d+)\.(\d{{3}})\s*{TAX_FLAG_CLASS}\s*$")).unwrap())
 }
 
 // A two-digit fraction where one digit was OCR'd as a letter (I/l for 1).
@@ -532,14 +524,7 @@ fn is_section_header_text(text: &str) -> bool {
         if tokens.iter().any(|token| {
             matches!(
                 token.as_str(),
-                "MEAT"
-                    | "SEAFOOD"
-                    | "PRODUCE"
-                    | "DELI"
-                    | "GROCERY"
-                    | "BAKERY"
-                    | "FROZEN"
-                    | "FOOD"
+                "MEAT" | "SEAFOOD" | "PRODUCE" | "DELI" | "GROCERY" | "BAKERY" | "FROZEN" | "FOOD"
             )
         }) {
             return true;
@@ -713,7 +698,9 @@ fn count_price_drift_evidence(lines: &[String]) -> usize {
             // counter labels ("Meat 4.19") are items, not headers.
             if let Some((cents, _, price_start)) = extract_trailing_price_cents(line) {
                 let head = line[..price_start].trim();
-                if cents > 0 && !head.is_empty() && is_section_header_text(head)
+                if cents > 0
+                    && !head.is_empty()
+                    && is_section_header_text(head)
                     && !is_generic_counter_label(head)
                 {
                     return true;
@@ -814,8 +801,8 @@ fn looks_like_quantity_expression(text: &str) -> bool {
     // "2 $2.99" as the description — eating the real item name that sits on
     // the line above (Shepherds Purse 250g on fresh_140_18).
     static RE_QTY_UNIT_NO_AT: OnceLock<Regex> = OnceLock::new();
-    let re_qty_unit_no_at = RE_QTY_UNIT_NO_AT
-        .get_or_init(|| Regex::new(r"^\d+\s+\$\d+\.\d{2}\s*$").unwrap());
+    let re_qty_unit_no_at =
+        RE_QTY_UNIT_NO_AT.get_or_init(|| Regex::new(r"^\d+\s+\$\d+\.\d{2}\s*$").unwrap());
     if re_qty_unit_no_at.is_match(&normalized) {
         return true;
     }
@@ -834,8 +821,8 @@ fn looks_like_quantity_expression(text: &str) -> bool {
     // bridge plus the `/$` deal marker make the shape unambiguous.
     if upper.starts_with('(') && upper.contains("/$") {
         static RE_PRICE_BRIDGE: OnceLock<Regex> = OnceLock::new();
-        let re_price_bridge = RE_PRICE_BRIDGE
-            .get_or_init(|| Regex::new(r"\)\s*[0@]?\d+\.\d{2}\s*\(").unwrap());
+        let re_price_bridge =
+            RE_PRICE_BRIDGE.get_or_init(|| Regex::new(r"\)\s*[0@]?\d+\.\d{2}\s*\(").unwrap());
         if re_price_bridge.is_match(&upper) {
             return true;
         }
@@ -1363,9 +1350,9 @@ pub fn extract_text_items(
                             && (is_descriptive_candidate(next_trimmed)
                                 || is_generic_counter_label(next_trimmed))
                         {
-                            let desc = strip_sale_price_subtext(
-                                &strip_leading_receipt_codes(next_trimmed),
-                            );
+                            let desc = strip_sale_price_subtext(&strip_leading_receipt_codes(
+                                next_trimmed,
+                            ));
                             deferred.push(DeferredTextOutcome::Item(ParsedTextItem {
                                 category_source: desc.clone(),
                                 description: desc,
@@ -1652,9 +1639,7 @@ pub fn extract_text_items(
             // block below already filters via `!re_mangled_reg_marker`, but the
             // else branch would back-walk and emit a phantom item paired with
             // the previous line. Suppress the whole line instead.
-            if !desc_part.is_empty()
-                && re_mangled_reg_marker().is_match(desc_part.trim())
-            {
+            if !desc_part.is_empty() && re_mangled_reg_marker().is_match(desc_part.trim()) {
                 // Under drift with the description above already priced, the
                 // REG amount lives inside the marker itself and the trailing
                 // price is the NEXT item's ("(-EG4.99  2.99" above "LKS Dried
@@ -2225,7 +2210,10 @@ mod tests {
         let summary_amounts = HashSet::from([1423i64]);
         let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
         let prices: Vec<i64> = items.iter().map(|it| it.price_cents).collect();
-        assert!(prices.contains(&699), "Frozen 6.99 should be an item: {items:?}");
+        assert!(
+            prices.contains(&699),
+            "Frozen 6.99 should be an item: {items:?}"
+        );
     }
 
     #[test]
@@ -2292,7 +2280,10 @@ mod tests {
         assert!(
             !prices.contains(&799),
             "REG marker line should not produce a ghost item at $7.99, got items: {:?}",
-            items.iter().map(|i| (&i.description, i.price_cents)).collect::<Vec<_>>()
+            items
+                .iter()
+                .map(|i| (&i.description, i.price_cents))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -2360,13 +2351,22 @@ mod tests {
             .map(|item| (item.description, item.price_cents))
             .collect();
 
-        assert!(observed.contains(&("Fresh Corianders".to_string(), 199)), "{observed:?}");
-        assert!(observed.contains(&("Searay - Tofu Fish".to_string(), 596)), "{observed:?}");
+        assert!(
+            observed.contains(&("Fresh Corianders".to_string(), 199)),
+            "{observed:?}"
+        );
+        assert!(
+            observed.contains(&("Searay - Tofu Fish".to_string(), 596)),
+            "{observed:?}"
+        );
         assert!(
             observed.contains(&("Ten Ten - Shangdong Style".to_string(), 299)),
             "{observed:?}"
         );
-        assert!(observed.contains(&("Ten Ten - Pork Bun".to_string(), 499)), "{observed:?}");
+        assert!(
+            observed.contains(&("Ten Ten - Pork Bun".to_string(), 499)),
+            "{observed:?}"
+        );
         assert_eq!(observed.len(), 4, "{observed:?}");
     }
 
@@ -2394,11 +2394,19 @@ mod tests {
             .collect();
 
         assert!(
-            observed.iter().any(|(d, p)| d.starts_with("Fresh Chicken Wings") && *p == 1004),
+            observed
+                .iter()
+                .any(|(d, p)| d.starts_with("Fresh Chicken Wings") && *p == 1004),
             "{observed:?}"
         );
-        assert!(observed.contains(&("Meat".to_string(), 745)), "{observed:?}");
-        assert!(observed.contains(&("Meat".to_string(), 419)), "{observed:?}");
+        assert!(
+            observed.contains(&("Meat".to_string(), 745)),
+            "{observed:?}"
+        );
+        assert!(
+            observed.contains(&("Meat".to_string(), 419)),
+            "{observed:?}"
+        );
     }
 
     #[test]
@@ -2473,23 +2481,34 @@ mod tests {
             .map(|item| (item.description, item.price_cents))
             .collect();
 
-        assert!(observed.contains(&("Pork Lard".to_string(), 399)), "{observed:?}");
         assert!(
-            observed.iter().any(|(d, p)| d.starts_with("Pak Fok - Fried Tofu") && *p == 298),
+            observed.contains(&("Pork Lard".to_string(), 399)),
             "{observed:?}"
         );
         assert!(
-            observed.iter().any(|(d, p)| d.starts_with("LBT - Frozen Sandwich") && *p == 128),
+            observed
+                .iter()
+                .any(|(d, p)| d.starts_with("Pak Fok - Fried Tofu") && *p == 298),
             "{observed:?}"
         );
         assert!(
-            observed.iter().any(|(d, p)| d.starts_with("Sanquan - Yellow Millet C") && *p == 398),
+            observed
+                .iter()
+                .any(|(d, p)| d.starts_with("LBT - Frozen Sandwich") && *p == 128),
+            "{observed:?}"
+        );
+        assert!(
+            observed
+                .iter()
+                .any(|(d, p)| d.starts_with("Sanquan - Yellow Millet C") && *p == 398),
             "{observed:?}"
         );
         // Pork Lard must not also appear at Pak Fok's price (the old
         // backward-walk duplicate).
         assert!(
-            !observed.iter().any(|(d, p)| d.starts_with("Pork Lard") && *p == 298),
+            !observed
+                .iter()
+                .any(|(d, p)| d.starts_with("Pork Lard") && *p == 298),
             "{observed:?}"
         );
     }
@@ -2522,7 +2541,10 @@ mod tests {
             .map(|item| (item.description, item.price_cents))
             .collect();
 
-        assert!(observed.contains(&("S & B - Wasabi".to_string(), 559)), "{observed:?}");
+        assert!(
+            observed.contains(&("S & B - Wasabi".to_string(), 559)),
+            "{observed:?}"
+        );
         assert!(
             observed.contains(&("Nissin - Chicken Flavour".to_string(), 268)),
             "{observed:?}"
@@ -2531,7 +2553,10 @@ mod tests {
             observed.contains(&("Shodoshima - Asian Style".to_string(), 499)),
             "{observed:?}"
         );
-        assert!(observed.contains(&("Dim Sum".to_string(), 298)), "{observed:?}");
+        assert!(
+            observed.contains(&("Dim Sum".to_string(), 298)),
+            "{observed:?}"
+        );
         assert_eq!(observed.len(), 4, "{observed:?}");
     }
 
@@ -2571,7 +2596,10 @@ mod tests {
             observed.contains(&("*Yang Guo Fu Spicy Hot Pot".to_string(), 399)),
             "{observed:?}"
         );
-        assert!(observed.contains(&("Hot Bean Sauce 450g".to_string(), 699)), "{observed:?}");
+        assert!(
+            observed.contains(&("Hot Bean Sauce 450g".to_string(), 699)),
+            "{observed:?}"
+        );
     }
 
     #[test]
@@ -2594,7 +2622,9 @@ mod tests {
             .collect();
 
         assert!(
-            observed.iter().any(|(d, p)| d.starts_with("Fresh Ginger") && *p == 463),
+            observed
+                .iter()
+                .any(|(d, p)| d.starts_with("Fresh Ginger") && *p == 463),
             "{observed:?}"
         );
         assert_eq!(observed.len(), 1, "{observed:?}");
@@ -2626,11 +2656,15 @@ mod tests {
             .collect();
 
         assert!(
-            observed.iter().any(|(d, p)| d.starts_with("HLY - Potato Chips Honey") && *p == 588),
+            observed
+                .iter()
+                .any(|(d, p)| d.starts_with("HLY - Potato Chips Honey") && *p == 588),
             "{observed:?}"
         );
         assert!(
-            observed.iter().any(|(d, p)| d.starts_with("HLY - Potato Chips Origin") && *p == 294),
+            observed
+                .iter()
+                .any(|(d, p)| d.starts_with("HLY - Potato Chips Origin") && *p == 294),
             "{observed:?}"
         );
         assert_eq!(observed.len(), 2, "{observed:?}");
@@ -2659,11 +2693,15 @@ mod tests {
             .collect();
 
         assert!(
-            observed.iter().any(|(d, p)| d.starts_with("Natrel") && *p == 498),
+            observed
+                .iter()
+                .any(|(d, p)| d.starts_with("Natrel") && *p == 498),
             "{observed:?}"
         );
         assert!(
-            observed.iter().any(|(d, p)| d.starts_with("Gray Ridge") && *p == 759),
+            observed
+                .iter()
+                .any(|(d, p)| d.starts_with("Gray Ridge") && *p == 759),
             "{observed:?}"
         );
     }
@@ -2705,16 +2743,34 @@ mod tests {
     fn extract_trailing_price_cents_signs_discounts() {
         use super::extract_trailing_price_cents;
         // Leading-minus discount convention (e.g. Jin Lian "D9 -$1.96").
-        assert_eq!(extract_trailing_price_cents("250g D9 -$1.96").map(|t| t.0), Some(-196));
-        assert_eq!(extract_trailing_price_cents("JL5 -$5.00").map(|t| t.0), Some(-500));
+        assert_eq!(
+            extract_trailing_price_cents("250g D9 -$1.96").map(|t| t.0),
+            Some(-196)
+        );
+        assert_eq!(
+            extract_trailing_price_cents("JL5 -$5.00").map(|t| t.0),
+            Some(-500)
+        );
         // Costco trailing-minus stays negative (and isn't double-handled).
-        assert_eq!(extract_trailing_price_cents("TPD/1796144 3.00-").map(|t| t.0), Some(-300));
+        assert_eq!(
+            extract_trailing_price_cents("TPD/1796144 3.00-").map(|t| t.0),
+            Some(-300)
+        );
         // Plain prices stay positive.
-        assert_eq!(extract_trailing_price_cents("Meat 20.53").map(|t| t.0), Some(2053));
+        assert_eq!(
+            extract_trailing_price_cents("Meat 20.53").map(|t| t.0),
+            Some(2053)
+        );
         // Guards: a mid-token hyphen and a spaced " - " separator must NOT
         // flip the sign — only a '-' glued to the price (directly or via '$').
-        assert_eq!(extract_trailing_price_cents("ITEM-1.96").map(|t| t.0), Some(196));
-        assert_eq!(extract_trailing_price_cents("MILK 2% - 3.99").map(|t| t.0), Some(399));
+        assert_eq!(
+            extract_trailing_price_cents("ITEM-1.96").map(|t| t.0),
+            Some(196)
+        );
+        assert_eq!(
+            extract_trailing_price_cents("MILK 2% - 3.99").map(|t| t.0),
+            Some(399)
+        );
     }
 
     #[test]
@@ -2734,8 +2790,14 @@ mod tests {
         let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
         let prices: Vec<i64> = items.iter().map(|it| it.price_cents).collect();
         assert!(prices.contains(&1399), "positive item missing: {prices:?}");
-        assert!(prices.contains(&-196), "D9 discount must be negative: {prices:?}");
-        assert!(prices.contains(&-528), "D7 discount must be negative: {prices:?}");
+        assert!(
+            prices.contains(&-196),
+            "D9 discount must be negative: {prices:?}"
+        );
+        assert!(
+            prices.contains(&-528),
+            "D7 discount must be negative: {prices:?}"
+        );
     }
 
     #[test]
@@ -2753,7 +2815,10 @@ mod tests {
 
         let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
         let prices: Vec<i64> = items.iter().map(|it| it.price_cents).collect();
-        assert!(prices.contains(&388), "Tx1-suffixed price not recovered: {prices:?}");
+        assert!(
+            prices.contains(&388),
+            "Tx1-suffixed price not recovered: {prices:?}"
+        );
         assert!(prices.contains(&598), "plain price missing: {prices:?}");
     }
 
@@ -2774,7 +2839,10 @@ mod tests {
         let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
         let prices: Vec<i64> = items.iter().map(|it| it.price_cents).collect();
         assert!(prices.contains(&259), "regular item missing: {prices:?}");
-        assert!(prices.contains(&91), "0.9I should reconcile to 0.91: {prices:?}");
+        assert!(
+            prices.contains(&91),
+            "0.9I should reconcile to 0.91: {prices:?}"
+        );
     }
 
     #[test]
@@ -2793,8 +2861,14 @@ mod tests {
 
         let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
         let prices: Vec<i64> = items.iter().map(|it| it.price_cents).collect();
-        assert!(!prices.contains(&8158), "81.58 outlier should be dropped: {prices:?}");
-        assert!(prices.contains(&388), "valid Tx1 item should remain: {prices:?}");
+        assert!(
+            !prices.contains(&8158),
+            "81.58 outlier should be dropped: {prices:?}"
+        );
+        assert!(
+            prices.contains(&388),
+            "valid Tx1 item should remain: {prices:?}"
+        );
     }
 
     #[test]
@@ -2805,7 +2879,9 @@ mod tests {
         // has to backstop the implausible-price ceiling so the $10.79 item
         // survives.
         let lines: Vec<String> = vec![
-            "GRAND GENESIS", "PHARMASAVE", "HAVE GREAT DAY!",
+            "GRAND GENESIS",
+            "PHARMASAVE",
+            "HAVE GREAT DAY!",
             "DESCRIPTION QTY UNIT TOTAL",
             "TOOTHPASTE 1 $10.79 PRICE PRICE",
             "06081503923 $10.79 G",
@@ -2815,7 +2891,10 @@ mod tests {
             "VISA $12.19",
             "CHANGE DUE $12.19 $0.00",
             "Items = 1",
-        ].into_iter().map(String::from).collect();
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
         let summary = HashSet::from([1079, 140, 1219]);
         let (items, _warnings) = extract_text_items(&lines, &summary);
         let observed: Vec<(String, i64)> = items
@@ -2823,7 +2902,9 @@ mod tests {
             .map(|item| (item.description, item.price_cents))
             .collect();
         assert!(
-            observed.iter().any(|(d, p)| d.contains("TOOTHPASTE") && *p == 1079),
+            observed
+                .iter()
+                .any(|(d, p)| d.contains("TOOTHPASTE") && *p == 1079),
             "{observed:?}"
         );
     }

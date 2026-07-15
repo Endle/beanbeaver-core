@@ -36,7 +36,8 @@ impl Classifier {
     /// Returns true when the crop is classified 180° with confidence above the
     /// gate (i.e. it should be rotated 180° before recognition).
     pub fn is_flipped(&mut self, crop: &RgbImage) -> ort::Result<bool> {
-        let resized = image::imageops::resize(crop, CLS_W, CLS_H, image::imageops::FilterType::Triangle);
+        let resized =
+            image::imageops::resize(crop, CLS_W, CLS_H, image::imageops::FilterType::Triangle);
         let plane = (CLS_W * CLS_H) as usize;
         let mut data = vec![0f32; 3 * plane];
         for y in 0..CLS_H as usize {

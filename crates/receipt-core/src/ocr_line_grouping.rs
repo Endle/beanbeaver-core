@@ -194,7 +194,9 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
     // own amount, so they must not steal the next row's price (Costco prints
     // "PC <code>" between "LCBO CARD" and its 400.00, overlapping both).
     for &left_index in &left {
-        if is_code_stub_label(&dets[left_index].text) || is_transaction_id_label(&dets[left_index].text) {
+        if is_code_stub_label(&dets[left_index].text)
+            || is_transaction_id_label(&dets[left_index].text)
+        {
             lines.push(vec![left_index]);
             continue;
         }
@@ -238,7 +240,11 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
                 continue;
             }
             let score = (
-                if overlap_ratio >= overlap_threshold { 0 } else { 1 },
+                if overlap_ratio >= overlap_threshold {
+                    0
+                } else {
+                    1
+                },
                 distance_to_line_span(dets, mid_index, &lines[line_idx]),
                 center_distance,
             );
@@ -355,11 +361,23 @@ mod tests {
                     .join(" ")
             })
             .collect();
-        assert!(rendered.contains(&"399 DOORDASH2X50 79.99".to_string()), "{rendered:?}");
-        assert!(rendered.contains(&"810 LCBO CARD 400.00".to_string()), "{rendered:?}");
-        assert!(rendered.contains(&"SUBTOTAL 573.31".to_string()), "{rendered:?}");
+        assert!(
+            rendered.contains(&"399 DOORDASH2X50 79.99".to_string()),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.contains(&"810 LCBO CARD 400.00".to_string()),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.contains(&"SUBTOTAL 573.31".to_string()),
+            "{rendered:?}"
+        );
         assert!(rendered.contains(&"TAX 5.13".to_string()), "{rendered:?}");
-        assert!(rendered.contains(&"***TOTAL 578.44".to_string()), "{rendered:?}");
+        assert!(
+            rendered.contains(&"***TOTAL 578.44".to_string()),
+            "{rendered:?}"
+        );
     }
 
     #[test]
@@ -384,8 +402,14 @@ mod tests {
                     .join(" ")
             })
             .collect();
-        assert!(rendered.contains(&"Transaction 037972".to_string()), "{rendered:?}");
-        assert!(rendered.contains(&"FESHRIMP PASTE150g $11.92".to_string()), "{rendered:?}");
+        assert!(
+            rendered.contains(&"Transaction 037972".to_string()),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.contains(&"FESHRIMP PASTE150g $11.92".to_string()),
+            "{rendered:?}"
+        );
     }
 
     #[test]

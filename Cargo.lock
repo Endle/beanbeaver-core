@@ -1790,6 +1790,7 @@ name = "receipt-image"
 version = "0.1.0"
 dependencies = [
  "image",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

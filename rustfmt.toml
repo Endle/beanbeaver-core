@@ -1,0 +1,2 @@
+# Keep defaults stable for CI `cargo fmt --check`.
+edition = "2021"

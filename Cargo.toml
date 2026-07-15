@@ -6,3 +6,18 @@ members = [
     "crates/ocr-paddle",
     "crates/ffi",
 ]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+rust-version = "1.80"
+
+[workspace.lints.rust]
+# Prefer safe Rust; ONNX/FFI boundaries document any necessary exceptions.
+unsafe_code = "warn"
+
+[workspace.lints.clippy]
+# Hard correctness; style/perf tighten as modules shrink.
+correctness = "deny"

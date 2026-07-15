@@ -59,10 +59,8 @@ impl Detector {
     pub fn prob_map(&mut self, img: &RgbImage) -> ort::Result<DetProb> {
         let input = preprocess_det(img);
         let (orig_w, orig_h) = (img.width() as f32, img.height() as f32);
-        let tensor = Tensor::from_array((
-            [1_usize, 3, input.height, input.width],
-            input.data.clone(),
-        ))?;
+        let tensor =
+            Tensor::from_array(([1_usize, 3, input.height, input.width], input.data.clone()))?;
         let outputs = self.session.run(ort::inputs![tensor])?;
         let (shape, data) = outputs[0].try_extract_tensor::<f32>()?;
         let h = shape[shape.len() - 2] as usize;
@@ -93,10 +91,8 @@ impl Detector {
         let input = preprocess_det(img);
         let (orig_w, orig_h) = (img.width() as f32, img.height() as f32);
 
-        let tensor = Tensor::from_array((
-            [1_usize, 3, input.height, input.width],
-            input.data.clone(),
-        ))?;
+        let tensor =
+            Tensor::from_array(([1_usize, 3, input.height, input.width], input.data.clone()))?;
         // Single positional input binds to the model's only input ("x").
         let outputs = self.session.run(ort::inputs![tensor])?;
 

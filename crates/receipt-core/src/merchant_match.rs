@@ -136,7 +136,12 @@ pub fn resolve(
             } else {
                 MerchantMatchStatus::Corrected
             };
-            return MerchantMatch { raw, canonical: Some(canonical), status, score: 1.0 };
+            return MerchantMatch {
+                raw,
+                canonical: Some(canonical),
+                status,
+                score: 1.0,
+            };
         }
     }
 
@@ -146,7 +151,10 @@ pub fn resolve(
     // the branch/address on one line (Foody Mart).
     let mut surfaces: Vec<(String, &str)> = Vec::new();
     for family in families {
-        surfaces.push((family.canonical.to_ascii_uppercase(), family.canonical.as_str()));
+        surfaces.push((
+            family.canonical.to_ascii_uppercase(),
+            family.canonical.as_str(),
+        ));
         for alias in &family.aliases {
             surfaces.push((alias.to_ascii_uppercase(), family.canonical.as_str()));
         }
@@ -208,7 +216,12 @@ pub fn resolve(
     }
 
     // Step 4: nothing matched — keep the raw OCR text.
-    MerchantMatch { raw, canonical: None, status: MerchantMatchStatus::Unknown, score: 0.0 }
+    MerchantMatch {
+        raw,
+        canonical: None,
+        status: MerchantMatchStatus::Unknown,
+        score: 0.0,
+    }
 }
 
 /// True if `needle` occurs in `haystack` bounded by word boundaries. Both are
@@ -328,7 +341,12 @@ mod tests {
     #[test]
     fn exact_alias_in_footer_is_corrected() {
         // Banner OCR'd "FRESHCC"; correct spelling reappears in the address.
-        let m = resolve("FRESHCC", "FRESHCC 123 EXAMPLE ST FRESHCO", &[], &families());
+        let m = resolve(
+            "FRESHCC",
+            "FRESHCC 123 EXAMPLE ST FRESHCO",
+            &[],
+            &families(),
+        );
         assert_eq!(m.status, MerchantMatchStatus::Corrected);
         assert_eq!(m.display(), "FRESHCO");
     }

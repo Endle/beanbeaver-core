@@ -191,19 +191,28 @@ mod tests {
     #[test]
     fn canonicalizes_costco_ocr_dropped_leading_c() {
         // OCR dropped the leading C; "WHOLESALE" banner confirms Costco.
-        assert_eq!(display("OSTCO\nWHOLESALE\nBranch #001\n1268728 UNREAL 17.99"), "COSTCO");
+        assert_eq!(
+            display("OSTCO\nWHOLESALE\nBranch #001\n1268728 UNREAL 17.99"),
+            "COSTCO"
+        );
     }
 
     #[test]
     fn canonicalizes_freshco_from_address_when_banner_misocrd() {
         // Banner OCR'd as "FRESHCC"; correct spelling appears in the address.
-        assert_eq!(display("FRESHCC\n123 Example St FreshCo\nCilantro $0.99"), "FRESHCO");
+        assert_eq!(
+            display("FRESHCC\n123 Example St FreshCo\nCilantro $0.99"),
+            "FRESHCO"
+        );
     }
 
     #[test]
     fn canonicalizes_foody_mart_from_noisy_banner() {
         // Banner runs name into branch/address on one OCR line.
-        assert_eq!(display("FOODY MART(Branch) 123 Example Rd\nAsahi 1.99"), "FOODY MART");
+        assert_eq!(
+            display("FOODY MART(Branch) 123 Example Rd\nAsahi 1.99"),
+            "FOODY MART"
+        );
     }
 
     #[test]

@@ -146,7 +146,12 @@ pub fn preprocess_det_fixed(img: &RgbImage, th: u32, tw: u32) -> DetInputFixed {
             }
         }
     }
-    DetInputFixed { data, scale, pad_x: pad_x as f32, pad_y: pad_y as f32 }
+    DetInputFixed {
+        data,
+        scale,
+        pad_x: pad_x as f32,
+        pad_y: pad_y as f32,
+    }
 }
 
 #[cfg(test)]
@@ -156,7 +161,10 @@ mod tests {
 
     // Expected dim: scale by ratio, round, then round up to a STRIDE multiple.
     fn expect_dim(orig: u32, ratio: f32) -> u32 {
-        ((orig as f32 * ratio).round() as u32).max(1).div_ceil(STRIDE) * STRIDE
+        ((orig as f32 * ratio).round() as u32)
+            .max(1)
+            .div_ceil(STRIDE)
+            * STRIDE
     }
 
     #[test]

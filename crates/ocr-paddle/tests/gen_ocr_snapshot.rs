@@ -26,7 +26,9 @@ fn manifest_rel(rel: &str) -> PathBuf {
 
 /// Recursively collect `*.jpg` under `dir`.
 fn collect_jpgs(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -44,14 +46,22 @@ fn gen_ocr_snapshot() {
         Some(root) => PathBuf::from(root).join("receipts_e2e"),
         None => manifest_rel("../receipt-core/tests/receipts_e2e"),
     };
-    assert!(fixtures.is_dir(), "no fixtures dir at {}", fixtures.display());
+    assert!(
+        fixtures.is_dir(),
+        "no fixtures dir at {}",
+        fixtures.display()
+    );
     let models = manifest_rel("../../models");
     let (det, rec, cls) = (
         models.join("PP-OCRv5_mobile_det.onnx"),
         models.join("PP-OCRv5_mobile_rec.onnx"),
         models.join("PP-LCNet_x1_0_textline_ori.onnx"),
     );
-    assert!(det.exists() && rec.exists() && cls.exists(), "OCR models missing under {}", models.display());
+    assert!(
+        det.exists() && rec.exists() && cls.exists(),
+        "OCR models missing under {}",
+        models.display()
+    );
 
     // Only stems named on the command line (after `--`), else every .jpg without
     // a sibling .ocr.json. Filter out the harness flags cargo passes through.
@@ -68,7 +78,11 @@ fn gen_ocr_snapshot() {
 
     let mut made = 0;
     for path in jpgs {
-        let Some(stem) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".jpg")) else {
+        let Some(stem) = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_suffix(".jpg"))
+        else {
             continue;
         };
         let stem = stem.to_string();
@@ -80,15 +94,20 @@ fn gen_ocr_snapshot() {
             continue; // don't clobber an existing snapshot in bulk mode
         }
 
-        let img = image::open(&path).unwrap_or_else(|e| panic!("decode {stem}.jpg: {e}")).to_rgb8();
+        let img = image::open(&path)
+            .unwrap_or_else(|e| panic!("decode {stem}.jpg: {e}"))
+            .to_rgb8();
         let prepared = resize_and_pad(&img);
         let (detections, _) = engine.recognize_image_timed(&prepared).expect("ocr");
 
         let dets: Vec<Value> = detections
             .into_iter()
             .map(|d| {
-                let pts: Vec<Value> =
-                    d.points.iter().map(|p| json!([p[0].round() as i64, p[1].round() as i64])).collect();
+                let pts: Vec<Value> = d
+                    .points
+                    .iter()
+                    .map(|p| json!([p[0].round() as i64, p[1].round() as i64]))
+                    .collect();
                 json!([pts, [d.text, d.confidence]])
             })
             .collect();
@@ -99,8 +118,16 @@ fn gen_ocr_snapshot() {
             "image_height": prepared.height(),
             "detections": dets,
         });
-        fs::write(&out, format!("{}\n", serde_json::to_string_pretty(&snapshot).unwrap())).unwrap();
-        eprintln!("wrote {} ({} detections)", out.display(), snapshot["detections"].as_array().unwrap().len());
+        fs::write(
+            &out,
+            format!("{}\n", serde_json::to_string_pretty(&snapshot).unwrap()),
+        )
+        .unwrap();
+        eprintln!(
+            "wrote {} ({} detections)",
+            out.display(),
+            snapshot["detections"].as_array().unwrap().len()
+        );
         made += 1;
     }
     eprintln!("gen_ocr_snapshot: wrote {made} snapshot(s)");

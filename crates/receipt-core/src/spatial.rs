@@ -161,7 +161,8 @@ mod tests {
             SpatialLineCandidate::new(0.224, false, true, false, false), // BLUSH BERRY
         ];
 
-        let selected = select_spatial_item_line(0.203, 0.02, 0.08, true, false, candidates).unwrap();
+        let selected =
+            select_spatial_item_line(0.203, 0.02, 0.08, true, false, candidates).unwrap();
 
         assert_eq!(selected.0, 1); // Nearest valid item below: SALTED EGG YOLK
     }

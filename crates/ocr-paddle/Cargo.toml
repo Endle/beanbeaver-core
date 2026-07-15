@@ -1,12 +1,16 @@
 [package]
 name = "ocr-paddle"
-version = "0.1.0"
-edition = "2021"
-publish = false
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+rust-version.workspace = true
 
 [lib]
 name = "ocr_paddle"
+
+[lints]
+workspace = true
 
 [dependencies]
 # Image decode + resize for the detection/recognition preprocessing.

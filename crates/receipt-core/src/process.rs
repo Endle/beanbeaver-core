@@ -14,7 +14,9 @@ use crate::receipt_formatter::{
     FormatterWarningInput,
 };
 use crate::receipt_parser::{parse_receipt, ParsedReceiptData, ParserRuleLayers};
-use crate::rules::{default_known_merchants, default_merchant_families, default_parser_rule_layers};
+use crate::rules::{
+    default_known_merchants, default_merchant_families, default_parser_rule_layers,
+};
 
 const DEFAULT_ITEM_ACCOUNT: &str = "Expenses:FIXME";
 
@@ -69,8 +71,16 @@ fn to_fixed_2(value: &str) -> String {
         }
     };
 
-    let sign = if negative && rounded_hundredths != 0 { "-" } else { "" };
-    format!("{sign}{}.{:02}", rounded_hundredths / 100, rounded_hundredths % 100)
+    let sign = if negative && rounded_hundredths != 0 {
+        "-"
+    } else {
+        ""
+    };
+    format!(
+        "{sign}{}.{:02}",
+        rounded_hundredths / 100,
+        rounded_hundredths % 100
+    )
 }
 
 fn date_iso(parsed: &ParsedReceiptData, today: (i32, u32, u32)) -> String {

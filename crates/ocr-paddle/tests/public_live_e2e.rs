@@ -46,7 +46,10 @@ fn manifest_rel(rel: &str) -> PathBuf {
 // --- tolerant matchers (same semantics as phase5_e2e.rs / the Python harness) --
 
 fn normalize_merchant(s: &str) -> String {
-    s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_uppercase).collect()
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_uppercase)
+        .collect()
 }
 
 fn levenshtein(a: &[u8], b: &[u8]) -> usize {
@@ -162,29 +165,54 @@ fn public_live_e2e() {
         .filter(|stem| fixtures.join(format!("{stem}.jpg")).exists())
         .collect();
     names.sort();
-    assert!(!names.is_empty(), "no live fixtures (.jpg + .expected.json) under {}", fixtures.display());
+    assert!(
+        !names.is_empty(),
+        "no live fixtures (.jpg + .expected.json) under {}",
+        fixtures.display()
+    );
 
     let count = env_u64("LIVE_E2E_COUNT").unwrap_or(2) as usize;
-    let seed = env_u64("LIVE_E2E_SEED")
-        .unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64);
-    let picks: Vec<String> = pick_indices(names.len(), count, seed).into_iter().map(|i| names[i].clone()).collect();
-    eprintln!("public_live_e2e: seed={seed}, picked {:?} of {} fixture(s)", picks, names.len());
+    let seed = env_u64("LIVE_E2E_SEED").unwrap_or_else(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64
+    });
+    let picks: Vec<String> = pick_indices(names.len(), count, seed)
+        .into_iter()
+        .map(|i| names[i].clone())
+        .collect();
+    eprintln!(
+        "public_live_e2e: seed={seed}, picked {:?} of {} fixture(s)",
+        picks,
+        names.len()
+    );
 
-    let mut engine =
-        OcrEngine::from_paths(&det, &rec, Some(&cls)).expect("load PP-OCRv5 models");
-    let account_mapping: HashMap<String, String> =
-        default_parser_rule_layers().account_mapping.into_iter().collect();
+    let mut engine = OcrEngine::from_paths(&det, &rec, Some(&cls)).expect("load PP-OCRv5 models");
+    let account_mapping: HashMap<String, String> = default_parser_rule_layers()
+        .account_mapping
+        .into_iter()
+        .collect();
 
     let mut warnings: Vec<String> = Vec::new();
     let mut ran = 0usize;
 
     for name in &picks {
         let jpg = fixtures.join(format!("{name}.jpg"));
-        let img = image::open(&jpg).unwrap_or_else(|e| panic!("decode {name}.jpg: {e}")).to_rgb8();
+        let img = image::open(&jpg)
+            .unwrap_or_else(|e| panic!("decode {name}.jpg: {e}"))
+            .to_rgb8();
 
         // HARD gate: the full pipeline must finish successfully.
-        let processed = process_image(&mut engine, &img, &format!("{name}.jpg"), TODAY, CREDIT_CARD_ACCOUNT, None)
-            .unwrap_or_else(|e| panic!("{name}: pipeline did not finish: {e}"));
+        let processed = process_image(
+            &mut engine,
+            &img,
+            &format!("{name}.jpg"),
+            TODAY,
+            CREDIT_CARD_ACCOUNT,
+            None,
+        )
+        .unwrap_or_else(|e| panic!("{name}: pipeline did not finish: {e}"));
         assert!(
             !processed.beancount.trim().is_empty(),
             "{name}: pipeline finished but produced no beancount output",
@@ -201,8 +229,10 @@ fn public_live_e2e() {
         );
 
         // SOFT gate: compare to the baseline; divergence -> warning, never failure.
-        let expected: Value =
-            serde_json::from_str(&fs::read_to_string(fixtures.join(format!("{name}.expected.json"))).unwrap()).unwrap();
+        let expected: Value = serde_json::from_str(
+            &fs::read_to_string(fixtures.join(format!("{name}.expected.json"))).unwrap(),
+        )
+        .unwrap();
         let mut warn = |msg: String| warnings.push(format!("{name}: {msg}"));
 
         if let Some(m) = expected.get("merchant").and_then(Value::as_str) {
@@ -223,30 +253,50 @@ fn public_live_e2e() {
         }
         if let Some(items) = expected.get("critical_items").and_then(Value::as_array) {
             for ci in items {
-                let desc = ci.get("description").and_then(Value::as_str).unwrap_or_default();
+                let desc = ci
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 let price = ci.get("price").and_then(Value::as_str).unwrap_or_default();
                 let want_cat = ci.get("category").and_then(Value::as_str);
-                let matched: Vec<_> = d.items.iter().filter(|it| item_desc_matches(&it.description, desc)).collect();
+                let matched: Vec<_> = d
+                    .items
+                    .iter()
+                    .filter(|it| item_desc_matches(&it.description, desc))
+                    .collect();
                 let price_ok = matched.iter().any(|it| price_matches(price, &it.price));
                 let cat_ok = want_cat.is_none_or(|c| {
                     matched
                         .iter()
                         .filter(|it| price_matches(price, &it.price))
-                        .any(|it| it.category.as_deref().is_some_and(|k| category_matches(c, k, &account_mapping)))
+                        .any(|it| {
+                            it.category
+                                .as_deref()
+                                .is_some_and(|k| category_matches(c, k, &account_mapping))
+                        })
                 });
                 if matched.is_empty() || !price_ok || !cat_ok {
-                    warn(format!("item '{desc}' (price {price}, cat {want_cat:?}) not reproduced live"));
+                    warn(format!(
+                        "item '{desc}' (price {price}, cat {want_cat:?}) not reproduced live"
+                    ));
                 }
             }
         }
     }
 
-    eprintln!("\npublic_live_e2e: {ran} fixture(s) ran end-to-end, {} soft warning(s)", warnings.len());
+    eprintln!(
+        "\npublic_live_e2e: {ran} fixture(s) ran end-to-end, {} soft warning(s)",
+        warnings.len()
+    );
     for w in &warnings {
         eprintln!("  ⚠ {w}");
     }
 
     // The only hard requirement: every picked fixture completed the pipeline.
-    assert_eq!(ran, picks.len(), "not every picked fixture completed the pipeline");
+    assert_eq!(
+        ran,
+        picks.len(),
+        "not every picked fixture completed the pipeline"
+    );
     assert!(ran > 0, "no fixtures ran");
 }

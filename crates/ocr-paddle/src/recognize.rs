@@ -85,7 +85,11 @@ impl Recognizer {
             }
             prev = idx;
         }
-        let conf = if conf_n == 0 { 0.0 } else { conf_sum / conf_n as f32 };
+        let conf = if conf_n == 0 {
+            0.0
+        } else {
+            conf_sum / conf_n as f32
+        };
         (text, conf)
     }
 
@@ -127,7 +131,13 @@ pub(crate) fn rotate_crop(img: &RgbImage, quad: &Quad) -> RgbImage {
     let mut out = RgbImage::new(crop_w, crop_h);
     // warp_into samples by inverting the projection, so pass src(input)->dst(output).
     if let Some(proj) = Projection::from_control_points(src, dst) {
-        warp_into(img, &proj, Interpolation::Bilinear, Rgb([0, 0, 0]), &mut out);
+        warp_into(
+            img,
+            &proj,
+            Interpolation::Bilinear,
+            Rgb([0, 0, 0]),
+            &mut out,
+        );
     }
 
     if crop_h as f32 / crop_w as f32 >= 1.5 {
@@ -142,7 +152,8 @@ pub(crate) fn rotate_crop(img: &RgbImage, quad: &Quad) -> RgbImage {
 fn rec_preprocess(crop: &RgbImage) -> (Vec<f32>, usize) {
     let ratio = crop.width() as f32 / crop.height() as f32;
     let w = (REC_HEIGHT as f32 * ratio).round().max(1.0) as u32;
-    let resized = image::imageops::resize(crop, w, REC_HEIGHT, image::imageops::FilterType::Triangle);
+    let resized =
+        image::imageops::resize(crop, w, REC_HEIGHT, image::imageops::FilterType::Triangle);
 
     let (wu, hu) = (w as usize, REC_HEIGHT as usize);
     let plane = wu * hu;
