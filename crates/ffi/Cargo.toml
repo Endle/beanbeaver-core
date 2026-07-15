@@ -1,9 +1,13 @@
 [package]
 name = "bb-receipt-ffi"
-version = "0.1.0"
-edition = "2021"
-publish = false
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
 
 # The Swift seam. `staticlib` is what the .xcframework links; `cdylib` lets
 # uniffi-bindgen introspect the compiled library to emit Swift; `lib` keeps the

@@ -36,13 +36,22 @@ pub fn resize_and_pad(img: &RgbImage) -> RgbImage {
     let resized = if longer > MAX_IMAGE_DIMENSION {
         let r = MAX_IMAGE_DIMENSION as f32 / longer as f32;
         let (nw, nh) = ((w as f32 * r).round() as u32, (h as f32 * r).round() as u32);
-        image::imageops::resize(img, nw.max(1), nh.max(1), image::imageops::FilterType::Lanczos3)
+        image::imageops::resize(
+            img,
+            nw.max(1),
+            nh.max(1),
+            image::imageops::FilterType::Lanczos3,
+        )
     } else {
         img.clone()
     };
 
     let pad = OCR_IMAGE_PADDING;
-    let mut padded = RgbImage::from_pixel(resized.width() + 2 * pad, resized.height() + 2 * pad, Rgb([255, 255, 255]));
+    let mut padded = RgbImage::from_pixel(
+        resized.width() + 2 * pad,
+        resized.height() + 2 * pad,
+        Rgb([255, 255, 255]),
+    );
     image::imageops::overlay(&mut padded, &resized, pad as i64, pad as i64);
     padded
 }
@@ -59,7 +68,15 @@ pub fn process_image(
     credit_card_account: &str,
     image_sha256: Option<&str>,
 ) -> ort::Result<ProcessedReceipt> {
-    Ok(process_image_timed(engine, img, image_filename, today, credit_card_account, image_sha256)?.0)
+    Ok(process_image_timed(
+        engine,
+        img,
+        image_filename,
+        today,
+        credit_card_account,
+        image_sha256,
+    )?
+    .0)
 }
 
 /// Like [`process_image`] but also returns per-stage [`ScanTimings`] for
@@ -84,7 +101,11 @@ pub fn process_image_timed(
     let raw: Vec<RawDetection> = detections
         .into_iter()
         .map(|d| RawDetection {
-            points: d.points.iter().map(|p| (p[0] as f64, p[1] as f64)).collect(),
+            points: d
+                .points
+                .iter()
+                .map(|p| (p[0] as f64, p[1] as f64))
+                .collect(),
             text: d.text,
             confidence: d.confidence as f64,
         })
@@ -153,14 +174,23 @@ mod tests {
         let p = &result.parsed;
         eprintln!(
             "merchant={} date={:?} total={} tax={:?} subtotal={:?} items={}",
-            p.merchant, p.date, p.total, p.tax, p.subtotal, p.items.len()
+            p.merchant,
+            p.date,
+            p.total,
+            p.tax,
+            p.subtotal,
+            p.items.len()
         );
         for it in &p.items {
             eprintln!("  {:>8}  {}  [{:?}]", it.price, it.description, it.category);
         }
         eprintln!("\n--- beancount ---\n{}", result.beancount);
 
-        assert!(p.merchant.to_uppercase().contains("COSTCO"), "merchant: {}", p.merchant);
+        assert!(
+            p.merchant.to_uppercase().contains("COSTCO"),
+            "merchant: {}",
+            p.merchant
+        );
         assert_eq!(p.total, "221.97");
     }
 }

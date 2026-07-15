@@ -60,7 +60,11 @@ fn main() {
             "--attrib" => attrib = true,
             "--reccached" => reccached = true,
             "--by-merchant" => by_merchant = true,
-            "--probdump" => probdump = Some(PathBuf::from(args.next().expect("--probdump needs an out dir"))),
+            "--probdump" => {
+                probdump = Some(PathBuf::from(
+                    args.next().expect("--probdump needs an out dir"),
+                ))
+            }
             "--help" | "-h" => {
                 print_usage();
                 return;
@@ -95,11 +99,22 @@ fn main() {
         let det = find_model(&models, "_det.onnx");
         let rec = find_model(&models, "_rec.onnx");
         let cls = find_model(&models, "_ori.onnx");
-        eprintln!("det: {}\nrec: {}\ncls: {}", det.display(), rec.display(), cls.display());
-        Some(OcrEngine::from_paths(det, rec, Some(cls)).expect("load models (pass --models DIR if not ./models)"))
+        eprintln!(
+            "det: {}\nrec: {}\ncls: {}",
+            det.display(),
+            rec.display(),
+            cls.display()
+        );
+        Some(
+            OcrEngine::from_paths(det, rec, Some(cls))
+                .expect("load models (pass --models DIR if not ./models)"),
+        )
     };
 
-    let mapping: HashMap<String, String> = default_parser_rule_layers().account_mapping.into_iter().collect();
+    let mapping: HashMap<String, String> = default_parser_rule_layers()
+        .account_mapping
+        .into_iter()
+        .collect();
     let today = (today.0 as i32, today.1 as u32, today.2 as u32);
 
     if detcmp {
@@ -113,13 +128,26 @@ fn main() {
     }
 
     if reccached {
-        run_reccached(engine.as_mut().expect("engine for reccached"), &mapping, today, &path);
+        run_reccached(
+            engine.as_mut().expect("engine for reccached"),
+            &mapping,
+            today,
+            &path,
+        );
         return;
     }
 
     print_config_header(cached, &models, today);
     if path.is_dir() {
-        run_corpus(&mut engine, cached, &mapping, today, &path, dump, by_merchant);
+        run_corpus(
+            &mut engine,
+            cached,
+            &mapping,
+            today,
+            &path,
+            dump,
+            by_merchant,
+        );
     } else {
         let _ = run_single(&mut engine, cached, &mapping, today, &path, true);
     }
@@ -153,7 +181,9 @@ fn print_usage() {
 fn print_config_header(cached: bool, models: &Path, today: (i32, u32, u32)) {
     println!("\n=== device_sim ===");
     if cfg!(debug_assertions) {
-        println!("  build  : DEBUG  ⚠ latency is ~10-50× inflated — rebuild with --release for timing");
+        println!(
+            "  build  : DEBUG  ⚠ latency is ~10-50× inflated — rebuild with --release for timing"
+        );
     } else {
         println!("  build  : release");
     }
@@ -165,7 +195,10 @@ fn print_config_header(cached: bool, models: &Path, today: (i32, u32, u32)) {
         let resize = std::env::var("OCR_RESIZE_LONG").ok();
         println!("  mode   : live (on-device ONNX, CPU EP — matches the shipped iOS default)");
         println!("  models : {}  (det={det_name})", models.display());
-        println!("  resize : OCR_RESIZE_LONG={}", resize.as_deref().unwrap_or("(detector default)"));
+        println!(
+            "  resize : OCR_RESIZE_LONG={}",
+            resize.as_deref().unwrap_or("(detector default)")
+        );
     }
     println!("  today  : {}", fmt_ymd(today));
 }
@@ -201,17 +234,30 @@ fn run_probdump(models: &Path, img_path: &Path, outdir: &Path) {
         "unclip_ratio": cfg.unclip_ratio, "max_candidates": cfg.max_candidates,
         "image": img_path.file_name().and_then(|s| s.to_str()),
     });
-    std::fs::write(outdir.join("meta.json"), serde_json::to_string_pretty(&meta).unwrap())
-        .expect("write meta.json");
+    std::fs::write(
+        outdir.join("meta.json"),
+        serde_json::to_string_pretty(&meta).unwrap(),
+    )
+    .expect("write meta.json");
 
-    let quads = boxes_from_bitmap(&p.prob, p.h, p.w, p.orig_w, p.orig_h, p.ratio_w, p.ratio_h, &cfg);
+    let quads = boxes_from_bitmap(
+        &p.prob, p.h, p.w, p.orig_w, p.orig_h, p.ratio_w, p.ratio_h, &cfg,
+    );
     let boxes: Vec<[[f32; 2]; 4]> = quads.iter().map(|q| q.points).collect();
-    std::fs::write(outdir.join("ours_boxes.json"), serde_json::to_string(&boxes).unwrap())
-        .expect("write ours_boxes.json");
+    std::fs::write(
+        outdir.join("ours_boxes.json"),
+        serde_json::to_string(&boxes).unwrap(),
+    )
+    .expect("write ours_boxes.json");
 
     println!(
         "probdump: {} boxes | prob {}x{} | dest {}x{} -> {}",
-        boxes.len(), p.w, p.h, p.orig_w as u32, p.orig_h as u32, outdir.display()
+        boxes.len(),
+        p.w,
+        p.h,
+        p.orig_w as u32,
+        p.orig_h as u32,
+        outdir.display()
     );
 }
 
@@ -221,15 +267,23 @@ fn run_detcmp(engine: &mut OcrEngine, path: &Path) {
     let mut jpgs: Vec<PathBuf> = std::fs::read_dir(path)
         .expect("read dir")
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "jpg") && p.with_extension("ocr.json").exists())
+        .filter(|p| {
+            p.extension().is_some_and(|x| x == "jpg") && p.with_extension("ocr.json").exists()
+        })
         .collect();
     jpgs.sort();
 
-    println!("{:<40} {:>6} {:>6} {:>8} {:>8}", "fixture", "ours", "paddle", "box-rec", "txt-rec");
-    let (mut sum_ours, mut sum_pad, mut sum_recall, mut sum_txt, mut n) = (0usize, 0usize, 0f64, 0f64, 0usize);
+    println!(
+        "{:<40} {:>6} {:>6} {:>8} {:>8}",
+        "fixture", "ours", "paddle", "box-rec", "txt-rec"
+    );
+    let (mut sum_ours, mut sum_pad, mut sum_recall, mut sum_txt, mut n) =
+        (0usize, 0usize, 0f64, 0f64, 0usize);
     for jpg in &jpgs {
         let img = image::open(jpg).expect("decode").to_rgb8();
-        let dets = engine.recognize_image(&resize_and_pad(&img)).expect("detect");
+        let dets = engine
+            .recognize_image(&resize_and_pad(&img))
+            .expect("detect");
         let our_texts: Vec<String> = dets.iter().map(|d| normalize_item(&d.text)).collect();
         let our_boxes: Vec<(f32, f32, f32, f32)> = dets
             .iter()
@@ -245,7 +299,9 @@ fn run_detcmp(engine: &mut OcrEngine, path: &Path) {
             })
             .collect();
 
-        let v: Value = serde_json::from_str(&std::fs::read_to_string(jpg.with_extension("ocr.json")).unwrap()).unwrap();
+        let v: Value =
+            serde_json::from_str(&std::fs::read_to_string(jpg.with_extension("ocr.json")).unwrap())
+                .unwrap();
         let paddle: Vec<(f32, f32, String)> = v["detections"]
             .as_array()
             .unwrap()
@@ -261,20 +317,41 @@ fn run_detcmp(engine: &mut OcrEngine, path: &Path) {
 
         let covered = paddle
             .iter()
-            .filter(|(cx, cy, _)| our_boxes.iter().any(|&(x0, y0, x1, y1)| *cx >= x0 && *cx <= x1 && *cy >= y0 && *cy <= y1))
+            .filter(|(cx, cy, _)| {
+                our_boxes
+                    .iter()
+                    .any(|&(x0, y0, x1, y1)| *cx >= x0 && *cx <= x1 && *cy >= y0 && *cy <= y1)
+            })
             .count();
         // Text recall: paddle lines whose (normalized) text appears among ours.
         let txt_covered = paddle
             .iter()
             .filter(|(_, _, t)| {
                 let nt = normalize_item(t);
-                !nt.is_empty() && our_texts.iter().any(|o| o.contains(&nt) || nt.contains(o.as_str()))
+                !nt.is_empty()
+                    && our_texts
+                        .iter()
+                        .any(|o| o.contains(&nt) || nt.contains(o.as_str()))
             })
             .count();
-        let recall = if paddle.is_empty() { 1.0 } else { covered as f64 / paddle.len() as f64 };
-        let txt_recall = if paddle.is_empty() { 1.0 } else { txt_covered as f64 / paddle.len() as f64 };
+        let recall = if paddle.is_empty() {
+            1.0
+        } else {
+            covered as f64 / paddle.len() as f64
+        };
+        let txt_recall = if paddle.is_empty() {
+            1.0
+        } else {
+            txt_covered as f64 / paddle.len() as f64
+        };
         let name = jpg.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
-        println!("{name:<40} {:>6} {:>6} {:>7.0}% {:>7.0}%", dets.len(), paddle.len(), recall * 100.0, txt_recall * 100.0);
+        println!(
+            "{name:<40} {:>6} {:>6} {:>7.0}% {:>7.0}%",
+            dets.len(),
+            paddle.len(),
+            recall * 100.0,
+            txt_recall * 100.0
+        );
         sum_ours += dets.len();
         sum_pad += paddle.len();
         sum_recall += recall;
@@ -283,9 +360,26 @@ fn run_detcmp(engine: &mut OcrEngine, path: &Path) {
     }
 
     println!("\n=== detcmp: {n} fixtures ===");
-    println!("  our lines: {sum_ours}   paddle lines: {sum_pad}   (we find {:.0}% as many)", pct(sum_ours, sum_pad));
-    println!("  box recall (paddle lines our boxes cover):   {:.0}%", if n > 0 { 100.0 * sum_recall / n as f64 } else { 0.0 });
-    println!("  text recall (paddle lines we also read OK):  {:.0}%", if n > 0 { 100.0 * sum_txt / n as f64 } else { 0.0 });
+    println!(
+        "  our lines: {sum_ours}   paddle lines: {sum_pad}   (we find {:.0}% as many)",
+        pct(sum_ours, sum_pad)
+    );
+    println!(
+        "  box recall (paddle lines our boxes cover):   {:.0}%",
+        if n > 0 {
+            100.0 * sum_recall / n as f64
+        } else {
+            0.0
+        }
+    );
+    println!(
+        "  text recall (paddle lines we also read OK):  {:.0}%",
+        if n > 0 {
+            100.0 * sum_txt / n as f64
+        } else {
+            0.0
+        }
+    );
 }
 
 /// Per-field tally of why live failures happened, vs the desktop OCR (`.ocr.json`)
@@ -338,7 +432,11 @@ fn iou(a: Bx, b: Bx) -> f32 {
     let inter = (a.2.min(b.2) - a.0.max(b.0)).max(0.0) * (a.3.min(b.3) - a.1.max(b.1)).max(0.0);
     let area = |x: Bx| (x.2 - x.0).max(0.0) * (x.3 - x.1).max(0.0);
     let uni = area(a) + area(b) - inter;
-    if uni <= 0.0 { 0.0 } else { inter / uni }
+    if uni <= 0.0 {
+        0.0
+    } else {
+        inter / uni
+    }
 }
 
 fn digits(s: &str) -> String {
@@ -383,8 +481,11 @@ fn run_attrib(engine: &mut OcrEngine, path: &Path) {
 
     let today = (2026i32, 6u32, 21u32);
     let verbose = std::env::var("ATTRIB_V").is_ok();
-    let (mut date_c, mut total_c, mut item_c) =
-        (CauseCounts::default(), CauseCounts::default(), CauseCounts::default());
+    let (mut date_c, mut total_c, mut item_c) = (
+        CauseCounts::default(),
+        CauseCounts::default(),
+        CauseCounts::default(),
+    );
     let (mut date_fail, mut total_fail, mut item_miss) = (0usize, 0usize, 0usize);
 
     for jpg in &jpgs {
@@ -392,11 +493,18 @@ fn run_attrib(engine: &mut OcrEngine, path: &Path) {
         let img = image::open(jpg).expect("decode").to_rgb8();
 
         // Live detections (text + box, padded space — what process_image sees).
-        let live_raw = engine.recognize_image(&resize_and_pad(&img)).expect("detect");
-        let live: Vec<(Bx, String)> = live_raw.iter().map(|d| (det_bbox(&d.points), d.text.clone())).collect();
+        let live_raw = engine
+            .recognize_image(&resize_and_pad(&img))
+            .expect("detect");
+        let live: Vec<(Bx, String)> = live_raw
+            .iter()
+            .map(|d| (det_bbox(&d.points), d.text.clone()))
+            .collect();
 
         // Desktop detections from .ocr.json (also padded space).
-        let v: Value = serde_json::from_str(&std::fs::read_to_string(jpg.with_extension("ocr.json")).unwrap()).unwrap();
+        let v: Value =
+            serde_json::from_str(&std::fs::read_to_string(jpg.with_extension("ocr.json")).unwrap())
+                .unwrap();
         let desk: Vec<(Bx, String)> = v["detections"]
             .as_array()
             .unwrap()
@@ -418,16 +526,32 @@ fn run_attrib(engine: &mut OcrEngine, path: &Path) {
             .collect();
 
         // Live parsed result.
-        let pr = process_image(engine, &img, &format!("{name}.jpg"), today, "Liabilities:CreditCard", None).expect("process_image");
+        let pr = process_image(
+            engine,
+            &img,
+            &format!("{name}.jpg"),
+            today,
+            "Liabilities:CreditCard",
+            None,
+        )
+        .expect("process_image");
         let d = &pr.parsed;
-        let expected: Value = serde_json::from_str(&std::fs::read_to_string(jpg.with_extension("expected.json")).unwrap()).unwrap();
+        let expected: Value = serde_json::from_str(
+            &std::fs::read_to_string(jpg.with_extension("expected.json")).unwrap(),
+        )
+        .unwrap();
 
         // ---- items ----
         if let Some(items) = expected.get("critical_items").and_then(Value::as_array) {
             for ci in items {
-                let desc = ci.get("description").and_then(Value::as_str).unwrap_or_default();
+                let desc = ci
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 let price = ci.get("price").and_then(Value::as_str).unwrap_or_default();
-                let parser_ok = d.items.iter().any(|it| item_desc_matches(&it.description, desc) && price_matches(price, &it.price));
+                let parser_ok = d.items.iter().any(|it| {
+                    item_desc_matches(&it.description, desc) && price_matches(price, &it.price)
+                });
                 if parser_ok {
                     continue;
                 }
@@ -440,7 +564,8 @@ fn run_attrib(engine: &mut OcrEngine, path: &Path) {
                 let cause = match desk.iter().find(|(_, t)| key_hit(t)).map(|(b, _)| *b) {
                     None => Cause::DeskMissing,
                     Some(b) => {
-                        let recognized = live.iter().any(|(lb, t)| iou(*lb, b) > 0.05 && key_hit(t));
+                        let recognized =
+                            live.iter().any(|(lb, t)| iou(*lb, b) > 0.05 && key_hit(t));
                         classify_against_deskbox(b, &live, recognized)
                     }
                 };
@@ -461,7 +586,9 @@ fn run_attrib(engine: &mut OcrEngine, path: &Path) {
                     None => Cause::Unknown,
                     Some((b, dt)) => {
                         let key = digits(dt);
-                        let recognized = live.iter().any(|(_, t)| !key.is_empty() && digits(t).contains(&key));
+                        let recognized = live
+                            .iter()
+                            .any(|(_, t)| !key.is_empty() && digits(t).contains(&key));
                         classify_against_deskbox(*b, &live, recognized)
                     }
                 };
@@ -477,7 +604,10 @@ fn run_attrib(engine: &mut OcrEngine, path: &Path) {
             if !price_matches(exp, &d.total) {
                 total_fail += 1;
                 let key = digits(exp);
-                let cause = match desk.iter().find(|(_, t)| !key.is_empty() && digits(t).contains(&key)) {
+                let cause = match desk
+                    .iter()
+                    .find(|(_, t)| !key.is_empty() && digits(t).contains(&key))
+                {
                     None => Cause::Unknown,
                     Some((b, _)) => {
                         let recognized = live.iter().any(|(_, t)| digits(t).contains(&key));
@@ -502,7 +632,10 @@ fn run_attrib(engine: &mut OcrEngine, path: &Path) {
             c.miss, c.bad_crop, c.true_rec, c.pairing, c.desk_missing, c.unknown
         );
     };
-    println!("\n=== failure attribution (live, {} fixtures) ===", jpgs.len());
+    println!(
+        "\n=== failure attribution (live, {} fixtures) ===",
+        jpgs.len()
+    );
     println!("{hdr}");
     row("date", date_fail, &date_c);
     row("total", total_fail, &total_c);
@@ -522,7 +655,11 @@ fn find_model(dir: &Path, suffix: &str) -> PathBuf {
     std::fs::read_dir(dir)
         .unwrap_or_else(|_| panic!("model dir not found: {}", dir.display()))
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .find(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(suffix)))
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(suffix))
+        })
         .unwrap_or_else(|| panic!("no *{suffix} in {}", dir.display()))
 }
 
@@ -541,7 +678,10 @@ fn extract(
             return None;
         }
         let v: Value = serde_json::from_str(&std::fs::read_to_string(&ocr_path).ok()?).ok()?;
-        let (w, h) = (v.get("image_width")?.as_i64()?, v.get("image_height")?.as_i64()?);
+        let (w, h) = (
+            v.get("image_width")?.as_i64()?,
+            v.get("image_height")?.as_i64()?,
+        );
         let mut raw = Vec::new();
         for det in v.get("detections")?.as_array()? {
             let arr = det.as_array()?;
@@ -560,12 +700,32 @@ fn extract(
                 confidence: tc.get(1).and_then(Value::as_f64).unwrap_or(1.0),
             });
         }
-        Some((process_receipt(raw, w, h, OCR_IMAGE_PADDING, &filename, None, today, "Liabilities:CreditCard", None), None))
+        Some((
+            process_receipt(
+                raw,
+                w,
+                h,
+                OCR_IMAGE_PADDING,
+                &filename,
+                None,
+                today,
+                "Liabilities:CreditCard",
+                None,
+            ),
+            None,
+        ))
     } else {
         let img = image::open(jpg).expect("decode image").to_rgb8();
         let engine = engine.as_mut().expect("engine for live mode");
-        let (pr, t) = process_image_timed(engine, &img, &filename, today, "Liabilities:CreditCard", None)
-            .expect("process_image");
+        let (pr, t) = process_image_timed(
+            engine,
+            &img,
+            &filename,
+            today,
+            "Liabilities:CreditCard",
+            None,
+        )
+        .expect("process_image");
         Some((pr, Some(t)))
     }
 }
@@ -587,10 +747,18 @@ fn run_single(
         println!("── {name} ──");
         println!("merchant: {}", d.merchant);
         println!("date:     {}", fmt_date(d.date));
-        println!("subtotal: {:?}  tax: {:?}  total: {}", d.subtotal, d.tax, d.total);
+        println!(
+            "subtotal: {:?}  tax: {:?}  total: {}",
+            d.subtotal, d.tax, d.total
+        );
         println!("items ({}):", d.items.len());
         for it in &d.items {
-            println!("  {:>9}  {:<32}  {}", it.price, it.description, it.category.as_deref().unwrap_or("-"));
+            println!(
+                "  {:>9}  {:<32}  {}",
+                it.price,
+                it.description,
+                it.category.as_deref().unwrap_or("-")
+            );
         }
         println!("\n{}", pr.beancount);
         if let Some(t) = &timings {
@@ -602,7 +770,8 @@ fn run_single(
     if !expected_path.exists() {
         return None;
     }
-    let expected: Value = serde_json::from_str(&std::fs::read_to_string(&expected_path).ok()?).ok()?;
+    let expected: Value =
+        serde_json::from_str(&std::fs::read_to_string(&expected_path).ok()?).ok()?;
     Some((score(name, &expected, d, mapping), timings))
 }
 
@@ -625,7 +794,9 @@ fn run_corpus(
     let mut jpgs: Vec<PathBuf> = std::fs::read_dir(dir)
         .expect("read dir")
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "jpg") && p.with_extension("expected.json").exists())
+        .filter(|p| {
+            p.extension().is_some_and(|x| x == "jpg") && p.with_extension("expected.json").exists()
+        })
         .collect();
     jpgs.sort();
     println!(
@@ -661,7 +832,11 @@ fn run_corpus(
     }
 
     if scores.is_empty() {
-        println!("(no usable <stem>.jpg + expected.json{} pairs in {})", if cached { " + ocr.json" } else { "" }, dir.display());
+        println!(
+            "(no usable <stem>.jpg + expected.json{} pairs in {})",
+            if cached { " + ocr.json" } else { "" },
+            dir.display()
+        );
         return;
     }
     // Make the denominator explicit: never silently score a subset.
@@ -669,7 +844,11 @@ fn run_corpus(
         "\nscored {}/{} fixtures-with-expected{}",
         scores.len(),
         jpgs.len(),
-        if skipped_no_ocr > 0 { format!("  (cached: skipped {skipped_no_ocr} with no .ocr.json)") } else { String::new() }
+        if skipped_no_ocr > 0 {
+            format!("  (cached: skipped {skipped_no_ocr} with no .ocr.json)")
+        } else {
+            String::new()
+        }
     );
     print_summary(if cached { "cached" } else { "live" }, &scores);
     if !timings.is_empty() {
@@ -698,7 +877,11 @@ fn print_by_merchant(scores: &[FixtureScore]) {
     let mut groups: BTreeMap<String, Agg> = BTreeMap::new();
     for s in scores {
         let a = groups.entry(s.merchant_group.clone()).or_default();
-        let frac = if s.items_total == 0 { 1.0 } else { s.items_ok as f64 / s.items_total as f64 };
+        let frac = if s.items_total == 0 {
+            1.0
+        } else {
+            s.items_ok as f64 / s.items_total as f64
+        };
         let header = s.merchant_ok && s.date_ok && s.total_ok;
         a.n += 1;
         a.items_ok += s.items_ok;
@@ -723,7 +906,10 @@ fn print_by_merchant(scores: &[FixtureScore]) {
     });
 
     println!("\n=== by merchant (sorted by fully-correct rate) ===");
-    println!("{:<22}{:>3}{:>10}{:>7}{:>8}{:>7}{:>9}", "merchant", "n", "items", "hdrOK", "good80", "FULL", "recall");
+    println!(
+        "{:<22}{:>3}{:>10}{:>7}{:>8}{:>7}{:>9}",
+        "merchant", "n", "items", "hdrOK", "good80", "FULL", "recall"
+    );
     for (m, a) in &rows {
         println!(
             "{:<22}{:>3}{:>10}{:>7}{:>8}{:>7}{:>8.0}%",
@@ -774,7 +960,11 @@ fn merchant_group_key(m: &str) -> String {
     } else if u.contains("REAL CANADIAN") || u.contains("RCSS") {
         "Real Canadian"
     } else {
-        return if m.is_empty() { "(unknown)".to_string() } else { m.to_string() };
+        return if m.is_empty() {
+            "(unknown)".to_string()
+        } else {
+            m.to_string()
+        };
     };
     g.to_string()
 }
@@ -808,11 +998,18 @@ fn run_reccached(
         let padded = resize_and_pad(&img);
 
         // Cached desktop boxes -> quads (already in padded space, TL,TR,BR,BL).
-        let v: Value = serde_json::from_str(&std::fs::read_to_string(jpg.with_extension("ocr.json")).unwrap()).unwrap();
-        let (w, h) = (v["image_width"].as_i64().unwrap(), v["image_height"].as_i64().unwrap());
+        let v: Value =
+            serde_json::from_str(&std::fs::read_to_string(jpg.with_extension("ocr.json")).unwrap())
+                .unwrap();
+        let (w, h) = (
+            v["image_width"].as_i64().unwrap(),
+            v["image_height"].as_i64().unwrap(),
+        );
         let mut quads = Vec::new();
         for det in v["detections"].as_array().unwrap() {
-            let Some(bbox) = det[0].as_array() else { continue };
+            let Some(bbox) = det[0].as_array() else {
+                continue;
+            };
             if bbox.len() < 4 {
                 continue;
             }
@@ -825,23 +1022,46 @@ fn run_reccached(
         }
 
         // OUR recognizer (+ orientation cls) on the desktop boxes.
-        let dets = engine.recognize_quads(&padded, quads).expect("recognize_quads");
+        let dets = engine
+            .recognize_quads(&padded, quads)
+            .expect("recognize_quads");
         let raw: Vec<RawDetection> = dets
             .into_iter()
             .map(|d| RawDetection {
-                points: d.points.iter().map(|p| (p[0] as f64, p[1] as f64)).collect(),
+                points: d
+                    .points
+                    .iter()
+                    .map(|p| (p[0] as f64, p[1] as f64))
+                    .collect(),
                 text: d.text,
                 confidence: d.confidence as f64,
             })
             .collect();
 
-        let pr = process_receipt(raw, w, h, OCR_IMAGE_PADDING, &format!("{name}.jpg"), None, today, "Liabilities:CreditCard", None);
-        let expected: Value = serde_json::from_str(&std::fs::read_to_string(jpg.with_extension("expected.json")).unwrap()).unwrap();
+        let pr = process_receipt(
+            raw,
+            w,
+            h,
+            OCR_IMAGE_PADDING,
+            &format!("{name}.jpg"),
+            None,
+            today,
+            "Liabilities:CreditCard",
+            None,
+        );
+        let expected: Value = serde_json::from_str(
+            &std::fs::read_to_string(jpg.with_extension("expected.json")).unwrap(),
+        )
+        .unwrap();
         let s = score(name, &expected, &pr.parsed, mapping);
         let mark = if s.is_fully_ok() { "✓" } else { "✗" };
         println!(
             "{mark} {:<42} {:<22} items {}/{}{}",
-            s.name, format!("{} / {} / {}", trunc(&s.merchant, 14), s.date, s.total_got), s.items_ok, s.items_total, s.notes()
+            s.name,
+            format!("{} / {} / {}", trunc(&s.merchant, 14), s.date, s.total_got),
+            s.items_ok,
+            s.items_total,
+            s.notes()
         );
         scores.push(s);
     }
@@ -850,7 +1070,11 @@ fn run_reccached(
 
 /// One-line per-stage latency for a single receipt (used in `--dump`).
 fn fmt_timings_line(t: &ScanTimings) -> String {
-    let warn = if cfg!(debug_assertions) { "  ⚠ DEBUG — rebuild with --release" } else { "" };
+    let warn = if cfg!(debug_assertions) {
+        "  ⚠ DEBUG — rebuild with --release"
+    } else {
+        ""
+    };
     format!(
         "latency: total {:.0} ms  (prep {:.0} · detect {:.0} · classify {:.0} · recognize {:.0} · parse {:.0}){warn}",
         t.total_ms, t.prep_ms, t.detect_ms, t.classify_ms, t.recognize_ms, t.parse_ms
@@ -865,7 +1089,9 @@ fn print_latency(t: &[ScanTimings]) {
     let worst = t.iter().map(|x| x.total_ms).fold(0.0f64, f64::max);
     println!("\n  --- latency ({} receipts, CPU) ---", t.len());
     if cfg!(debug_assertions) {
-        println!("  ⚠ DEBUG BUILD — these are ~10-50× inflated; rebuild with --release for real numbers");
+        println!(
+            "  ⚠ DEBUG BUILD — these are ~10-50× inflated; rebuild with --release for real numbers"
+        );
     }
     println!(
         "  mean/receipt : {:.0} ms  (prep {:.0} · detect {:.0} · classify {:.0} · recognize {:.0} · parse {:.0})",
@@ -889,30 +1115,67 @@ fn print_summary(label: &str, scores: &[FixtureScore]) {
     let items_ok: usize = scores.iter().map(|s| s.items_ok).sum();
     let items_total: usize = scores.iter().map(|s| s.items_total).sum();
     println!("\n=== device_sim summary ({label}): {n} fixtures ===");
-    println!("  merchant : {merchant_ok}/{n}  ({:.0}%)", pct(merchant_ok, n));
+    println!(
+        "  merchant : {merchant_ok}/{n}  ({:.0}%)",
+        pct(merchant_ok, n)
+    );
     println!("  date     : {date_ok}/{n}  ({:.0}%)", pct(date_ok, n));
     println!("  total    : {total_ok}/{n}  ({:.0}%)", pct(total_ok, n));
-    println!("  crit-items: {items_ok}/{items_total}  ({:.0}%)", pct(items_ok, items_total));
+    println!(
+        "  crit-items: {items_ok}/{items_total}  ({:.0}%)",
+        pct(items_ok, items_total)
+    );
     println!("  fully OK : {full_ok}/{n}  ({:.0}%)", pct(full_ok, n));
 
     // Per-receipt item completeness (1.0 when a receipt has no critical items).
-    let frac = |s: &FixtureScore| if s.items_total == 0 { 1.0 } else { s.items_ok as f64 / s.items_total as f64 };
+    let frac = |s: &FixtureScore| {
+        if s.items_total == 0 {
+            1.0
+        } else {
+            s.items_ok as f64 / s.items_total as f64
+        }
+    };
     // "Header fields" = merchant + date + total all correct (the matching keys).
     let header_ok = |s: &FixtureScore| s.merchant_ok && s.date_ok && s.total_ok;
     let mean_recall = scores.iter().map(frac).sum::<f64>() / n as f64;
     let header = scores.iter().filter(|s| header_ok(s)).count();
     // "Good enough" = header fields correct AND >= T of the items captured.
-    let good = |t: f64| scores.iter().filter(|s| header_ok(s) && frac(s) >= t - 1e-9).count();
+    let good = |t: f64| {
+        scores
+            .iter()
+            .filter(|s| header_ok(s) && frac(s) >= t - 1e-9)
+            .count()
+    };
     // Of the receipts that aren't fully-OK, why?
-    let fail_items_only = scores.iter().filter(|s| header_ok(s) && !s.is_fully_ok()).count();
+    let fail_items_only = scores
+        .iter()
+        .filter(|s| header_ok(s) && !s.is_fully_ok())
+        .count();
     let fail_header = n - header;
 
     println!("\n  --- usefulness breakdown ({n} receipts) ---");
-    println!("  mean per-receipt item recall : {:.0}%", mean_recall * 100.0);
-    println!("  merchant+date+total all OK    : {header}/{n}  ({:.0}%)", pct(header, n));
-    println!("  good enough (m/d/t + items≥80%): {}/{n}  ({:.0}%)", good(0.80), pct(good(0.80), n));
-    println!("  good enough (m/d/t + items≥90%): {}/{n}  ({:.0}%)", good(0.90), pct(good(0.90), n));
-    println!("  fully OK    (m/d/t + items=100%): {full_ok}/{n}  ({:.0}%)", pct(full_ok, n));
+    println!(
+        "  mean per-receipt item recall : {:.0}%",
+        mean_recall * 100.0
+    );
+    println!(
+        "  merchant+date+total all OK    : {header}/{n}  ({:.0}%)",
+        pct(header, n)
+    );
+    println!(
+        "  good enough (m/d/t + items≥80%): {}/{n}  ({:.0}%)",
+        good(0.80),
+        pct(good(0.80), n)
+    );
+    println!(
+        "  good enough (m/d/t + items≥90%): {}/{n}  ({:.0}%)",
+        good(0.90),
+        pct(good(0.90), n)
+    );
+    println!(
+        "  fully OK    (m/d/t + items=100%): {full_ok}/{n}  ({:.0}%)",
+        pct(full_ok, n)
+    );
     println!("  not-full breakdown: {fail_items_only} miss only some items (header OK) | {fail_header} miss merchant/date/total");
 }
 
@@ -944,7 +1207,11 @@ impl FixtureScore {
         if !self.total_ok {
             n.push("total");
         }
-        if n.is_empty() { String::new() } else { format!("   ✗ {}", n.join(",")) }
+        if n.is_empty() {
+            String::new()
+        } else {
+            format!("   ✗ {}", n.join(","))
+        }
     }
 }
 
@@ -962,7 +1229,10 @@ fn score(
                 .and_then(Value::as_array)
                 .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>())
                 .unwrap_or_default();
-            expected.get("merchant_optional").and_then(Value::as_bool).unwrap_or(false)
+            expected
+                .get("merchant_optional")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
                 || merchant_matches(m, &d.merchant)
                 || any_of.iter().any(|alt| merchant_matches(alt, &d.merchant))
         }
@@ -971,27 +1241,48 @@ fn score(
         None => true,
         Some(dt) => d.date.map(fmt_ymd).as_deref() == Some(dt),
     };
-    let total_ok = expected.get("total").and_then(Value::as_str).is_none_or(|t| price_matches(t, &d.total));
+    let total_ok = expected
+        .get("total")
+        .and_then(Value::as_str)
+        .is_none_or(|t| price_matches(t, &d.total));
 
     let mut items_ok = 0;
     let mut items_total = 0;
     if let Some(items) = expected.get("critical_items").and_then(Value::as_array) {
         for ci in items {
             items_total += 1;
-            let desc = ci.get("description").and_then(Value::as_str).unwrap_or_default();
+            let desc = ci
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let price = ci.get("price").and_then(Value::as_str).unwrap_or_default();
             // Honor `category_optional` like the Python harness: when set, the
             // item only needs the right description+price; a category mismatch is
             // tolerated (these are items even the desktop pipeline mis-categorizes).
-            let category_optional = ci.get("category_optional").and_then(Value::as_bool).unwrap_or(false);
-            let category = if category_optional { None } else { ci.get("category").and_then(Value::as_str) };
-            let matched: Vec<_> = d.items.iter().filter(|it| item_desc_matches(&it.description, desc)).collect();
+            let category_optional = ci
+                .get("category_optional")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let category = if category_optional {
+                None
+            } else {
+                ci.get("category").and_then(Value::as_str)
+            };
+            let matched: Vec<_> = d
+                .items
+                .iter()
+                .filter(|it| item_desc_matches(&it.description, desc))
+                .collect();
             let ok = matched.iter().any(|it| price_matches(price, &it.price))
                 && category.is_none_or(|cat| {
                     matched
                         .iter()
                         .filter(|it| price_matches(price, &it.price))
-                        .any(|it| it.category.as_deref().is_some_and(|c| category_matches(cat, c, mapping)))
+                        .any(|it| {
+                            it.category
+                                .as_deref()
+                                .is_some_and(|c| category_matches(cat, c, mapping))
+                        })
                 });
             if ok {
                 items_ok += 1;
@@ -1023,7 +1314,10 @@ fn score(
 // --- comparison helpers (shared semantics with tests/phase5_e2e.rs) ----------
 
 fn normalize_merchant(s: &str) -> String {
-    s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_uppercase).collect()
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_uppercase)
+        .collect()
 }
 
 fn levenshtein(a: &[u8], b: &[u8]) -> usize {
@@ -1093,13 +1387,25 @@ fn fmt_date(d: Option<(i32, u32, u32)>) -> String {
 
 fn parse_today(s: &str) -> (u16, u8, u8) {
     let p: Vec<&str> = s.split('-').collect();
-    (p[0].parse().unwrap(), p[1].parse().unwrap(), p[2].parse().unwrap())
+    (
+        p[0].parse().unwrap(),
+        p[1].parse().unwrap(),
+        p[2].parse().unwrap(),
+    )
 }
 
 fn pct(a: usize, b: usize) -> f64 {
-    if b == 0 { 100.0 } else { 100.0 * a as f64 / b as f64 }
+    if b == 0 {
+        100.0
+    } else {
+        100.0 * a as f64 / b as f64
+    }
 }
 
 fn trunc(s: &str, n: usize) -> String {
-    if s.chars().count() <= n { s.to_string() } else { format!("{}…", s.chars().take(n - 1).collect::<String>()) }
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(n - 1).collect::<String>())
+    }
 }

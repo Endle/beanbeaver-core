@@ -391,7 +391,12 @@ mod tests {
         for i in 0..n {
             let cy = 400.0 + i as f64 * 250.0;
             rows.push(det(&format!("ITEM {i}"), 200.0, cy, 200.0));
-            rows.push(det(&format!("{:.2}", (i + 1) as f64 * 1.99), 850.0, cy, 80.0));
+            rows.push(det(
+                &format!("{:.2}", (i + 1) as f64 * 1.99),
+                850.0,
+                cy,
+                80.0,
+            ));
         }
         rows
     }
@@ -439,8 +444,10 @@ mod tests {
     fn deskew_recovers_known_tilt() {
         let true_angle = 1.5;
         let straight = straight_rows(8);
-        let tilted: Vec<Detection> =
-            straight.iter().map(|d| tilt(d, true_angle, 1000.0)).collect();
+        let tilted: Vec<Detection> = straight
+            .iter()
+            .map(|d| tilt(d, true_angle, 1000.0))
+            .collect();
         let outcome = deskew(&tilted, 1000.0);
         assert!(outcome.applied);
         assert!(outcome.inlier_count >= 5);

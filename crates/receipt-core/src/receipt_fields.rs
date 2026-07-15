@@ -483,7 +483,9 @@ fn trim_tender_label(line: &str) -> String {
     if let Some(captures) = re_price_anywhere().captures(&text) {
         if let Some(matched) = captures.get(0) {
             let start = matched.start();
-            text = text[..start].trim_end_matches(['$', ' ', ':', '-', '\t']).to_string();
+            text = text[..start]
+                .trim_end_matches(['$', ' ', ':', '-', '\t'])
+                .to_string();
         }
     }
     text
@@ -806,10 +808,7 @@ mod tests {
 
     #[test]
     fn tenders_returns_empty_when_sum_does_not_reconcile() {
-        let lines = vec![
-            "TOTAL 50.00".to_string(),
-            "MASTERCARD 30.00".to_string(),
-        ];
+        let lines = vec!["TOTAL 50.00".to_string(), "MASTERCARD 30.00".to_string()];
         // Only 30 of 50 covered → reconciliation fails, drop tenders.
         assert!(extract_tenders(&lines, 5_000).is_empty());
     }
@@ -952,11 +951,7 @@ fn compare_ranked_candidates(left: &RankedDateCandidate, right: &RankedDateCandi
         .then_with(|| left.start.cmp(&right.start))
 }
 
-pub fn extract_date(
-    lines: &[String],
-    full_text: &str,
-    current_year: i32,
-) -> Option<SimpleDate> {
+pub fn extract_date(lines: &[String], full_text: &str, current_year: i32) -> Option<SimpleDate> {
     if lines.is_empty() && full_text.is_empty() {
         return None;
     }
@@ -1032,7 +1027,9 @@ pub fn extract_date(
         }
 
         for captures in re_month_name_date().captures_iter(&normalized_line) {
-            let month = captures.get(1).and_then(|m| month_number_from_name(m.as_str()));
+            let month = captures
+                .get(1)
+                .and_then(|m| month_number_from_name(m.as_str()));
             let day = captures.get(2).and_then(|m| m.as_str().parse::<i32>().ok());
             let year = captures.get(3).and_then(|m| m.as_str().parse::<i32>().ok());
             let start = captures.get(1).map(|m| m.start()).unwrap_or(0);
@@ -1050,7 +1047,9 @@ pub fn extract_date(
 
         for captures in re_dmy_month_name_date().captures_iter(&normalized_line) {
             let day = captures.get(1).and_then(|m| m.as_str().parse::<i32>().ok());
-            let month = captures.get(2).and_then(|m| month_number_from_name(m.as_str()));
+            let month = captures
+                .get(2)
+                .and_then(|m| month_number_from_name(m.as_str()));
             let year = captures.get(3).and_then(|m| m.as_str().parse::<i32>().ok());
             let start = captures.get(1).map(|m| m.start()).unwrap_or(0);
             if let (Some(month), Some(day), Some(year)) = (month, day, year) {

@@ -77,7 +77,11 @@ impl OcrEngine {
         let (out, classify_ms, recognize_ms) = self.recognize_quads_timed(img, quads)?;
         Ok((
             out,
-            OcrTimings { detect_ms, classify_ms, recognize_ms },
+            OcrTimings {
+                detect_ms,
+                classify_ms,
+                recognize_ms,
+            },
         ))
     }
 
@@ -130,7 +134,11 @@ impl OcrEngine {
                     x1 = x1.max(p[0]);
                     y1 = y1.max(p[1]);
                 }
-                let safe: String = text.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).take(20).collect();
+                let safe: String = text
+                    .chars()
+                    .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                    .take(20)
+                    .collect();
                 let _ = crop.save(format!("{d}/{i:03}_c{confidence:.2}_{safe}.png"));
                 eprintln!("REC {i:03} box=({x0:.0},{y0:.0},{x1:.0},{y1:.0}) conf={confidence:.2} text={text:?}");
             }

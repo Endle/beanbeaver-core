@@ -34,7 +34,10 @@ pub const PADDING: i64 = 50;
 // --- tolerant matchers (faithful to the Python cached harness) ----------------
 
 fn normalize_merchant(s: &str) -> String {
-    s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_uppercase).collect()
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_uppercase)
+        .collect()
 }
 
 fn levenshtein(a: &[u8], b: &[u8]) -> usize {
@@ -93,12 +96,18 @@ fn category_matches(expected: &str, actual: &str, mapping: &HashMap<String, Stri
 
 /// Recursively collect `*.expected.json` under `dir`.
 fn collect_expected(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
             collect_expected(&path, out);
-        } else if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".expected.json")) {
+        } else if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".expected.json"))
+        {
             out.push(path);
         }
     }
@@ -113,7 +122,9 @@ fn detections_from_ocr(raw: &Value) -> (Vec<RawDetection>, i64, i64) {
     let mut dets = Vec::new();
     if let Some(list) = raw["detections"].as_array() {
         for entry in list {
-            let Some(fields) = entry.as_array() else { continue };
+            let Some(fields) = entry.as_array() else {
+                continue;
+            };
             if fields.len() < 2 {
                 continue;
             }
@@ -131,8 +142,15 @@ fn detections_from_ocr(raw: &Value) -> (Vec<RawDetection>, i64, i64) {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            let confidence = text_conf.and_then(|tc| tc.get(1)).and_then(Value::as_f64).unwrap_or(0.0);
-            dets.push(RawDetection { points, text, confidence });
+            let confidence = text_conf
+                .and_then(|tc| tc.get(1))
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            dets.push(RawDetection {
+                points,
+                text,
+                confidence,
+            });
         }
     }
     (dets, w, h)
@@ -141,7 +159,12 @@ fn detections_from_ocr(raw: &Value) -> (Vec<RawDetection>, i64, i64) {
 fn str_set(v: &Value, key: &str) -> HashSet<String> {
     v.get(key)
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -205,14 +228,22 @@ pub fn run_cached_corpus(receipts_dir: &Path, overrides: &[&str]) -> CorpusResul
 
         // merchant (optional/any_of tolerated inline, like the Python harness)
         if let Some(m) = expected.get("merchant").and_then(Value::as_str) {
-            let optional = expected.get("merchant_optional").and_then(Value::as_bool).unwrap_or(false);
+            let optional = expected
+                .get("merchant_optional")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let any_of = str_set(&expected, "merchant_any_of");
             let ok = merchant_matches(m, &parsed.merchant)
-                || any_of.iter().any(|alt| merchant_matches(alt, &parsed.merchant));
+                || any_of
+                    .iter()
+                    .any(|alt| merchant_matches(alt, &parsed.merchant));
             if !ok && !optional {
                 failed.insert("merchant");
                 if !known.contains("merchant") {
-                    case_fail.push(format!("merchant expected '{m}', got '{}'", parsed.merchant));
+                    case_fail.push(format!(
+                        "merchant expected '{m}', got '{}'",
+                        parsed.merchant
+                    ));
                 }
             }
         }
@@ -251,29 +282,50 @@ pub fn run_cached_corpus(receipts_dir: &Path, overrides: &[&str]) -> CorpusResul
                     ci.get("category_optional").is_none(),
                     "{id}: 'category_optional' is banned; drop the category or add a private_rules.toml rule"
                 );
-                let desc = ci.get("description").and_then(Value::as_str).unwrap_or_default();
+                let desc = ci
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 let price = ci.get("price").and_then(Value::as_str).unwrap_or_default();
                 let want_cat = ci.get("category").and_then(Value::as_str);
-                let item_known = ci.get("known_failure").and_then(Value::as_bool).unwrap_or(false);
-                let matched: Vec<_> =
-                    parsed.items.iter().filter(|it| item_desc_matches(&it.description, desc)).collect();
+                let item_known = ci
+                    .get("known_failure")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let matched: Vec<_> = parsed
+                    .items
+                    .iter()
+                    .filter(|it| item_desc_matches(&it.description, desc))
+                    .collect();
                 let price_ok = matched.iter().any(|it| price_matches(price, &it.price));
                 let cat_ok = want_cat.is_none_or(|c| {
                     matched
                         .iter()
                         .filter(|it| price_matches(price, &it.price))
-                        .any(|it| it.category.as_deref().is_some_and(|k| category_matches(c, k, &mapping)))
+                        .any(|it| {
+                            it.category
+                                .as_deref()
+                                .is_some_and(|k| category_matches(c, k, &mapping))
+                        })
                 });
                 let item_failed = matched.is_empty() || !price_ok || !cat_ok;
                 if item_failed && !item_known {
                     let got: Vec<_> = matched
                         .iter()
-                        .map(|it| (it.description.as_str(), it.price.as_str(), it.category.as_deref()))
+                        .map(|it| {
+                            (
+                                it.description.as_str(),
+                                it.price.as_str(),
+                                it.category.as_deref(),
+                            )
+                        })
                         .collect();
                     msgs.push(format!("item '{desc}' (price {price}, cat {want_cat:?}) unmatched; candidates {got:?}"));
                     real_failure = true;
                 } else if !item_failed && item_known {
-                    msgs.push(format!("item '{desc}' marked known_failure but matched — remove the marker"));
+                    msgs.push(format!(
+                        "item '{desc}' marked known_failure but matched — remove the marker"
+                    ));
                 }
             }
             if real_failure {
@@ -289,7 +341,9 @@ pub fn run_cached_corpus(receipts_dir: &Path, overrides: &[&str]) -> CorpusResul
         // A known_failure that unexpectedly passed must be removed.
         for k in &known {
             if !failed.contains(k.as_str()) {
-                case_fail.push(format!("known_failure '{k}' unexpectedly passed — remove the marker"));
+                case_fail.push(format!(
+                    "known_failure '{k}' unexpectedly passed — remove the marker"
+                ));
             }
         }
 

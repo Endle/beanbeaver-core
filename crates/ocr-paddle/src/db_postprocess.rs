@@ -74,7 +74,10 @@ pub fn boxes_from_bitmap(
 
     let contours = find_contours::<i32>(&bitmap);
     let mut quads = Vec::new();
-    for contour in contours.into_iter().filter(|c| c.border_type == BorderType::Outer) {
+    for contour in contours
+        .into_iter()
+        .filter(|c| c.border_type == BorderType::Outer)
+    {
         if quads.len() >= cfg.max_candidates {
             break;
         }
@@ -238,10 +241,22 @@ fn point_in_quad(px: f32, py: f32, quad: &[[f32; 2]; 4]) -> bool {
 
 /// Order 4 points as top-left, top-right, bottom-right, bottom-left.
 fn order_clockwise(pts: [[f32; 2]; 4]) -> [[f32; 2]; 4] {
-    let tl = *pts.iter().min_by(|a, b| (a[0] + a[1]).total_cmp(&(b[0] + b[1]))).unwrap();
-    let br = *pts.iter().max_by(|a, b| (a[0] + a[1]).total_cmp(&(b[0] + b[1]))).unwrap();
-    let tr = *pts.iter().min_by(|a, b| (a[1] - a[0]).total_cmp(&(b[1] - b[0]))).unwrap();
-    let bl = *pts.iter().max_by(|a, b| (a[1] - a[0]).total_cmp(&(b[1] - b[0]))).unwrap();
+    let tl = *pts
+        .iter()
+        .min_by(|a, b| (a[0] + a[1]).total_cmp(&(b[0] + b[1])))
+        .unwrap();
+    let br = *pts
+        .iter()
+        .max_by(|a, b| (a[0] + a[1]).total_cmp(&(b[0] + b[1])))
+        .unwrap();
+    let tr = *pts
+        .iter()
+        .min_by(|a, b| (a[1] - a[0]).total_cmp(&(b[1] - b[0])))
+        .unwrap();
+    let bl = *pts
+        .iter()
+        .max_by(|a, b| (a[1] - a[0]).total_cmp(&(b[1] - b[0])))
+        .unwrap();
     [tl, tr, br, bl]
 }
 
@@ -261,7 +276,14 @@ mod tests {
         }
         // ratios 1.0 -> original == resized dims.
         let quads = boxes_from_bitmap(
-            &prob, h, w, w as f32, h as f32, 1.0, 1.0, &DbConfig::default(),
+            &prob,
+            h,
+            w,
+            w as f32,
+            h as f32,
+            1.0,
+            1.0,
+            &DbConfig::default(),
         );
         assert_eq!(quads.len(), 1, "expected exactly one detected box");
         let q = quads[0];
@@ -287,7 +309,14 @@ mod tests {
             }
         }
         let quads = boxes_from_bitmap(
-            &prob, h, w, w as f32, h as f32, 1.0, 1.0, &DbConfig::default(),
+            &prob,
+            h,
+            w,
+            w as f32,
+            h as f32,
+            1.0,
+            1.0,
+            &DbConfig::default(),
         );
         assert!(quads.is_empty(), "low-prob region should be dropped");
     }

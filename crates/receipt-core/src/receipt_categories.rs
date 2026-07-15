@@ -210,10 +210,7 @@ fn fuzzy_contains(keyword: &str, description: &str, threshold: Option<f64>) -> (
     }
 }
 
-pub fn find_all_matches(
-    description: &str,
-    rule_layers: &CategoryRuleLayers,
-) -> Vec<RuleMatch> {
+pub fn find_all_matches(description: &str, rule_layers: &CategoryRuleLayers) -> Vec<RuleMatch> {
     let mut matches = Vec::new();
 
     for (rule_index, rule) in rule_layers.rules.iter().enumerate() {
@@ -411,10 +408,7 @@ pub fn classify_item_key(
     best.and_then(|matched| matched.category).or(default)
 }
 
-pub fn classify_item_tags(
-    description: &str,
-    rule_layers: &CategoryRuleLayers,
-) -> Vec<String> {
+pub fn classify_item_tags(description: &str, rule_layers: &CategoryRuleLayers) -> Vec<String> {
     let matches = find_all_matches(description, rule_layers);
     let mut tags = Vec::new();
     let mut seen = HashSet::new();
@@ -489,11 +483,23 @@ mod tests {
     fn public_classifier_categorizes_real_receipt_items() {
         let cases: &[(&str, &str)] = &[
             // seasoning
-            ("SAPORITO FOODS CORN OIL 2.84L", "Expenses:Food:Grocery:Seasoning"),
-            ("FLOWER PERICARPIURN ZANTHOXYLI", "Expenses:Food:Grocery:Seasoning"),
-            ("T&T SLICED RED CHILI PEPPER", "Expenses:Food:Grocery:Seasoning"),
+            (
+                "SAPORITO FOODS CORN OIL 2.84L",
+                "Expenses:Food:Grocery:Seasoning",
+            ),
+            (
+                "FLOWER PERICARPIURN ZANTHOXYLI",
+                "Expenses:Food:Grocery:Seasoning",
+            ),
+            (
+                "T&T SLICED RED CHILI PEPPER",
+                "Expenses:Food:Grocery:Seasoning",
+            ),
             ("Pork Lard", "Expenses:Food:Grocery:Seasoning"),
-            ("D.M.D White Pepper Powder", "Expenses:Food:Grocery:Seasoning"),
+            (
+                "D.M.D White Pepper Powder",
+                "Expenses:Food:Grocery:Seasoning",
+            ),
             ("YYH Chillies 80g", "Expenses:Food:Grocery:Seasoning"),
             // alcoholic
             ("COORS LIGHT 6 PK HQ", "Expenses:Food:AlcoholicBeverage"),
@@ -506,17 +512,26 @@ mod tests {
             // dairy (incl. milk/chocolate tiebreak + single-char noise)
             ("Natrel - 2% Partly Skimme", "Expenses:Food:Grocery:Dairy"),
             ("Milk Chocolate 1%", "Expenses:Food:Grocery:Dairy"),
-            ("NEILSON JOYYA CHOCOLATE E MILK", "Expenses:Food:Grocery:Dairy"),
+            (
+                "NEILSON JOYYA CHOCOLATE E MILK",
+                "Expenses:Food:Grocery:Dairy",
+            ),
             ("1355285 TOGO VAN 2KG", "Expenses:Food:Grocery:Dairy"),
             // juice vs fruit-flavour keyword
-            ("Tropicana - Blackberry Bl", "Expenses:Food:Grocery:Drink:Juice"),
+            (
+                "Tropicana - Blackberry Bl",
+                "Expenses:Food:Grocery:Drink:Juice",
+            ),
             // drink (brand-prefix / truncation / soft-drink-over-fruit)
             ("Soft Drink Orange", "Expenses:Food:Grocery:Drink"),
             ("YQSL - Grapefruit Tea Dri", "Expenses:Food:Grocery:Drink"),
             ("LZY - Original Flavor Dri", "Expenses:Food:Grocery:Drink"),
             ("Wing Hing Sweet Soy Bever", "Expenses:Food:Grocery:Drink"),
             ("*Yuan Qi Sen Lin Iced Tea", "Expenses:Food:Grocery:Drink"),
-            ("'Tropicana Daily C Tea Dr ×1", "Expenses:Food:Grocery:Drink"),
+            (
+                "'Tropicana Daily C Tea Dr ×1",
+                "Expenses:Food:Grocery:Drink",
+            ),
             ("TY - Lemon Tea", "Expenses:Food:Grocery:Drink"),
             // coffee
             ("108934 RAINFOREST", "Expenses:Food:Grocery:Drink:Coffee"),
@@ -525,12 +540,18 @@ mod tests {
             ("HLY - Fish Cracker Seawee", "Expenses:Food:Grocery:Snacks"),
             ("1968518 WHITE RABBIT", "Expenses:Food:Grocery:Snacks"),
             ("*Sandwich Biscuits(Matcha)", "Expenses:Food:Grocery:Snacks"),
-            ("*Or:ion Double Choco Pie 12", "Expenses:Food:Grocery:Snacks"),
+            (
+                "*Or:ion Double Choco Pie 12",
+                "Expenses:Food:Grocery:Snacks",
+            ),
             ("La Pian (Spicy Gluten Sli", "Expenses:Food:Grocery:Snacks"),
             // staple
             ("LHL - Malatang Slightly S", "Expenses:Food:Grocery:Staple"),
             // seafood
-            ("BQ - Frozen Raw Peeled Un", "Expenses:Food:Grocery:Seafood:Shrimp"),
+            (
+                "BQ - Frozen Raw Peeled Un",
+                "Expenses:Food:Grocery:Seafood:Shrimp",
+            ),
             // bakery
             ("BAKERY", "Expenses:Food:Grocery:Bakery"),
             ("Red Bean Pinapple Bun", "Expenses:Food:Grocery:Bakery"),
@@ -574,7 +595,11 @@ mod tests {
                 failures.push(format!("{desc:?} => {got:?}, expected {expected:?}"));
             }
         }
-        assert!(failures.is_empty(), "categorization drift:\n{}", failures.join("\n"));
+        assert!(
+            failures.is_empty(),
+            "categorization drift:\n{}",
+            failures.join("\n")
+        );
     }
 
     /// Semantic classification (key + tags) from the bundled rules. Ported from
@@ -588,22 +613,36 @@ mod tests {
 
         assert_eq!(key("347937 CHICKEN").as_deref(), Some("grocery_meat"));
         for t in ["grocery", "meat", "chicken"] {
-            assert!(tags("347937 CHICKEN").iter().any(|x| x == t), "CHICKEN missing tag {t}");
+            assert!(
+                tags("347937 CHICKEN").iter().any(|x| x == t),
+                "CHICKEN missing tag {t}"
+            );
         }
 
         assert_eq!(key("435259 FINE-FILT").as_deref(), Some("grocery_dairy"));
         for t in ["grocery", "dairy", "milk"] {
-            assert!(tags("435259 FINE-FILT").iter().any(|x| x == t), "FINE-FILT missing tag {t}");
+            assert!(
+                tags("435259 FINE-FILT").iter().any(|x| x == t),
+                "FINE-FILT missing tag {t}"
+            );
         }
 
         // LCBO card: tags only, no spendable category.
         assert_eq!(key("810 LCBO CARD"), None);
         for t in ["alcohol", "gift_card"] {
-            assert!(tags("810 LCBO CARD").iter().any(|x| x == t), "LCBO missing tag {t}");
+            assert!(
+                tags("810 LCBO CARD").iter().any(|x| x == t),
+                "LCBO missing tag {t}"
+            );
         }
 
-        assert_eq!(key("2773717 MONSTER VRTY").as_deref(), Some("grocery_drink"));
-        assert!(tags("2773717 MONSTER VRTY").iter().any(|x| x == "energy_drink"));
+        assert_eq!(
+            key("2773717 MONSTER VRTY").as_deref(),
+            Some("grocery_drink")
+        );
+        assert!(tags("2773717 MONSTER VRTY")
+            .iter()
+            .any(|x| x == "energy_drink"));
 
         // MARUTAI is a project-only override; public rules must not classify it.
         assert_eq!(key("MARUTAI"), None);
@@ -625,15 +664,26 @@ mod tests {
             }],
         };
         let account_config: HashMap<String, String> =
-            [("zzz_custom".to_string(), "Expenses:Project:Zzz".to_string())].into_iter().collect();
-        let layers = build_rule_layers(default_category_accounts(), vec![config], vec![account_config]);
+            [("zzz_custom".to_string(), "Expenses:Project:Zzz".to_string())]
+                .into_iter()
+                .collect();
+        let layers = build_rule_layers(
+            default_category_accounts(),
+            vec![config],
+            vec![account_config],
+        );
 
         let categories = list_item_categories(&layers);
         let mut sorted = categories.clone();
         sorted.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(categories, sorted, "not sorted by key");
-        assert!(categories.contains(&("Expenses:Project:Custom".to_string(), "Expenses:Project:Custom".to_string())));
-        assert!(categories.contains(&("zzz_custom".to_string(), "Expenses:Project:Zzz".to_string())));
+        assert!(categories.contains(&(
+            "Expenses:Project:Custom".to_string(),
+            "Expenses:Project:Custom".to_string()
+        )));
+        assert!(
+            categories.contains(&("zzz_custom".to_string(), "Expenses:Project:Zzz".to_string()))
+        );
     }
 
     /// A project classifier rule whose `key` resolves through a project account
@@ -650,13 +700,19 @@ mod tests {
                 exact_only: true,
             }],
         };
-        let account_config: HashMap<String, String> =
-            [("grocery_staple".to_string(), "Expenses:Food:Grocery:Staple".to_string())]
-                .into_iter()
-                .collect();
+        let account_config: HashMap<String, String> = [(
+            "grocery_staple".to_string(),
+            "Expenses:Food:Grocery:Staple".to_string(),
+        )]
+        .into_iter()
+        .collect();
         let layers = build_rule_layers(HashMap::new(), vec![config], vec![account_config]);
         let key = classify_item_key("CUSTOM NOODLE BRAND", &layers, None).expect("classifies");
-        let mapping: HashMap<String, String> = layers.account_mapping.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let mapping: HashMap<String, String> = layers
+            .account_mapping
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         assert_eq!(
             resolve_account_target(Some(&key), &mapping, None).as_deref(),
             Some("Expenses:Food:Grocery:Staple")

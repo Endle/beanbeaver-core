@@ -30,7 +30,11 @@ fn private_cached_e2e() {
     };
     let root = PathBuf::from(root);
     let fixtures = root.join("receipts_e2e");
-    assert!(fixtures.is_dir(), "no receipts_e2e/ under {}", root.display());
+    assert!(
+        fixtures.is_dir(),
+        "no receipts_e2e/ under {}",
+        root.display()
+    );
 
     // Overrides: the corpus's transitional `private_rules.toml`. Absent => public
     // rules only (the future pure-data state).
@@ -39,10 +43,21 @@ fn private_cached_e2e() {
 
     let result = run_cached_corpus(&fixtures, &overrides);
 
-    eprintln!("private_cached_e2e: ran {} cached case(s), {} divergence(s)", result.ran, result.failures.len());
+    eprintln!(
+        "private_cached_e2e: ran {} cached case(s), {} divergence(s)",
+        result.ran,
+        result.failures.len()
+    );
     for f in &result.failures {
         eprintln!("  ✗ {f}");
     }
-    assert!(result.failures.is_empty(), "{} private cached check(s) diverged from expected", result.failures.len());
-    assert!(result.ran > 0, "no cached (.ocr.json) fixtures were executed");
+    assert!(
+        result.failures.is_empty(),
+        "{} private cached check(s) diverged from expected",
+        result.failures.len()
+    );
+    assert!(
+        result.ran > 0,
+        "no cached (.ocr.json) fixtures were executed"
+    );
 }

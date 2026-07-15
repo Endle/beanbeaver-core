@@ -20,7 +20,9 @@ use std::io::Cursor;
 
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
-use image::{DynamicImage, ExtendedColorType, ImageDecoder, ImageEncoder, ImageReader, Rgb, RgbImage};
+use image::{
+    DynamicImage, ExtendedColorType, ImageDecoder, ImageEncoder, ImageReader, Rgb, RgbImage,
+};
 
 /// Matches `image_pipeline.MAX_IMAGE_DIMENSION`.
 pub const MAX_IMAGE_DIMENSION: u32 = 3000;
@@ -30,22 +32,13 @@ pub const OCR_IMAGE_PADDING: u32 = 50;
 pub const JPEG_QUALITY: u8 = 95;
 
 /// Failure decoding the input or encoding the output.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum PreprocessError {
+    #[error("image decode failed: {0}")]
     Decode(String),
+    #[error("jpeg encode failed: {0}")]
     Encode(String),
 }
-
-impl std::fmt::Display for PreprocessError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PreprocessError::Decode(m) => write!(f, "image decode failed: {m}"),
-            PreprocessError::Encode(m) => write!(f, "jpeg encode failed: {m}"),
-        }
-    }
-}
-
-impl std::error::Error for PreprocessError {}
 
 /// Full pre-OCR pipeline on encoded image bytes (JPEG/PNG in → JPEG out), the
 /// drop-in replacement for Python `resize_image_bytes`.
@@ -114,7 +107,12 @@ fn pad_white(img: &RgbImage, padding: u32) -> RgbImage {
 fn encode_jpeg(img: &RgbImage, quality: u8) -> Result<Vec<u8>, PreprocessError> {
     let mut buf = Vec::new();
     JpegEncoder::new_with_quality(&mut buf, quality)
-        .write_image(img.as_raw(), img.width(), img.height(), ExtendedColorType::Rgb8)
+        .write_image(
+            img.as_raw(),
+            img.width(),
+            img.height(),
+            ExtendedColorType::Rgb8,
+        )
         .map_err(|e| PreprocessError::Encode(e.to_string()))?;
     Ok(buf)
 }

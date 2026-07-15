@@ -522,10 +522,7 @@ fn trailing_price_scaled(text: &str) -> Option<i64> {
     let normalized = normalize_decimal_spacing(text.trim());
     let captures = re_trailing_price().captures(&normalized)?;
     let value = parse_scaled_decimal(captures.get(1)?.as_str())?;
-    let is_negative = captures
-        .get(2)
-        .map(|m| m.as_str() == "-")
-        .unwrap_or(false);
+    let is_negative = captures.get(2).map(|m| m.as_str() == "-").unwrap_or(false);
     Some(if is_negative { -value } else { value })
 }
 
@@ -655,14 +652,8 @@ fn is_price_word(text: &str) -> Option<i64> {
         .unwrap_or(normalized.as_str());
     if let Some(captures) = re_price_word().captures(stripped) {
         let value = parse_scaled_decimal(captures.get(2)?.as_str())?;
-        let leading_minus = captures
-            .get(1)
-            .map(|m| m.as_str() == "-")
-            .unwrap_or(false);
-        let trailing_minus = captures
-            .get(3)
-            .map(|m| m.as_str() == "-")
-            .unwrap_or(false);
+        let leading_minus = captures.get(1).map(|m| m.as_str() == "-").unwrap_or(false);
+        let trailing_minus = captures.get(3).map(|m| m.as_str() == "-").unwrap_or(false);
         let is_negative = leading_minus || trailing_minus;
         return Some(if is_negative { -value } else { value });
     }
@@ -1214,10 +1205,8 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
             // drifted in from another row during line grouping (No Frills'
             // "1.775 kg @ $1.52/kg" carrying the 5.99 of the melon below), so
             // fall back to plain nearest-line resolution.
-            let own_price = weight_row_price_reconciles(
-                &source_line.left_text,
-                price_candidate.price_scaled,
-            );
+            let own_price =
+                weight_row_price_reconciles(&source_line.left_text, price_candidate.price_scaled);
             chosen_line_index = match (
                 nearest_unpriced_above,
                 nearest_unpriced_below,
@@ -1316,7 +1305,8 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
             && !used_line_indices[price_candidate.source_line_index]
         {
             if shifted_deposit_target.is_none()
-                && trailing_price_scaled(&source_line.full_text) == Some(price_candidate.price_scaled)
+                && trailing_price_scaled(&source_line.full_text)
+                    == Some(price_candidate.price_scaled)
                 && is_valid_item_line(source_line, total_line_y)
                 && !looks_like_quantity_expression(&source_line.left_text)
             {
@@ -1629,8 +1619,14 @@ mod tests {
             .map(|item| (item.description, item.price_scaled))
             .collect::<Vec<_>>();
 
-        assert!(observed.contains(&("NAPA".to_string(), 47_500)), "{observed:?}");
-        assert!(observed.contains(&("STRAWBERRY".to_string(), 50_000)), "{observed:?}");
+        assert!(
+            observed.contains(&("NAPA".to_string(), 47_500)),
+            "{observed:?}"
+        );
+        assert!(
+            observed.contains(&("STRAWBERRY".to_string(), 50_000)),
+            "{observed:?}"
+        );
         assert!(
             observed.contains(&("T&T PRESERVED DUCK EGGS".to_string(), 59_900)),
             "{observed:?}"
@@ -1694,11 +1690,16 @@ mod tests {
         assert!(has("BANANA", 27_000), "{observed:?}");
         assert!(has("WMELON RED SOLS", 59_900), "{observed:?}");
         for price in [42_800, 45_000, 48_100, 44_300] {
-            assert!(has("CHERRIES RED", price), "missing CHERRIES RED {price}: {observed:?}");
+            assert!(
+                has("CHERRIES RED", price),
+                "missing CHERRIES RED {price}: {observed:?}"
+            );
         }
         assert!(has("PEACH YELLOW", 19_600), "{observed:?}");
         assert!(
-            !observed.iter().any(|(desc, _)| desc.contains("Tare") || desc.contains("Gro")),
+            !observed
+                .iter()
+                .any(|(desc, _)| desc.contains("Tare") || desc.contains("Gro")),
             "{observed:?}"
         );
     }
@@ -1748,7 +1749,11 @@ mod tests {
             .iter()
             .filter(|item| item.price_scaled == 60_900)
             .count();
-        assert_eq!(milk_count, 2, "both MILK 2% lines expected, got {:?}", outcome.items);
+        assert_eq!(
+            milk_count, 2,
+            "both MILK 2% lines expected, got {:?}",
+            outcome.items
+        );
     }
 
     #[test]
@@ -1902,7 +1907,10 @@ mod tests {
     // The Rust spatial extractor takes no rule layers (categorization is a later stage).
 
     fn line(text: &str, words: Vec<WordInput>) -> LineInput {
-        LineInput { text: text.to_string(), words }
+        LineInput {
+            text: text.to_string(),
+            words,
+        }
     }
 
     fn pairs_of(lines: Vec<LineInput>) -> Vec<(String, i64)> {
@@ -1918,35 +1926,57 @@ mod tests {
     #[test]
     fn keeps_next_priced_item_from_stealing_code_only_price_row() {
         let lines = vec![
-            line("26-L.IQUOR COORS LIGHT 6 PK HQ 15.79", vec![
-                word("26-L.IQUOR", 0.031, 0.289, 0.191, 0.309),
-                word("COORS LIGHT 6 PK HQ", 0.318, 0.301, 0.688, 0.328),
-                word("15.79", 0.760, 0.298, 0.860, 0.324),
-            ]),
-            line("05632700795 0.60", vec![
-                word("05632700795", 0.068, 0.309, 0.257, 0.328),
-                word("0.60", 0.881, 0.317, 0.963, 0.340),
-            ]),
-            line("DEPOSIT 1 COORS PINEAPPLE HQ 3.19", vec![
-                word("DEPOSIT 1", 0.102, 0.328, 0.258, 0.348),
-                word("COORS PINEAPPLE", 0.322, 0.342, 0.579, 0.365),
-                word("HQ", 0.657, 0.341, 0.701, 0.362),
-                word("3.19", 0.793, 0.338, 0.876, 0.361),
-            ]),
-            line("05632702339 0.10", vec![
-                word("05632702339", 0.070, 0.347, 0.259, 0.366),
-                word("0.10", 0.882, 0.356, 0.963, 0.377),
-            ]),
-            line("DEPOSIT 1", vec![word("DEPOSIT 1", 0.103, 0.366, 0.260, 0.385)]),
-            line("TOTAL 19.68", vec![
-                word("TOTAL", 0.090, 0.500, 0.180, 0.512),
-                word("19.68", 0.880, 0.500, 0.950, 0.512),
-            ]),
+            line(
+                "26-L.IQUOR COORS LIGHT 6 PK HQ 15.79",
+                vec![
+                    word("26-L.IQUOR", 0.031, 0.289, 0.191, 0.309),
+                    word("COORS LIGHT 6 PK HQ", 0.318, 0.301, 0.688, 0.328),
+                    word("15.79", 0.760, 0.298, 0.860, 0.324),
+                ],
+            ),
+            line(
+                "05632700795 0.60",
+                vec![
+                    word("05632700795", 0.068, 0.309, 0.257, 0.328),
+                    word("0.60", 0.881, 0.317, 0.963, 0.340),
+                ],
+            ),
+            line(
+                "DEPOSIT 1 COORS PINEAPPLE HQ 3.19",
+                vec![
+                    word("DEPOSIT 1", 0.102, 0.328, 0.258, 0.348),
+                    word("COORS PINEAPPLE", 0.322, 0.342, 0.579, 0.365),
+                    word("HQ", 0.657, 0.341, 0.701, 0.362),
+                    word("3.19", 0.793, 0.338, 0.876, 0.361),
+                ],
+            ),
+            line(
+                "05632702339 0.10",
+                vec![
+                    word("05632702339", 0.070, 0.347, 0.259, 0.366),
+                    word("0.10", 0.882, 0.356, 0.963, 0.377),
+                ],
+            ),
+            line(
+                "DEPOSIT 1",
+                vec![word("DEPOSIT 1", 0.103, 0.366, 0.260, 0.385)],
+            ),
+            line(
+                "TOTAL 19.68",
+                vec![
+                    word("TOTAL", 0.090, 0.500, 0.180, 0.512),
+                    word("19.68", 0.880, 0.500, 0.950, 0.512),
+                ],
+            ),
         ];
         let pairs = pairs_of(lines);
         assert!(pairs.contains(&("26-L.IQUOR COORS LIGHT 6 PK HQ".to_string(), 157_900)));
-        assert!(pairs.iter().any(|(d, p)| d.contains("COORS PINEAPPLE") && *p == 31_900));
-        assert!(!pairs.iter().any(|(d, p)| d.contains("COORS PINEAPPLE") && *p == 6_000));
+        assert!(pairs
+            .iter()
+            .any(|(d, p)| d.contains("COORS PINEAPPLE") && *p == 31_900));
+        assert!(!pairs
+            .iter()
+            .any(|(d, p)| d.contains("COORS PINEAPPLE") && *p == 6_000));
     }
 
     /// A quantity total ("3@$0.10 2.79") must attach to the multi-buy item, not
@@ -1954,35 +1984,58 @@ mod tests {
     #[test]
     fn keeps_quantity_total_off_deposit_stub() {
         let lines = vec![
-            line("(3)06365703339 GROWERS CIDER HQ 10.47", vec![
-                word("(3)06365703339", 0.074, 0.385, 0.310, 0.403),
-                word("GROWERS CIDER", 0.373, 0.381, 0.597, 0.403),
-                word("HQ", 0.657, 0.379, 0.702, 0.400),
-                word("10.47", 0.869, 0.393, 0.963, 0.415),
-            ]),
-            line("3 @ $3.49", vec![word("3 @ $3.49", 0.102, 0.403, 0.261, 0.422)]),
-            line("DEPOSIT 1 0.30", vec![
-                word("DEPOSIT 1", 0.100, 0.421, 0.258, 0.439),
-                word("0.30", 0.884, 0.430, 0.961, 0.452),
-            ]),
-            line("3@$0.10 2.79", vec![
-                word("3@$0.10", 0.098, 0.438, 0.225, 0.457),
-                word("2.79", 0.812, 0.451, 0.893, 0.473),
-            ]),
-            line("06365703620 GROW CIDER HQ 0.10", vec![
-                word("06365703620", 0.061, 0.457, 0.259, 0.475),
-                word("GROW CIDER", 0.322, 0.456, 0.498, 0.476),
-                word("HQ", 0.676, 0.454, 0.720, 0.475),
-                word("0.10", 0.882, 0.469, 0.964, 0.492),
-            ]),
-            line("DEPOSIT 1", vec![word("DEPOSIT 1", 0.094, 0.475, 0.256, 0.495)]),
-            line("TOTAL 13.66", vec![
-                word("TOTAL", 0.090, 0.500, 0.180, 0.512),
-                word("13.66", 0.880, 0.500, 0.950, 0.512),
-            ]),
+            line(
+                "(3)06365703339 GROWERS CIDER HQ 10.47",
+                vec![
+                    word("(3)06365703339", 0.074, 0.385, 0.310, 0.403),
+                    word("GROWERS CIDER", 0.373, 0.381, 0.597, 0.403),
+                    word("HQ", 0.657, 0.379, 0.702, 0.400),
+                    word("10.47", 0.869, 0.393, 0.963, 0.415),
+                ],
+            ),
+            line(
+                "3 @ $3.49",
+                vec![word("3 @ $3.49", 0.102, 0.403, 0.261, 0.422)],
+            ),
+            line(
+                "DEPOSIT 1 0.30",
+                vec![
+                    word("DEPOSIT 1", 0.100, 0.421, 0.258, 0.439),
+                    word("0.30", 0.884, 0.430, 0.961, 0.452),
+                ],
+            ),
+            line(
+                "3@$0.10 2.79",
+                vec![
+                    word("3@$0.10", 0.098, 0.438, 0.225, 0.457),
+                    word("2.79", 0.812, 0.451, 0.893, 0.473),
+                ],
+            ),
+            line(
+                "06365703620 GROW CIDER HQ 0.10",
+                vec![
+                    word("06365703620", 0.061, 0.457, 0.259, 0.475),
+                    word("GROW CIDER", 0.322, 0.456, 0.498, 0.476),
+                    word("HQ", 0.676, 0.454, 0.720, 0.475),
+                    word("0.10", 0.882, 0.469, 0.964, 0.492),
+                ],
+            ),
+            line(
+                "DEPOSIT 1",
+                vec![word("DEPOSIT 1", 0.094, 0.475, 0.256, 0.495)],
+            ),
+            line(
+                "TOTAL 13.66",
+                vec![
+                    word("TOTAL", 0.090, 0.500, 0.180, 0.512),
+                    word("13.66", 0.880, 0.500, 0.950, 0.512),
+                ],
+            ),
         ];
         let pairs = pairs_of(lines);
-        assert!(pairs.iter().any(|(d, p)| d.contains("GROW CIDER") && *p == 27_900));
+        assert!(pairs
+            .iter()
+            .any(|(d, p)| d.contains("GROW CIDER") && *p == 27_900));
         assert!(!pairs.iter().any(|(d, p)| d == "DEPOSIT 1" && *p == 27_900));
     }
 
@@ -1991,25 +2044,37 @@ mod tests {
     #[test]
     fn assigns_duplicate_code_row_price_to_next_unpriced_item() {
         let lines = vec![
-            line("27-PRODUCE CANTALOUPE MRJ 1.99", vec![
-                word("27-PRODUCE", 0.017, 0.493, 0.205, 0.514),
-                word("CANTALOUPE", 0.318, 0.510, 0.496, 0.529),
-                word("MRJ", 0.676, 0.510, 0.738, 0.529),
-                word("1.99", 0.817, 0.507, 0.896, 0.528),
-            ]),
-            line("4050 1.99", vec![
-                word("4050", 0.055, 0.513, 0.132, 0.532),
-                word("1.99", 0.784, 0.525, 0.862, 0.547),
-            ]),
-            line("81363501124 BLACKBERRIES 60Z MRJ", vec![
-                word("81363501124", 0.054, 0.531, 0.254, 0.551),
-                word("BLACKBERRIES 60Z", 0.319, 0.528, 0.602, 0.549),
-                word("MRJ", 0.641, 0.528, 0.704, 0.547),
-            ]),
-            line("TOTAL 3.98", vec![
-                word("TOTAL", 0.090, 0.600, 0.180, 0.612),
-                word("3.98", 0.880, 0.600, 0.950, 0.612),
-            ]),
+            line(
+                "27-PRODUCE CANTALOUPE MRJ 1.99",
+                vec![
+                    word("27-PRODUCE", 0.017, 0.493, 0.205, 0.514),
+                    word("CANTALOUPE", 0.318, 0.510, 0.496, 0.529),
+                    word("MRJ", 0.676, 0.510, 0.738, 0.529),
+                    word("1.99", 0.817, 0.507, 0.896, 0.528),
+                ],
+            ),
+            line(
+                "4050 1.99",
+                vec![
+                    word("4050", 0.055, 0.513, 0.132, 0.532),
+                    word("1.99", 0.784, 0.525, 0.862, 0.547),
+                ],
+            ),
+            line(
+                "81363501124 BLACKBERRIES 60Z MRJ",
+                vec![
+                    word("81363501124", 0.054, 0.531, 0.254, 0.551),
+                    word("BLACKBERRIES 60Z", 0.319, 0.528, 0.602, 0.549),
+                    word("MRJ", 0.641, 0.528, 0.704, 0.547),
+                ],
+            ),
+            line(
+                "TOTAL 3.98",
+                vec![
+                    word("TOTAL", 0.090, 0.600, 0.180, 0.612),
+                    word("3.98", 0.880, 0.600, 0.950, 0.612),
+                ],
+            ),
         ];
         let pairs = pairs_of(lines);
         assert!(pairs.contains(&("CANTALOUPE".to_string(), 19_900)));
@@ -2021,24 +2086,36 @@ mod tests {
     #[test]
     fn accepts_embedded_trailing_price_word() {
         let lines = vec![
-            line("2146010 SEAFOOD CNTR gnigoQq bn14.99", vec![
-                word("2146010", 0.056, 0.568, 0.190, 0.589),
-                word("SEAFOOD CNTR", 0.320, 0.565, 0.539, 0.585),
-                word("gnigoQq bn14.99", 0.567, 0.564, 0.899, 0.586),
-            ]),
-            line("2146010b SEAFOOD CNTR noitqQ 14.99", vec![
-                word("2146010b", 0.060, 0.586, 0.233, 0.606),
-                word("SEAFOOD CNTR", 0.320, 0.584, 0.534, 0.606),
-                word("noitqQ", 0.581, 0.586, 0.706, 0.611),
-                word("14.99", 0.803, 0.584, 0.898, 0.606),
-            ]),
-            line("TOTAL 29.98", vec![
-                word("TOTAL", 0.090, 0.650, 0.180, 0.662),
-                word("29.98", 0.880, 0.650, 0.950, 0.662),
-            ]),
+            line(
+                "2146010 SEAFOOD CNTR gnigoQq bn14.99",
+                vec![
+                    word("2146010", 0.056, 0.568, 0.190, 0.589),
+                    word("SEAFOOD CNTR", 0.320, 0.565, 0.539, 0.585),
+                    word("gnigoQq bn14.99", 0.567, 0.564, 0.899, 0.586),
+                ],
+            ),
+            line(
+                "2146010b SEAFOOD CNTR noitqQ 14.99",
+                vec![
+                    word("2146010b", 0.060, 0.586, 0.233, 0.606),
+                    word("SEAFOOD CNTR", 0.320, 0.584, 0.534, 0.606),
+                    word("noitqQ", 0.581, 0.586, 0.706, 0.611),
+                    word("14.99", 0.803, 0.584, 0.898, 0.606),
+                ],
+            ),
+            line(
+                "TOTAL 29.98",
+                vec![
+                    word("TOTAL", 0.090, 0.650, 0.180, 0.662),
+                    word("29.98", 0.880, 0.650, 0.950, 0.662),
+                ],
+            ),
         ];
         let pairs = pairs_of(lines);
-        let seafood = pairs.iter().filter(|(d, p)| d.contains("SEAFOOD CNTR") && *p == 149_900).count();
+        let seafood = pairs
+            .iter()
+            .filter(|(d, p)| d.contains("SEAFOOD CNTR") && *p == 149_900)
+            .count();
         assert_eq!(seafood, 2);
     }
 }

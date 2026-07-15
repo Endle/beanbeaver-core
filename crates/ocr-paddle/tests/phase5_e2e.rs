@@ -51,11 +51,16 @@ const KNOWN_ON_DEVICE_GAPS: &[(&str, &str)] = &[
 ];
 
 fn repo_path(rel: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(rel)
 }
 
 fn normalize_merchant(s: &str) -> String {
-    s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_uppercase).collect()
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_uppercase)
+        .collect()
 }
 
 fn levenshtein(a: &[u8], b: &[u8]) -> usize {
@@ -136,8 +141,10 @@ fn category_matches(expected: &str, actual: &str, mapping: &HashMap<String, Stri
 fn phase5_on_device_vs_expected() {
     let fixtures = repo_path("crates/receipt-core/tests/receipts_e2e");
     let models = repo_path("models");
-    let account_mapping: HashMap<String, String> =
-        default_parser_rule_layers().account_mapping.into_iter().collect();
+    let account_mapping: HashMap<String, String> = default_parser_rule_layers()
+        .account_mapping
+        .into_iter()
+        .collect();
 
     let mut engine = OcrEngine::from_paths(
         models.join("PP-OCRv5_mobile_det.onnx"),
@@ -165,24 +172,35 @@ fn phase5_on_device_vs_expected() {
         }
         ran += 1;
 
-        let expected: Value =
-            serde_json::from_str(&fs::read_to_string(fixtures.join(format!("{name}.expected.json"))).unwrap())
-                .unwrap();
+        let expected: Value = serde_json::from_str(
+            &fs::read_to_string(fixtures.join(format!("{name}.expected.json"))).unwrap(),
+        )
+        .unwrap();
         let img = image::open(&jpg).expect("decode fixture").to_rgb8();
-        let pr =
-            process_image(&mut engine, &img, &format!("{name}.jpg"), (2026, 6, 21), "Liabilities:CreditCard", None)
-                .expect("process_image");
+        let pr = process_image(
+            &mut engine,
+            &img,
+            &format!("{name}.jpg"),
+            (2026, 6, 21),
+            "Liabilities:CreditCard",
+            None,
+        )
+        .expect("process_image");
         let d = &pr.parsed;
         let mut fail = |msg: String| failures.push(format!("{name}: {msg}"));
 
         if let Some(m) = expected.get("merchant").and_then(Value::as_str) {
-            let optional = expected.get("merchant_optional").and_then(Value::as_bool).unwrap_or(false);
+            let optional = expected
+                .get("merchant_optional")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let any_of = expected
                 .get("merchant_any_of")
                 .and_then(Value::as_array)
                 .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>())
                 .unwrap_or_default();
-            let ok = merchant_matches(m, &d.merchant) || any_of.iter().any(|alt| merchant_matches(alt, &d.merchant));
+            let ok = merchant_matches(m, &d.merchant)
+                || any_of.iter().any(|alt| merchant_matches(alt, &d.merchant));
             if !ok && !optional {
                 fail(format!("merchant expected '{m}', got '{}'", d.merchant));
             }
@@ -208,26 +226,47 @@ fn phase5_on_device_vs_expected() {
 
         if let Some(items) = expected.get("critical_items").and_then(Value::as_array) {
             for ci in items {
-                let desc = ci.get("description").and_then(Value::as_str).unwrap_or_default();
+                let desc = ci
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 let price = ci.get("price").and_then(Value::as_str).unwrap_or_default();
                 // Honor `category_optional` like the Python harness: when set, only
                 // description+price are required and a category mismatch is tolerated.
-                let category_optional = ci.get("category_optional").and_then(Value::as_bool).unwrap_or(false);
-                let category = if category_optional { None } else { ci.get("category").and_then(Value::as_str) };
+                let category_optional = ci
+                    .get("category_optional")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let category = if category_optional {
+                    None
+                } else {
+                    ci.get("category").and_then(Value::as_str)
+                };
                 let is_known_gap = KNOWN_ON_DEVICE_GAPS.contains(&(name.as_str(), desc));
                 // `"known_failure": true` marks a *parser* gap the cached harness
                 // already tolerates (it diverges on the frozen snapshot too), as
                 // opposed to KNOWN_ON_DEVICE_GAPS, which are live-OCR-only parity
                 // gaps. Honor it here so this gate stays about on-device parity.
-                let is_parser_gap = ci.get("known_failure").and_then(Value::as_bool).unwrap_or(false);
+                let is_parser_gap = ci
+                    .get("known_failure")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
 
-                let matched: Vec<_> = d.items.iter().filter(|it| item_desc_matches(&it.description, desc)).collect();
+                let matched: Vec<_> = d
+                    .items
+                    .iter()
+                    .filter(|it| item_desc_matches(&it.description, desc))
+                    .collect();
                 let item_ok = matched.iter().any(|it| price_matches(price, &it.price))
                     && category.is_none_or(|cat| {
                         matched
                             .iter()
                             .filter(|it| price_matches(price, &it.price))
-                            .any(|it| it.category.as_deref().is_some_and(|c| category_matches(cat, c, &account_mapping)))
+                            .any(|it| {
+                                it.category
+                                    .as_deref()
+                                    .is_some_and(|c| category_matches(cat, c, &account_mapping))
+                            })
                     });
 
                 if item_ok {
@@ -243,15 +282,22 @@ fn phase5_on_device_vs_expected() {
                     eprintln!("  ~ {name}: known gap '{desc}'");
                     continue;
                 }
-                let got: Vec<_> = matched.iter().map(|it| (it.description.as_str(), it.price.as_str())).collect();
-                fail(format!("item '{desc}' (price {price}, cat {category:?}) unmatched; candidates {got:?}"));
+                let got: Vec<_> = matched
+                    .iter()
+                    .map(|it| (it.description.as_str(), it.price.as_str()))
+                    .collect();
+                fail(format!(
+                    "item '{desc}' (price {price}, cat {category:?}) unmatched; candidates {got:?}"
+                ));
             }
         }
 
         eprintln!(
             "✓ {name}  ({} / {} / {})",
             d.merchant,
-            d.date.map(|(y, m, dd)| format!("{y:04}-{m:02}-{dd:02}")).unwrap_or_else(|| "no-date".into()),
+            d.date
+                .map(|(y, m, dd)| format!("{y:04}-{m:02}-{dd:02}"))
+                .unwrap_or_else(|| "no-date".into()),
             d.total
         );
         if std::env::var("PHASE5_DUMP").is_ok() {
@@ -268,5 +314,9 @@ fn phase5_on_device_vs_expected() {
     for f in &failures {
         eprintln!("  ✗ {f}");
     }
-    assert!(failures.is_empty(), "{} on-device check(s) diverged from expected (and not in KNOWN_ON_DEVICE_GAPS)", failures.len());
+    assert!(
+        failures.is_empty(),
+        "{} on-device check(s) diverged from expected (and not in KNOWN_ON_DEVICE_GAPS)",
+        failures.len()
+    );
 }
