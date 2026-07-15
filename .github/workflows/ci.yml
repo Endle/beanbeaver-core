@@ -13,7 +13,8 @@ permissions:
   contents: read
 
 jobs:
-  # Fast style / safety gates (Linux only). Fail before the heavier test matrix.
+  # Independent style / safety gate (Linux only). Required for merge; runs in
+  # parallel with `test` (no `needs:` edge — lint failure does not skip OCR work).
   lint:
     name: lint (fmt, clippy, deny)
     runs-on: ubuntu-latest
