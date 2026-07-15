@@ -13,6 +13,45 @@ permissions:
   contents: read
 
 jobs:
+  # Fast style / safety gates (Linux only). Fail before the heavier test matrix.
+  lint:
+    name: lint (fmt, clippy, deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
+    steps:
+      - name: Check out core (public)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        # Correctness is a hard gate. Style/perf/suspicious warnings remain
+        # allowed until god-modules shrink (regex-in-loop, items-after-test,
+        # too-many-arguments). Tighten toward `-D warnings` over time.
+        run: cargo clippy --workspace --all-targets -- -D clippy::correctness
+
+      - name: cargo-deny (licenses)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses
+
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -67,6 +106,11 @@ jobs:
       - name: Unit tests
         run: cargo test -p receipt-core --lib -- --nocapture
 
+      # Image prep unit tests (EXIF/resize/pad) — pure Rust, no models.
+      - name: receipt-image unit tests
+        if: runner.os == 'Linux'
+        run: cargo test -p receipt-image --lib -- --nocapture
+
       # Slower gate: the vendored public E2E corpus (tests/receipts_e2e) in CACHED
       # mode only — it replays checked-in `.ocr.json` snapshots (no OCR model, no
       # network). The trailing `cached` filter pins this to `*_cached_e2e` tests so
@@ -96,8 +140,7 @@ jobs:
           done
           ls -la models
 
-      # Loose by design: the pipeline must finish end-to-end for 2 randomly-picked
-      # fixtures; parse divergences vs. the baseline are reported as warnings, not
-      # failures (live OCR is nondeterministic across mac/linux).
+      # Soft + hard live gates (see public_live_e2e.rs): random soft samples, plus
+      # a fixed allowlist that must match merchant/total within tolerant matchers.
       - name: Public live E2E (on-device OCR)
         run: cargo test -p ocr-paddle --test public_live_e2e -- --nocapture
