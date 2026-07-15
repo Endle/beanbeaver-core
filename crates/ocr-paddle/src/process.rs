@@ -4,7 +4,7 @@
 
 use std::time::Instant;
 
-use image::{Rgb, RgbImage};
+use image::RgbImage;
 use receipt_core::ocr_transform::RawDetection;
 use receipt_core::process::{process_receipt, ProcessedReceipt};
 
@@ -23,37 +23,14 @@ pub struct ScanTimings {
     pub total_ms: f64,
 }
 
-/// Matches `image_pipeline.MAX_IMAGE_DIMENSION` / `OCR_IMAGE_PADDING`.
-pub const MAX_IMAGE_DIMENSION: u32 = 3000;
-pub const OCR_IMAGE_PADDING: u32 = 50;
+/// Desktop/on-device prep constants (single source: `receipt-image`).
+pub use receipt_image::{MAX_IMAGE_DIMENSION, OCR_IMAGE_PADDING};
 
-/// Pre-OCR image prep, matching the desktop `resize_image_bytes`: cap the longer
-/// side at 3000 (Lanczos), then pad a 50px white border. (EXIF orientation is
-/// handled upstream by the capture layer.)
+/// Pre-OCR image prep via [`receipt_image`]: cap long side (Pillow int-truncation)
+/// then white-pad. EXIF orientation is handled upstream by the capture layer
+/// (iOS) or by `receipt_image::preprocess_image_bytes` (desktop bytes path).
 pub fn resize_and_pad(img: &RgbImage) -> RgbImage {
-    let (w, h) = (img.width(), img.height());
-    let longer = w.max(h);
-    let resized = if longer > MAX_IMAGE_DIMENSION {
-        let r = MAX_IMAGE_DIMENSION as f32 / longer as f32;
-        let (nw, nh) = ((w as f32 * r).round() as u32, (h as f32 * r).round() as u32);
-        image::imageops::resize(
-            img,
-            nw.max(1),
-            nh.max(1),
-            image::imageops::FilterType::Lanczos3,
-        )
-    } else {
-        img.clone()
-    };
-
-    let pad = OCR_IMAGE_PADDING;
-    let mut padded = RgbImage::from_pixel(
-        resized.width() + 2 * pad,
-        resized.height() + 2 * pad,
-        Rgb([255, 255, 255]),
-    );
-    image::imageops::overlay(&mut padded, &resized, pad as i64, pad as i64);
-    padded
+    receipt_image::resize_and_pad(img, MAX_IMAGE_DIMENSION, OCR_IMAGE_PADDING)
 }
 
 /// Run the whole pipeline: image -> OCR -> parse/categorize/format.

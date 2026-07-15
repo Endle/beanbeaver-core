@@ -23,6 +23,8 @@ geo = "0.29"
 ort = "=2.0.0-rc.12"
 # Downstream parsing/formatting (detections -> structured receipt + beancount).
 receipt-core = { path = "../receipt-core" }
+# Shared pre-OCR resize/pad (Pillow-parity dims); single source with desktop path.
+receipt-image = { path = "../receipt-image" }
 
 [features]
 # Apple-only: register the CoreML execution provider (Neural Engine / GPU) for

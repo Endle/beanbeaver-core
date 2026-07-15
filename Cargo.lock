@@ -1387,6 +1387,7 @@ dependencies = [
  "imageproc",
  "ort",
  "receipt-core",
+ "receipt-image",
  "serde_json",
 ]
 
