@@ -1426,8 +1426,8 @@ pub fn extract_text_items(
                         {
                             continue;
                         }
-                        // See SKIP_PRICED_LINES_IN_BACKWARD_DESC_SEARCH at top
-                        // of file for rationale and revert instructions.
+                        // See patterns::SKIP_PRICED_LINES_IN_BACKWARD_DESC_SEARCH
+                        // for rationale and revert instructions.
                         // Limited to bare-price triggers (no qty expression,
                         // no description) so OCR column-merge cases like
                         // "1 @ $9.99 3.99" can still back-walk into a
