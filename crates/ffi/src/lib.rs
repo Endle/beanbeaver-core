@@ -5,13 +5,28 @@
 //! back a structured receipt + beancount fragment. Everything heavy (ONNX
 //! inference, OCR post-processing, parsing, categorizing, formatting) runs
 //! here in Rust — the "fat-Rust" seam from `docs/ios_port.md`.
+//!
+//! Additional entry points (no models required for pure parse/reformat):
+//! - [`parse_detections`] — OCR detections → receipt (swap OCR backends / re-parse)
+//! - [`reformat_receipt`] — apply user corrections → new beancount
+//! - rule overlays via [`ScanOptions`] / [`ParseOptions`]
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use ocr_paddle::engine::OcrEngine;
 use ocr_paddle::process::{process_image_timed, ScanTimings as CoreScanTimings};
-use receipt_core::process::ProcessedReceipt;
+use receipt_core::merchant_match::{
+    MerchantMatch as CoreMerchantMatch, MerchantMatchStatus as CoreStatus,
+};
+use receipt_core::ocr_transform::RawDetection;
+use receipt_core::process::{
+    field_confidence, process_receipt_with_options, reformat_parsed_receipt, FieldConfidence,
+    ProcessOptions, ProcessedReceipt, ReceiptCorrections,
+};
+use receipt_core::receipt_parser::{
+    ParsedReceiptData, ParsedReceiptItem, ParsedReceiptTender, ParsedReceiptWarning,
+};
 
 uniffi::setup_scaffolding!();
 
@@ -70,6 +85,19 @@ impl From<CoreScanTimings> for ScanTimings {
     }
 }
 
+impl Default for ScanTimings {
+    fn default() -> Self {
+        Self {
+            prep_ms: 0.0,
+            detect_ms: 0.0,
+            classify_ms: 0.0,
+            recognize_ms: 0.0,
+            parse_ms: 0.0,
+            total_ms: 0.0,
+        }
+    }
+}
+
 /// How much to trust `MerchantMatch::canonical`. Mirrors
 /// `receipt_core::merchant_match::MerchantMatchStatus`.
 #[derive(uniffi::Enum)]
@@ -101,9 +129,8 @@ pub struct MerchantMatch {
     pub score: f64,
 }
 
-impl From<receipt_core::merchant_match::MerchantMatch> for MerchantMatch {
-    fn from(m: receipt_core::merchant_match::MerchantMatch) -> Self {
-        use receipt_core::merchant_match::MerchantMatchStatus as CoreStatus;
+impl From<CoreMerchantMatch> for MerchantMatch {
+    fn from(m: CoreMerchantMatch) -> Self {
         let status = match m.status {
             CoreStatus::Exact => MerchantMatchStatus::Exact,
             CoreStatus::Corrected => MerchantMatchStatus::Corrected,
@@ -115,6 +142,28 @@ impl From<receipt_core::merchant_match::MerchantMatch> for MerchantMatch {
             canonical: m.canonical,
             status,
             score: m.score,
+        }
+    }
+}
+
+/// Heuristic per-field trust for "needs review" UI (`[0, 1]` scores).
+#[derive(uniffi::Record)]
+pub struct FieldConfidences {
+    pub merchant: f64,
+    pub date: f64,
+    pub total: f64,
+    pub items_categorized: f64,
+    pub needs_review: bool,
+}
+
+impl From<FieldConfidence> for FieldConfidences {
+    fn from(c: FieldConfidence) -> Self {
+        Self {
+            merchant: c.merchant,
+            date: c.date,
+            total: c.total,
+            items_categorized: c.items_categorized,
+            needs_review: c.needs_review,
         }
     }
 }
@@ -142,8 +191,38 @@ pub struct ReceiptResult {
     /// documents root (`beanbeaver/<name>.jpg`) — exactly the value written into
     /// the `document:` metadata. Save the scanned JPEG here so the link resolves.
     pub document_relpath: Option<String>,
-    /// Per-stage timings for this scan (on-device profiling).
+    /// Per-stage timings for this scan (on-device profiling). Zero for parse-only.
     pub timings: ScanTimings,
+    /// Field-level confidence / needs-review hint for the UI.
+    pub confidence: FieldConfidences,
+}
+
+/// One OCR detection box for [`parse_detections`] (no ONNX required).
+#[derive(uniffi::Record)]
+pub struct DetectionInput {
+    /// Quad or polygon points as `[x0, y0, x1, y1, …]` (at least 4 points).
+    pub points_xy: Vec<f64>,
+    pub text: String,
+    pub confidence: f64,
+}
+
+/// Optional parse/scan knobs (rule overlays). Empty TOML list = public defaults.
+#[derive(uniffi::Record)]
+pub struct ParseOptions {
+    /// Extra item-classifier TOML documents (later layers win).
+    pub item_classifier_override_tomls: Vec<String>,
+    /// Optional known-merchant keyword list; empty means bundled defaults.
+    pub known_merchants: Vec<String>,
+}
+
+/// User edits applied by [`reformat_receipt`] without re-running OCR.
+#[derive(uniffi::Record)]
+pub struct ReceiptEdits {
+    pub merchant: Option<String>,
+    /// ISO `YYYY-MM-DD`.
+    pub date_iso: Option<String>,
+    /// Parallel to items; empty string means “no override for this index”.
+    pub item_account_overrides: Vec<String>,
 }
 
 /// Errors surfaced to Swift as a typed exception.
@@ -152,6 +231,7 @@ pub enum ScanError {
     ModelLoad { msg: String },
     ImageDecode { msg: String },
     Inference { msg: String },
+    Parse { msg: String },
 }
 
 impl fmt::Display for ScanError {
@@ -160,6 +240,7 @@ impl fmt::Display for ScanError {
             ScanError::ModelLoad { msg } => write!(f, "failed to load OCR models: {msg}"),
             ScanError::ImageDecode { msg } => write!(f, "failed to decode image: {msg}"),
             ScanError::Inference { msg } => write!(f, "OCR/parse failed: {msg}"),
+            ScanError::Parse { msg } => write!(f, "parse failed: {msg}"),
         }
     }
 }
@@ -202,35 +283,230 @@ impl OcrSession {
         today: DateYmd,
         credit_card_account: String,
     ) -> Result<ReceiptResult, ScanError> {
+        self.scan_with_options(
+            image_bytes,
+            today,
+            credit_card_account,
+            ParseOptions {
+                item_classifier_override_tomls: vec![],
+                known_merchants: vec![],
+            },
+        )
+    }
+
+    /// Like [`Self::scan`] but applies optional rule overlays after OCR.
+    ///
+    /// The image still goes through the full ONNX path; classifier/merchant
+    /// overrides affect only the parse/format half (so users can ship private
+    /// rules without rebuilding the model bundle).
+    pub fn scan_with_options(
+        &self,
+        image_bytes: Vec<u8>,
+        today: DateYmd,
+        credit_card_account: String,
+        options: ParseOptions,
+    ) -> Result<ReceiptResult, ScanError> {
         let img = image::load_from_memory(&image_bytes)
             .map_err(|e| ScanError::ImageDecode { msg: e.to_string() })?
             .to_rgb8();
 
-        // Content hash of the exact encoded bytes we were handed. The receipt's
-        // portable identity (`beanbeaver-id` / `document:` filename) is derived
-        // from this, and the app saves the same bytes, so the link resolves.
         let image_sha256 = sha256_hex(&image_bytes);
 
         let mut engine = self.engine.lock().map_err(|e| ScanError::Inference {
             msg: format!("engine lock poisoned: {e}"),
         })?;
 
-        let (processed, timings) = process_image_timed(
-            &mut engine,
-            &img,
+        // OCR with bundled defaults, then re-parse with overlays when requested.
+        // process_image_timed always uses default rules; when overlays are set we
+        // re-run parse from the same image by calling process_image_timed then
+        // discarding parse… Actually process_image_timed embeds process_receipt
+        // with defaults. For overlays, re-OCR is wasteful; we re-process by
+        // using process_image_timed for timings+OCR and, when options non-empty,
+        // we need detections. Simplest correct path: always use process_image_timed
+        // when options empty; when options non-empty, recognize then process_with_options.
+        let opts = to_process_options(&options);
+        let has_overlay =
+            !opts.item_classifier_override_tomls.is_empty() || opts.known_merchants.is_some();
+
+        if !has_overlay {
+            let (processed, timings) = process_image_timed(
+                &mut engine,
+                &img,
+                "receipt.jpg",
+                (today.year, today.month, today.day),
+                &credit_card_account,
+                Some(&image_sha256),
+            )
+            .map_err(|e| ScanError::Inference { msg: e.to_string() })?;
+            return Ok(to_result(processed, timings.into()));
+        }
+
+        // Overlay path: reuse process_image_timed's prep/OCR by calling it, then
+        // re-format is insufficient for category overlays — need re-parse.
+        // Call timed path for stage timings, then re-parse detections via a second
+        // process is hard without exposing detections. Fall back to full
+        // process_image_timed (default rules) only for timings of OCR stages, and
+        // separately re-run OCR… That's double. Better: use engine.recognize after prep.
+        use ocr_paddle::process::{resize_and_pad, OCR_IMAGE_PADDING};
+        use receipt_core::ocr_transform::RawDetection as CoreRaw;
+        use std::time::Instant;
+
+        let t_all = Instant::now();
+        let t = Instant::now();
+        let prepared = resize_and_pad(&img);
+        let prep_ms = t.elapsed().as_secs_f64() * 1e3;
+
+        let (detections, ocr) = engine
+            .recognize_image_timed(&prepared)
+            .map_err(|e| ScanError::Inference { msg: e.to_string() })?;
+
+        let raw: Vec<CoreRaw> = detections
+            .into_iter()
+            .map(|d| CoreRaw {
+                points: d
+                    .points
+                    .iter()
+                    .map(|p| (p[0] as f64, p[1] as f64))
+                    .collect(),
+                text: d.text,
+                confidence: d.confidence as f64,
+            })
+            .collect();
+
+        let t = Instant::now();
+        let processed = process_receipt_with_options(
+            raw,
+            prepared.width() as i64,
+            prepared.height() as i64,
+            OCR_IMAGE_PADDING as i64,
             "receipt.jpg",
             (today.year, today.month, today.day),
             &credit_card_account,
             Some(&image_sha256),
-        )
-        .map_err(|e| ScanError::Inference { msg: e.to_string() })?;
+            &opts,
+        );
+        let parse_ms = t.elapsed().as_secs_f64() * 1e3;
 
-        Ok(to_result(processed, timings.into()))
+        let timings = ScanTimings {
+            prep_ms,
+            detect_ms: ocr.detect_ms,
+            classify_ms: ocr.classify_ms,
+            recognize_ms: ocr.recognize_ms,
+            parse_ms,
+            total_ms: t_all.elapsed().as_secs_f64() * 1e3,
+        };
+        Ok(to_result(processed, timings))
+    }
+}
+
+/// Parse OCR detections into a receipt **without** loading ONNX models.
+///
+/// Use after an external OCR backend, or to re-parse a frozen detection list
+/// with different rule overlays. `points_xy` is a flat `[x,y,…]` list per box.
+#[uniffi::export]
+pub fn parse_detections(
+    detections: Vec<DetectionInput>,
+    padded_width: i64,
+    padded_height: i64,
+    padding: i64,
+    image_filename: String,
+    today: DateYmd,
+    credit_card_account: String,
+    image_sha256: Option<String>,
+    options: ParseOptions,
+) -> Result<ReceiptResult, ScanError> {
+    let raw = detections_to_raw(detections)?;
+    let opts = to_process_options(&options);
+    let processed = process_receipt_with_options(
+        raw,
+        padded_width,
+        padded_height,
+        padding,
+        &image_filename,
+        (today.year, today.month, today.day),
+        &credit_card_account,
+        image_sha256.as_deref(),
+        &opts,
+    );
+    Ok(to_result(processed, ScanTimings::default()))
+}
+
+/// Re-render beancount after the user edits merchant / date / item accounts.
+///
+/// Does not re-run OCR. Pass the fields from a previous [`ReceiptResult`] plus
+/// [`ReceiptEdits`]. Item account overrides are positional: index `i` applies
+/// to `items[i]` when non-empty.
+#[uniffi::export]
+pub fn reformat_receipt(
+    previous: ReceiptResult,
+    today: DateYmd,
+    credit_card_account: String,
+    image_sha256: Option<String>,
+    edits: ReceiptEdits,
+    options: ParseOptions,
+) -> ReceiptResult {
+    let parsed = receipt_result_to_parsed(&previous);
+    let corrections = ReceiptCorrections {
+        merchant: edits.merchant,
+        date_iso: edits.date_iso,
+        item_accounts: edits
+            .item_account_overrides
+            .into_iter()
+            .map(|s| if s.is_empty() { None } else { Some(s) })
+            .collect(),
+    };
+    let opts = to_process_options(&options);
+    let processed = reformat_parsed_receipt(
+        &parsed,
+        (today.year, today.month, today.day),
+        &credit_card_account,
+        image_sha256.as_deref(),
+        &corrections,
+        Some(&opts),
+    );
+    // Preserve prior timings (reformat is pure CPU, negligible).
+    let mut result = to_result(processed, previous.timings);
+    // Confidence should reflect the edited view.
+    result.confidence = field_confidence(&receipt_result_to_parsed(&result)).into();
+    result
+}
+
+fn detections_to_raw(detections: Vec<DetectionInput>) -> Result<Vec<RawDetection>, ScanError> {
+    let mut raw = Vec::with_capacity(detections.len());
+    for (i, d) in detections.into_iter().enumerate() {
+        if d.points_xy.len() < 8 || d.points_xy.len() % 2 != 0 {
+            return Err(ScanError::Parse {
+                msg: format!(
+                    "detection {i}: points_xy needs even length >= 8 (got {})",
+                    d.points_xy.len()
+                ),
+            });
+        }
+        let points = d.points_xy.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+        raw.push(RawDetection {
+            points,
+            text: d.text,
+            confidence: d.confidence,
+        });
+    }
+    Ok(raw)
+}
+
+fn to_process_options(options: &ParseOptions) -> ProcessOptions {
+    ProcessOptions {
+        known_merchants: if options.known_merchants.is_empty() {
+            None
+        } else {
+            Some(options.known_merchants.clone())
+        },
+        merchant_families: None,
+        item_classifier_override_tomls: options.item_classifier_override_tomls.clone(),
     }
 }
 
 /// Flatten the rich `ProcessedReceipt` into the FFI record.
 fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
+    let confidence = p.confidence.clone().into();
     let d = p.parsed;
     ReceiptResult {
         merchant: d.merchant,
@@ -256,6 +532,61 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
         beanbeaver_id: p.beanbeaver_id,
         document_relpath: p.document_relpath,
         timings,
+        confidence,
+    }
+}
+
+/// Rebuild a minimal `ParsedReceiptData` from a prior FFI result for reformat.
+fn receipt_result_to_parsed(r: &ReceiptResult) -> ParsedReceiptData {
+    use receipt_core::merchant_match::MerchantMatch as CoreMM;
+    let status = match r.merchant_match.status {
+        MerchantMatchStatus::Exact => CoreStatus::Exact,
+        MerchantMatchStatus::Corrected => CoreStatus::Corrected,
+        MerchantMatchStatus::Suggested => CoreStatus::Suggested,
+        MerchantMatchStatus::Unknown => CoreStatus::Unknown,
+    };
+    let date = r.date.as_ref().and_then(|iso| {
+        let mut parts = iso.split('-');
+        let y: i32 = parts.next()?.parse().ok()?;
+        let m: u32 = parts.next()?.parse().ok()?;
+        let d: u32 = parts.next()?.parse().ok()?;
+        Some((y, m, d))
+    });
+    ParsedReceiptData {
+        merchant: r.merchant.clone(),
+        merchant_match: CoreMM {
+            raw: r.merchant_match.raw.clone(),
+            canonical: r.merchant_match.canonical.clone(),
+            status,
+            score: r.merchant_match.score,
+        },
+        date,
+        date_is_placeholder: r.date_is_placeholder,
+        total: r.total.clone(),
+        items: r
+            .items
+            .iter()
+            .map(|i| ParsedReceiptItem {
+                description: i.description.clone(),
+                price: i.price.clone(),
+                quantity: i.quantity,
+                category: i.category.clone(),
+                tags: i.tags.clone(),
+            })
+            .collect(),
+        tax: r.tax.clone(),
+        subtotal: r.subtotal.clone(),
+        raw_text: String::new(),
+        image_filename: "receipt.jpg".into(),
+        warnings: r
+            .warnings
+            .iter()
+            .map(|m| ParsedReceiptWarning {
+                message: m.clone(),
+                after_item_index: None,
+            })
+            .collect(),
+        tenders: Vec::<ParsedReceiptTender>::new(),
     }
 }
 
@@ -274,6 +605,117 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use receipt_core::process::field_confidence;
+
+    #[test]
+    fn parse_detections_rejects_short_points() {
+        let result = parse_detections(
+            vec![DetectionInput {
+                points_xy: vec![0.0, 0.0, 1.0, 1.0],
+                text: "x".into(),
+                confidence: 0.9,
+            }],
+            100,
+            100,
+            0,
+            "t.jpg".into(),
+            DateYmd {
+                year: 2026,
+                month: 1,
+                day: 1,
+            },
+            "Liabilities:CreditCard".into(),
+            None,
+            ParseOptions {
+                item_classifier_override_tomls: vec![],
+                known_merchants: vec![],
+            },
+        );
+        assert!(matches!(result, Err(ScanError::Parse { .. })));
+    }
+
+    #[test]
+    fn reformat_receipt_changes_merchant_in_beancount() {
+        // Minimal synthetic previous result.
+        let previous = ReceiptResult {
+            merchant: "COSTCO".into(),
+            merchant_match: MerchantMatch {
+                raw: "COSTCO".into(),
+                canonical: Some("COSTCO".into()),
+                status: MerchantMatchStatus::Exact,
+                score: 1.0,
+            },
+            date: Some("2026-02-18".into()),
+            date_is_placeholder: false,
+            total: "10.00".into(),
+            tax: None,
+            subtotal: Some("10.00".into()),
+            items: vec![ReceiptItem {
+                description: "Milk".into(),
+                price: "10.00".into(),
+                quantity: 1,
+                category: Some("grocery_dairy".into()),
+                tags: vec![],
+            }],
+            warnings: vec![],
+            beancount: String::new(),
+            beanbeaver_id: None,
+            document_relpath: None,
+            timings: ScanTimings::default(),
+            confidence: field_confidence(&receipt_result_to_parsed(&ReceiptResult {
+                merchant: "COSTCO".into(),
+                merchant_match: MerchantMatch {
+                    raw: "COSTCO".into(),
+                    canonical: Some("COSTCO".into()),
+                    status: MerchantMatchStatus::Exact,
+                    score: 1.0,
+                },
+                date: Some("2026-02-18".into()),
+                date_is_placeholder: false,
+                total: "10.00".into(),
+                tax: None,
+                subtotal: None,
+                items: vec![],
+                warnings: vec![],
+                beancount: String::new(),
+                beanbeaver_id: None,
+                document_relpath: None,
+                timings: ScanTimings::default(),
+                confidence: FieldConfidences {
+                    merchant: 1.0,
+                    date: 1.0,
+                    total: 1.0,
+                    items_categorized: 1.0,
+                    needs_review: false,
+                },
+            }))
+            .into(),
+        };
+
+        let edited = reformat_receipt(
+            previous,
+            DateYmd {
+                year: 2026,
+                month: 2,
+                day: 18,
+            },
+            "Liabilities:CreditCard".into(),
+            Some("deadbeef".into()),
+            ReceiptEdits {
+                merchant: Some("Costco Wholesale".into()),
+                date_iso: Some("2026-02-19".into()),
+                item_account_overrides: vec!["Expenses:Food:Grocery:Dairy".into()],
+            },
+            ParseOptions {
+                item_classifier_override_tomls: vec![],
+                known_merchants: vec![],
+            },
+        );
+        assert_eq!(edited.merchant, "Costco Wholesale");
+        assert_eq!(edited.date.as_deref(), Some("2026-02-19"));
+        assert!(edited.beancount.contains("Costco Wholesale"));
+        assert!(edited.beancount.contains("2026-02-19"));
+    }
 
     // Full FFI round-trip on the committed fixture. Mirrors ocr-paddle's
     // end-to-end test but exercises the Swift-facing entry points.
@@ -303,9 +745,9 @@ mod tests {
         assert_eq!(r.tax.as_deref(), Some("4.44"));
         assert!(!r.items.is_empty());
         assert!(r.beancount.contains("COSTCO"));
+        assert!(!r.confidence.needs_review || r.confidence.merchant >= 0.7);
         println!("{}", r.beancount);
 
-        // Timings are populated and internally consistent.
         let t = &r.timings;
         println!(
             "timings(ms): prep={:.1} detect={:.1} classify={:.1} recognize={:.1} parse={:.1} total={:.1}",
