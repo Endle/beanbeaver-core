@@ -203,14 +203,20 @@ pub fn default_parser_rule_layers() -> ParserRuleLayers {
 /// `classifier_configs=(default, override)` layering). Used by the private E2E
 /// harness, which asserts a few categories that live in an out-of-tree
 /// `private_rules.toml` rather than the public defaults. Merchant rules are
-/// unaffected (still the public defaults). Panics if an override TOML is invalid.
-pub fn parser_rule_layers_with_overrides(override_classifier_tomls: &[&str]) -> ParserRuleLayers {
+/// unaffected (still the public defaults).
+///
+/// Returns `Err` when an override TOML fails to parse (never panics on user
+/// input — callers on the FFI path map this to a typed error).
+pub fn parser_rule_layers_with_overrides(
+    override_classifier_tomls: &[&str],
+) -> Result<ParserRuleLayers, String> {
     let mut configs = vec![to_build_config(parse_classifier(
         DEFAULT_ITEM_CLASSIFIER_TOML,
     ))];
-    for text in override_classifier_tomls {
-        let parsed: ClassifierToml =
-            toml::from_str(text).expect("override classifier TOML must be valid");
+    for (i, text) in override_classifier_tomls.iter().enumerate() {
+        let parsed: ClassifierToml = toml::from_str(text).map_err(|e| {
+            format!("invalid override classifier TOML (layer {i}): {e}")
+        })?;
         configs.push(to_build_config(parsed));
     }
     let category_rules = build_rule_layers(default_category_accounts(), configs, vec![]);
@@ -219,10 +225,10 @@ pub fn parser_rule_layers_with_overrides(override_classifier_tomls: &[&str]) -> 
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    ParserRuleLayers {
+    Ok(ParserRuleLayers {
         category_rules,
         account_mapping,
-    }
+    })
 }
 
 #[derive(Debug, Deserialize)]

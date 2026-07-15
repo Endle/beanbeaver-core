@@ -7,7 +7,7 @@
 //! (`ocr_helpers.transform_paddleocr_result` + `ocr_result_parser.parse_receipt`
 //! + `formatter.format_parsed_receipt`).
 
-use crate::merchant_match::{MerchantFamily, MerchantMatchStatus};
+use crate::merchant_match::{MerchantFamily, MerchantMatch, MerchantMatchStatus};
 use crate::ocr_transform::{transform, RawDetection};
 use crate::receipt_categories::resolve_account_target;
 use crate::receipt_formatter::{
@@ -220,9 +220,9 @@ pub fn field_confidence(parsed: &ParsedReceiptData) -> FieldConfidence {
     }
 }
 
-fn resolve_rule_layers(options: &ProcessOptions) -> ParserRuleLayers {
+fn resolve_rule_layers(options: &ProcessOptions) -> Result<ParserRuleLayers, String> {
     if options.item_classifier_override_tomls.is_empty() {
-        default_parser_rule_layers()
+        Ok(default_parser_rule_layers())
     } else {
         let refs: Vec<&str> = options
             .item_classifier_override_tomls
@@ -233,6 +233,56 @@ fn resolve_rule_layers(options: &ProcessOptions) -> ParserRuleLayers {
     }
 }
 
+/// Parse and calendar-validate an ISO `YYYY-MM-DD` date string.
+fn parse_iso_ymd(iso: &str) -> Result<(i32, u32, u32), String> {
+    let iso = iso.trim();
+    let mut parts = iso.split('-');
+    let (Some(ys), Some(ms), Some(ds), None) = (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(format!(
+            "date_iso must be YYYY-MM-DD (got {iso:?})"
+        ));
+    };
+    if ys.len() != 4 || ms.len() != 2 || ds.len() != 2 {
+        return Err(format!(
+            "date_iso must be YYYY-MM-DD with zero-padded month/day (got {iso:?})"
+        ));
+    }
+    let y: i32 = ys
+        .parse()
+        .map_err(|_| format!("date_iso year is not an integer (got {iso:?})"))?;
+    let m: u32 = ms
+        .parse()
+        .map_err(|_| format!("date_iso month is not an integer (got {iso:?})"))?;
+    let d: u32 = ds
+        .parse()
+        .map_err(|_| format!("date_iso day is not an integer (got {iso:?})"))?;
+    if !(1..=12).contains(&m) {
+        return Err(format!("date_iso month out of range (got {iso:?})"));
+    }
+    let max_day = days_in_month(y, m);
+    if d < 1 || d > max_day {
+        return Err(format!("date_iso day out of range (got {iso:?})"));
+    }
+    Ok((y, m, d))
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 0,
+    }
+}
+
 fn format_from_parsed(
     parsed: &ParsedReceiptData,
     rule_layers: &ParserRuleLayers,
@@ -240,14 +290,16 @@ fn format_from_parsed(
     credit_card_account: &str,
     image_sha256: Option<&str>,
     corrections: Option<&ReceiptCorrections>,
-) -> (String, Option<String>, Option<String>) {
+) -> Result<(String, Option<String>, Option<String>), String> {
     let merchant = corrections
         .and_then(|c| c.merchant.clone())
         .unwrap_or_else(|| parsed.merchant.clone());
 
     let (date_iso_str, date_is_placeholder) =
-        if let Some(iso) = corrections.and_then(|c| c.date_iso.clone()) {
-            (iso, false)
+        if let Some(iso) = corrections.and_then(|c| c.date_iso.as_ref()) {
+            // Validate before emitting into beancount so structured + text stay aligned.
+            let _ = parse_iso_ymd(iso)?;
+            (iso.clone(), false)
         } else {
             (date_iso(parsed, today), parsed.date_is_placeholder)
         };
@@ -319,7 +371,7 @@ fn format_from_parsed(
         &formatter_input.merchant,
         image_sha256,
     );
-    (beancount, beanbeaver_id, document_relpath)
+    Ok((beancount, beanbeaver_id, document_relpath))
 }
 
 /// Run the full pipeline. `today` is the reference date (year, month, day) used
@@ -350,9 +402,13 @@ pub fn process_receipt(
         image_sha256,
         &options,
     )
+    .expect("default ProcessOptions never fail rule loading")
 }
 
 /// Like [`process_receipt`] but accepts rule / merchant overlays.
+///
+/// Returns `Err` when classifier override TOML is invalid (or date corrections
+/// are invalid on the reformat path — see [`reformat_parsed_receipt`]).
 #[allow(clippy::too_many_arguments)]
 pub fn process_receipt_with_options(
     detections: Vec<RawDetection>,
@@ -364,8 +420,8 @@ pub fn process_receipt_with_options(
     credit_card_account: &str,
     image_sha256: Option<&str>,
     options: &ProcessOptions,
-) -> ProcessedReceipt {
-    let rule_layers = resolve_rule_layers(options);
+) -> Result<ProcessedReceipt, String> {
+    let rule_layers = resolve_rule_layers(options)?;
     let merchants = options
         .known_merchants
         .clone()
@@ -396,20 +452,22 @@ pub fn process_receipt_with_options(
         credit_card_account,
         image_sha256,
         None,
-    );
+    )?;
 
-    ProcessedReceipt {
+    Ok(ProcessedReceipt {
         parsed,
         beancount,
         beanbeaver_id,
         document_relpath,
         confidence,
-    }
+    })
 }
 
 /// Re-render beancount from an existing parse with optional user corrections
 /// (no OCR). Uses the same default rule layers as a fresh process unless
 /// `options` supplies classifier overrides (for account resolution only).
+///
+/// Returns `Err` on invalid override TOML or invalid `corrections.date_iso`.
 pub fn reformat_parsed_receipt(
     parsed: &ParsedReceiptData,
     today: (i32, u32, u32),
@@ -417,53 +475,56 @@ pub fn reformat_parsed_receipt(
     image_sha256: Option<&str>,
     corrections: &ReceiptCorrections,
     options: Option<&ProcessOptions>,
-) -> ProcessedReceipt {
+) -> Result<ProcessedReceipt, String> {
     let default_opts = ProcessOptions::default();
     let options = options.unwrap_or(&default_opts);
-    let rule_layers = resolve_rule_layers(options);
-    let confidence = field_confidence(parsed);
+    let rule_layers = resolve_rule_layers(options)?;
+
+    // Apply corrections first so confidence reflects the edited view.
+    let mut parsed_out = parsed.clone();
+    if let Some(m) = &corrections.merchant {
+        parsed_out.merchant = m.clone();
+        // User-supplied merchant is high-trust for review UX.
+        parsed_out.merchant_match = MerchantMatch {
+            raw: m.clone(),
+            canonical: Some(m.clone()),
+            status: MerchantMatchStatus::Corrected,
+            score: 1.0,
+        };
+    }
+    if let Some(iso) = &corrections.date_iso {
+        let (y, m, d) = parse_iso_ymd(iso)?;
+        parsed_out.date = Some((y, m, d));
+        parsed_out.date_is_placeholder = false;
+    }
+    // Item account overrides are applied only when formatting beancount
+    // (`format_from_parsed` reads `corrections.item_accounts`). Keep
+    // `item.category` as the classifier key so UI mapping stays intact.
+
+    let confidence = field_confidence(&parsed_out);
     let (beancount, beanbeaver_id, document_relpath) = format_from_parsed(
-        parsed,
+        &parsed_out,
         &rule_layers,
         today,
         credit_card_account,
         image_sha256,
         Some(corrections),
-    );
+    )?;
 
-    // Apply corrections onto a clone for the returned structured view.
-    let mut parsed_out = parsed.clone();
-    if let Some(m) = &corrections.merchant {
-        parsed_out.merchant = m.clone();
-    }
-    if let Some(iso) = &corrections.date_iso {
-        if let Some((y, rest)) = iso.split_once('-') {
-            if let Some((m, d)) = rest.split_once('-') {
-                if let (Ok(y), Ok(m), Ok(d)) = (y.parse(), m.parse(), d.parse()) {
-                    parsed_out.date = Some((y, m, d));
-                    parsed_out.date_is_placeholder = false;
-                }
-            }
-        }
-    }
-    for (idx, override_acct) in corrections.item_accounts.iter().enumerate() {
-        if let (Some(account), Some(item)) = (override_acct.as_ref(), parsed_out.items.get_mut(idx))
-        {
-            // Store the beancount account in category so UI shows the override.
-            item.category = Some(account.clone());
-        }
-    }
-
-    ProcessedReceipt {
+    Ok(ProcessedReceipt {
         parsed: parsed_out,
         beancount,
         beanbeaver_id,
         document_relpath,
         confidence,
-    }
+    })
 }
 
-/// Apply a single item-account override helper for callers that only tweak one line.
+/// Apply a single item-account override for callers that only tweak one line.
+///
+/// Note: this writes the beancount account into `category` for legacy callers.
+/// Prefer [`ReceiptCorrections::item_accounts`] + [`reformat_parsed_receipt`]
+/// which keep the classifier key separate from the posting account.
 pub fn override_item_account(items: &mut [ParsedReceiptItem], index: usize, account: String) {
     if let Some(item) = items.get_mut(index) {
         item.category = Some(account);
@@ -540,12 +601,94 @@ mod tests {
             Some("abcd"),
             &corrections,
             None,
-        );
+        )
+        .expect("reformat");
         assert_eq!(out.parsed.merchant, "Costco Wholesale");
         assert_eq!(out.parsed.date, Some((2026, 3, 1)));
         assert!(!out.parsed.date_is_placeholder);
         assert!(out.beancount.contains("Costco Wholesale"));
         assert!(out.beancount.contains("2026-03-01"));
         assert!(out.beancount.contains("Expenses:Food:Grocery:Dairy"));
+        // Classifier key preserved; account override only affects beancount.
+        assert_eq!(
+            out.parsed.items[0].category.as_deref(),
+            Some("grocery_dairy")
+        );
+        // User merchant edit is high-trust.
+        assert_eq!(
+            out.parsed.merchant_match.status,
+            MerchantMatchStatus::Corrected
+        );
+        assert!(!out.confidence.needs_review);
+    }
+
+    #[test]
+    fn reformat_rejects_invalid_date_iso() {
+        let parsed = sample_parsed();
+        let corrections = ReceiptCorrections {
+            merchant: None,
+            date_iso: Some("not-a-date".into()),
+            item_accounts: vec![],
+        };
+        let err = reformat_parsed_receipt(
+            &parsed,
+            (2026, 7, 1),
+            "Liabilities:CreditCard",
+            None,
+            &corrections,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.contains("date_iso"), "{err}");
+    }
+
+    #[test]
+    fn reformat_preserves_tenders_and_raw_text() {
+        let mut parsed = sample_parsed();
+        parsed.raw_text = "COSTCO\n**** 1234\nTOTAL 10.00".into();
+        parsed.tenders = vec![crate::receipt_parser::ParsedReceiptTender {
+            amount: "10.00".into(),
+            account: None,
+            kind: "card".into(),
+            raw_label: "MASTERCARD".into(),
+        }];
+        let corrections = ReceiptCorrections::default();
+        let out = reformat_parsed_receipt(
+            &parsed,
+            (2026, 7, 1),
+            "Liabilities:CreditCard",
+            Some("abcd"),
+            &corrections,
+            None,
+        )
+        .expect("reformat");
+        assert_eq!(out.parsed.raw_text, parsed.raw_text);
+        assert_eq!(out.parsed.tenders.len(), 1);
+        assert!(
+            out.beancount.contains("****1234") || out.beancount.contains("1234"),
+            "card last4 from raw_text should survive reformat: {}",
+            out.beancount
+        );
+    }
+
+    #[test]
+    fn invalid_override_toml_returns_err() {
+        let opts = ProcessOptions {
+            item_classifier_override_tomls: vec!["this is not toml {{{".into()],
+            ..Default::default()
+        };
+        let err = process_receipt_with_options(
+            vec![],
+            100,
+            100,
+            0,
+            "x.jpg",
+            (2026, 1, 1),
+            "Liabilities:CreditCard",
+            None,
+            &opts,
+        )
+        .unwrap_err();
+        assert!(err.contains("TOML") || err.contains("toml") || err.contains("invalid"), "{err}");
     }
 }

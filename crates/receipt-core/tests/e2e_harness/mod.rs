@@ -181,7 +181,8 @@ pub struct CorpusResult {
 /// `overrides` (raw `private_rules.toml` contents) over the bundled public rules.
 /// An empty `overrides` slice ⇒ public rules only.
 pub fn run_cached_corpus(receipts_dir: &Path, overrides: &[&str]) -> CorpusResult {
-    let layers = parser_rule_layers_with_overrides(overrides);
+    let layers = parser_rule_layers_with_overrides(overrides)
+        .unwrap_or_else(|e| panic!("override classifier TOML: {e}"));
     let mapping: HashMap<String, String> = layers.account_mapping.iter().cloned().collect();
     let merchants = default_known_merchants();
     let merchant_families = default_merchant_families();

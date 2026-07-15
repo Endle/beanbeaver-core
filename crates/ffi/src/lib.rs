@@ -9,7 +9,7 @@
 //! Additional entry points (no models required for pure parse/reformat):
 //! - [`parse_detections`] — OCR detections → receipt (swap OCR backends / re-parse)
 //! - [`reformat_receipt`] — apply user corrections → new beancount
-//! - rule overlays via [`ScanOptions`] / [`ParseOptions`]
+//! - rule overlays via [`ParseOptions`]
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -21,8 +21,8 @@ use receipt_core::merchant_match::{
 };
 use receipt_core::ocr_transform::RawDetection;
 use receipt_core::process::{
-    field_confidence, process_receipt_with_options, reformat_parsed_receipt, FieldConfidence,
-    ProcessOptions, ProcessedReceipt, ReceiptCorrections,
+    process_receipt_with_options, reformat_parsed_receipt, FieldConfidence, ProcessOptions,
+    ProcessedReceipt, ReceiptCorrections,
 };
 use receipt_core::receipt_parser::{
     ParsedReceiptData, ParsedReceiptItem, ParsedReceiptTender, ParsedReceiptWarning,
@@ -50,12 +50,22 @@ pub struct ReceiptItem {
     pub description: String,
     pub price: String,
     pub quantity: i32,
+    /// Classifier / semantic category key (not necessarily a beancount account).
     pub category: Option<String>,
     /// Beanbeaver-internal semantic tags for this line (e.g.
     /// `["grocery", "meat", "chicken"]`) — the multi-tag classification the app
     /// drives its category display from, upstream of the single `category`
     /// beancount account. Empty when no classifier rule matched.
     pub tags: Vec<String>,
+}
+
+/// One payment tender (split tender / multi-payment receipts).
+#[derive(uniffi::Record)]
+pub struct ReceiptTender {
+    pub amount: String,
+    pub account: Option<String>,
+    pub kind: String,
+    pub raw_label: String,
 }
 
 /// Per-stage on-device timings (milliseconds) for one scan, for profiling.
@@ -183,6 +193,15 @@ pub struct ReceiptResult {
     pub subtotal: Option<String>,
     pub items: Vec<ReceiptItem>,
     pub warnings: Vec<String>,
+    /// Parallel to `warnings`: optional item index each warning follows (`-1` = none).
+    pub warning_after_item_indices: Vec<i32>,
+    /// OCR dump used for card-last4 / metadata in beancount. Round-trip this
+    /// through [`reformat_receipt`] so edits do not drop payment metadata.
+    pub raw_text: String,
+    /// Image filename embedded in parse/format (defaults to `receipt.jpg` on scan).
+    pub image_filename: String,
+    /// Split-tender payment lines; empty means single default liability posting.
+    pub tenders: Vec<ReceiptTender>,
     pub beancount: String,
     /// Greppable identity embedded in `beancount` (`bb-<yyyymmdd>-<sha8>`), or
     /// `None` if the image hash could not be computed.
@@ -384,7 +403,8 @@ impl OcrSession {
             &credit_card_account,
             Some(&image_sha256),
             &opts,
-        );
+        )
+        .map_err(|msg| ScanError::Parse { msg })?;
         let parse_ms = t.elapsed().as_secs_f64() * 1e3;
 
         let timings = ScanTimings {
@@ -427,7 +447,8 @@ pub fn parse_detections(
         &credit_card_account,
         image_sha256.as_deref(),
         &opts,
-    );
+    )
+    .map_err(|msg| ScanError::Parse { msg })?;
     Ok(to_result(processed, ScanTimings::default()))
 }
 
@@ -436,6 +457,9 @@ pub fn parse_detections(
 /// Does not re-run OCR. Pass the fields from a previous [`ReceiptResult`] plus
 /// [`ReceiptEdits`]. Item account overrides are positional: index `i` applies
 /// to `items[i]` when non-empty.
+///
+/// Round-trip `raw_text`, `image_filename`, and `tenders` from the prior scan so
+/// multi-tender postings and card-last4 metadata survive the edit.
 #[uniffi::export]
 pub fn reformat_receipt(
     previous: ReceiptResult,
@@ -444,7 +468,7 @@ pub fn reformat_receipt(
     image_sha256: Option<String>,
     edits: ReceiptEdits,
     options: ParseOptions,
-) -> ReceiptResult {
+) -> Result<ReceiptResult, ScanError> {
     let parsed = receipt_result_to_parsed(&previous);
     let corrections = ReceiptCorrections {
         merchant: edits.merchant,
@@ -463,12 +487,11 @@ pub fn reformat_receipt(
         image_sha256.as_deref(),
         &corrections,
         Some(&opts),
-    );
+    )
+    .map_err(|msg| ScanError::Parse { msg })?;
     // Preserve prior timings (reformat is pure CPU, negligible).
-    let mut result = to_result(processed, previous.timings);
-    // Confidence should reflect the edited view.
-    result.confidence = field_confidence(&receipt_result_to_parsed(&result)).into();
-    result
+    // Confidence is computed on the corrected parse inside reformat_parsed_receipt.
+    Ok(to_result(processed, previous.timings))
 }
 
 fn detections_to_raw(detections: Vec<DetectionInput>) -> Result<Vec<RawDetection>, ScanError> {
@@ -508,6 +531,11 @@ fn to_process_options(options: &ParseOptions) -> ProcessOptions {
 fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
     let confidence = p.confidence.clone().into();
     let d = p.parsed;
+    let warning_after_item_indices: Vec<i32> = d
+        .warnings
+        .iter()
+        .map(|w| w.after_item_index.map(|i| i as i32).unwrap_or(-1))
+        .collect();
     ReceiptResult {
         merchant: d.merchant,
         merchant_match: d.merchant_match.into(),
@@ -527,7 +555,20 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
                 tags: i.tags,
             })
             .collect(),
-        warnings: d.warnings.into_iter().map(|w| w.message).collect(),
+        warnings: d.warnings.iter().map(|w| w.message.clone()).collect(),
+        warning_after_item_indices,
+        raw_text: d.raw_text,
+        image_filename: d.image_filename,
+        tenders: d
+            .tenders
+            .into_iter()
+            .map(|t| ReceiptTender {
+                amount: t.amount,
+                account: t.account,
+                kind: t.kind,
+                raw_label: t.raw_label,
+            })
+            .collect(),
         beancount: p.beancount,
         beanbeaver_id: p.beanbeaver_id,
         document_relpath: p.document_relpath,
@@ -536,7 +577,10 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
     }
 }
 
-/// Rebuild a minimal `ParsedReceiptData` from a prior FFI result for reformat.
+/// Rebuild `ParsedReceiptData` from a prior FFI result for reformat.
+///
+/// Carries tenders, raw_text, image_filename, and warning placement so
+/// reformat does not drop multi-tender postings or card-last4 metadata.
 fn receipt_result_to_parsed(r: &ReceiptResult) -> ParsedReceiptData {
     use receipt_core::merchant_match::MerchantMatch as CoreMM;
     let status = match r.merchant_match.status {
@@ -552,6 +596,11 @@ fn receipt_result_to_parsed(r: &ReceiptResult) -> ParsedReceiptData {
         let d: u32 = parts.next()?.parse().ok()?;
         Some((y, m, d))
     });
+    let image_filename = if r.image_filename.is_empty() {
+        "receipt.jpg".into()
+    } else {
+        r.image_filename.clone()
+    };
     ParsedReceiptData {
         merchant: r.merchant.clone(),
         merchant_match: CoreMM {
@@ -576,17 +625,35 @@ fn receipt_result_to_parsed(r: &ReceiptResult) -> ParsedReceiptData {
             .collect(),
         tax: r.tax.clone(),
         subtotal: r.subtotal.clone(),
-        raw_text: String::new(),
-        image_filename: "receipt.jpg".into(),
+        raw_text: r.raw_text.clone(),
+        image_filename,
         warnings: r
             .warnings
             .iter()
-            .map(|m| ParsedReceiptWarning {
-                message: m.clone(),
-                after_item_index: None,
+            .enumerate()
+            .map(|(i, m)| {
+                let after = r
+                    .warning_after_item_indices
+                    .get(i)
+                    .copied()
+                    .filter(|&idx| idx >= 0)
+                    .map(|idx| idx as usize);
+                ParsedReceiptWarning {
+                    message: m.clone(),
+                    after_item_index: after,
+                }
             })
             .collect(),
-        tenders: Vec::<ParsedReceiptTender>::new(),
+        tenders: r
+            .tenders
+            .iter()
+            .map(|t| ParsedReceiptTender {
+                amount: t.amount.clone(),
+                account: t.account.clone(),
+                kind: t.kind.clone(),
+                raw_label: t.raw_label.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -605,7 +672,51 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use receipt_core::process::field_confidence;
+
+    fn sample_previous() -> ReceiptResult {
+        ReceiptResult {
+            merchant: "COSTCO".into(),
+            merchant_match: MerchantMatch {
+                raw: "COSTCO".into(),
+                canonical: Some("COSTCO".into()),
+                status: MerchantMatchStatus::Exact,
+                score: 1.0,
+            },
+            date: Some("2026-02-18".into()),
+            date_is_placeholder: false,
+            total: "10.00".into(),
+            tax: None,
+            subtotal: Some("10.00".into()),
+            items: vec![ReceiptItem {
+                description: "Milk".into(),
+                price: "10.00".into(),
+                quantity: 1,
+                category: Some("grocery_dairy".into()),
+                tags: vec![],
+            }],
+            warnings: vec![],
+            warning_after_item_indices: vec![],
+            raw_text: "COSTCO\n**** 1234\nTOTAL 10.00".into(),
+            image_filename: "costco.jpg".into(),
+            tenders: vec![ReceiptTender {
+                amount: "10.00".into(),
+                account: None,
+                kind: "card".into(),
+                raw_label: "MASTERCARD".into(),
+            }],
+            beancount: String::new(),
+            beanbeaver_id: None,
+            document_relpath: None,
+            timings: ScanTimings::default(),
+            confidence: FieldConfidences {
+                merchant: 1.0,
+                date: 1.0,
+                total: 1.0,
+                items_categorized: 1.0,
+                needs_review: false,
+            },
+        }
+    }
 
     #[test]
     fn parse_detections_rejects_short_points() {
@@ -636,64 +747,8 @@ mod tests {
 
     #[test]
     fn reformat_receipt_changes_merchant_in_beancount() {
-        // Minimal synthetic previous result.
-        let previous = ReceiptResult {
-            merchant: "COSTCO".into(),
-            merchant_match: MerchantMatch {
-                raw: "COSTCO".into(),
-                canonical: Some("COSTCO".into()),
-                status: MerchantMatchStatus::Exact,
-                score: 1.0,
-            },
-            date: Some("2026-02-18".into()),
-            date_is_placeholder: false,
-            total: "10.00".into(),
-            tax: None,
-            subtotal: Some("10.00".into()),
-            items: vec![ReceiptItem {
-                description: "Milk".into(),
-                price: "10.00".into(),
-                quantity: 1,
-                category: Some("grocery_dairy".into()),
-                tags: vec![],
-            }],
-            warnings: vec![],
-            beancount: String::new(),
-            beanbeaver_id: None,
-            document_relpath: None,
-            timings: ScanTimings::default(),
-            confidence: field_confidence(&receipt_result_to_parsed(&ReceiptResult {
-                merchant: "COSTCO".into(),
-                merchant_match: MerchantMatch {
-                    raw: "COSTCO".into(),
-                    canonical: Some("COSTCO".into()),
-                    status: MerchantMatchStatus::Exact,
-                    score: 1.0,
-                },
-                date: Some("2026-02-18".into()),
-                date_is_placeholder: false,
-                total: "10.00".into(),
-                tax: None,
-                subtotal: None,
-                items: vec![],
-                warnings: vec![],
-                beancount: String::new(),
-                beanbeaver_id: None,
-                document_relpath: None,
-                timings: ScanTimings::default(),
-                confidence: FieldConfidences {
-                    merchant: 1.0,
-                    date: 1.0,
-                    total: 1.0,
-                    items_categorized: 1.0,
-                    needs_review: false,
-                },
-            }))
-            .into(),
-        };
-
         let edited = reformat_receipt(
-            previous,
+            sample_previous(),
             DateYmd {
                 year: 2026,
                 month: 2,
@@ -710,11 +765,76 @@ mod tests {
                 item_classifier_override_tomls: vec![],
                 known_merchants: vec![],
             },
-        );
+        )
+        .expect("reformat");
         assert_eq!(edited.merchant, "Costco Wholesale");
         assert_eq!(edited.date.as_deref(), Some("2026-02-19"));
         assert!(edited.beancount.contains("Costco Wholesale"));
         assert!(edited.beancount.contains("2026-02-19"));
+        // Round-trip OCR metadata / tenders.
+        assert_eq!(edited.raw_text, "COSTCO\n**** 1234\nTOTAL 10.00");
+        assert_eq!(edited.image_filename, "costco.jpg");
+        assert_eq!(edited.tenders.len(), 1);
+        assert!(!edited.confidence.needs_review);
+        // Classifier key preserved despite account override in beancount.
+        assert_eq!(
+            edited.items[0].category.as_deref(),
+            Some("grocery_dairy")
+        );
+    }
+
+    #[test]
+    fn reformat_receipt_rejects_bad_date() {
+        let err = reformat_receipt(
+            sample_previous(),
+            DateYmd {
+                year: 2026,
+                month: 2,
+                day: 18,
+            },
+            "Liabilities:CreditCard".into(),
+            None,
+            ReceiptEdits {
+                merchant: None,
+                date_iso: Some("bogus".into()),
+                item_account_overrides: vec![],
+            },
+            ParseOptions {
+                item_classifier_override_tomls: vec![],
+                known_merchants: vec![],
+            },
+        );
+        assert!(
+            matches!(err, Err(ScanError::Parse { .. })),
+            "expected Parse error for bad date_iso"
+        );
+    }
+
+    #[test]
+    fn parse_detections_rejects_bad_override_toml() {
+        let result = parse_detections(
+            vec![DetectionInput {
+                points_xy: vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0],
+                text: "TOTAL 1.00".into(),
+                confidence: 0.9,
+            }],
+            100,
+            100,
+            0,
+            "t.jpg".into(),
+            DateYmd {
+                year: 2026,
+                month: 1,
+                day: 1,
+            },
+            "Liabilities:CreditCard".into(),
+            None,
+            ParseOptions {
+                item_classifier_override_tomls: vec!["not {{ valid toml".into()],
+                known_merchants: vec![],
+            },
+        );
+        assert!(matches!(result, Err(ScanError::Parse { .. })));
     }
 
     // Full FFI round-trip on the committed fixture. Mirrors ocr-paddle's
