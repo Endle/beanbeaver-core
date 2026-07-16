@@ -1,0 +1,66 @@
+//! Public and private types for text-line item extraction.
+
+#[derive(Clone, Debug)]
+pub struct ParsedTextItem {
+    pub description: String,
+    pub category_source: String,
+    pub price_cents: i64,
+    pub quantity: i32,
+}
+
+#[derive(Clone, Debug)]
+pub struct TextParserWarning {
+    pub message: String,
+    pub after_item_index: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MalformedTrailingPriceCandidate {
+    pub(crate) description: String,
+    pub(crate) category_source: String,
+    pub(crate) observed_token: String,
+    pub(crate) observed_fraction: String,
+    pub(crate) whole_dollars: i64,
+    pub(crate) context: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CandidatePriceOption {
+    pub(crate) price_cents: i64,
+    pub(crate) score: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum DeferredTextOutcome {
+    Item(ParsedTextItem),
+    Warning(String),
+    Malformed(MalformedTrailingPriceCandidate),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct QuantityModifier {
+    pub(crate) quantity: i32,
+    pub(crate) unit_price_cents: Option<i64>,
+    pub(crate) weight_text: Option<String>,
+    pub(crate) deal_price_cents: Option<i64>,
+    pub(crate) pattern_type: QuantityPatternType,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum QuantityPatternType {
+    CountAtPrice,
+    WeightAtPrice,
+    MultiForPrice,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ReconciliationState {
+    pub(crate) score: usize,
+    pub(crate) prices: Vec<i64>,
+    pub(crate) ambiguous: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ReconciledMalformedPrices {
+    pub(crate) prices: Vec<i64>,
+}
