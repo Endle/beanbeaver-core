@@ -52,6 +52,12 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check licenses
+        # This action runs in its own Docker container that has no sccache, so
+        # the job-level RUSTC_WRAPPER=sccache would make its `cargo metadata`
+        # fail to exec rustc ("No such file or directory"). deny only reads
+        # metadata (no compilation), so unset the wrapper for this step.
+        env:
+          RUSTC_WRAPPER: ""
 
   test:
     name: test (${{ matrix.os }})
