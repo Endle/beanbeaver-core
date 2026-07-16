@@ -6,19 +6,22 @@
 //!
 //!   cargo test -p ocr-paddle --test public_live_e2e -- --nocapture
 //!
-//! Contract (deliberately loose — live OCR is nondeterministic across platforms,
-//! and PP-OCRv5 mobile output differs mac vs. linux):
-//!   * HARD: the pipeline must finish successfully for every picked fixture —
-//!     `process_image` returns Ok and yields a non-empty beancount rendering.
-//!     A panic/Err here fails the test.
-//!   * SOFT: parsed merchant / date / total / critical items are compared to the
-//!     `.expected.json` baseline and any divergence is reported as a WARNING, not
-//!     a failure. Tightening these into hard gates is future work (see the strict,
-//!     `--ignored` `phase5_e2e.rs` with its `KNOWN_ON_DEVICE_GAPS` ledger).
+//! Contract (live OCR is nondeterministic across platforms; PP-OCRv5 mobile
+//! output can differ mac vs. linux):
+//!   * HARD (pipeline): every run fixture must finish — `process_image` Ok and
+//!     non-empty beancount.
+//!   * HARD (parse fixtures): a fixed short list of fixtures must match
+//!     merchant + total against `.expected.json` with stricter merchant
+//!     matching and price tolerance. Catches real stack breakage without
+//!     requiring full corpus determinism. Runs on every CI OS (Linux + macOS);
+//!     keep the list short and historically stable to limit flake surface.
+//!   * SOFT: other merchant / date / total / critical_items divergences on the
+//!     random sample are WARNING only. Stricter ledger: `phase5_e2e.rs`
+//!     (`--ignored`, `KNOWN_ON_DEVICE_GAPS`).
 //!
-//! Only 2 fixtures are exercised per run (OCR is slow); the pick is randomized so
-//! coverage rotates over time. Set `LIVE_E2E_SEED` to reproduce a run and
-//! `LIVE_E2E_COUNT` to change how many are exercised.
+//! Random sample: default 2 fixtures (`LIVE_E2E_COUNT` / `LIVE_E2E_SEED`).
+//! Hard-parse fixtures always run in addition to the random sample.
+//! Pin `LIVE_E2E_SEED` in CI when bisecting soft-sample flakiness.
 //!
 //! Skips (does not fail) when the ONNX models are absent, so a plain
 //! `cargo test -p ocr-paddle` stays green without `models/` provisioned. CI
@@ -38,6 +41,15 @@ use serde_json::Value;
 /// Reference "today"; the corpus uses explicit full dates, so this is inert.
 const TODAY: (i32, u32, u32) = (2026, 7, 2);
 const CREDIT_CARD_ACCOUNT: &str = "Liabilities:CreditCard";
+
+/// Fixed fixtures that **must** hard-pass merchant + total on live OCR
+/// (not an allow-to-fail list). Keep short and historically stable; expand only
+/// when a fixture has proven reliable across Linux/macOS CPU ORT in CI.
+const HARD_PARSE_FIXTURES: &[&str] = &[
+    "costco_20260218_redact",
+    "walmart_20260218_redact",
+    "freshco_redact",
+];
 
 fn manifest_rel(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(rel)
@@ -66,7 +78,7 @@ fn levenshtein(a: &[u8], b: &[u8]) -> usize {
     prev[b.len()]
 }
 
-/// Normalized substring either way, else similarity ratio >= 0.85.
+/// Soft merchant check: normalized substring either way, else similarity >= 0.85.
 fn merchant_matches(expected: &str, actual: &str) -> bool {
     let (e, a) = (normalize_merchant(expected), normalize_merchant(actual));
     if e.is_empty() || a.is_empty() {
@@ -75,8 +87,37 @@ fn merchant_matches(expected: &str, actual: &str) -> bool {
     if a.contains(&e) || e.contains(&a) {
         return true;
     }
+    merchant_similarity(&e, &a) >= 0.85
+}
+
+fn merchant_similarity(e: &str, a: &str) -> f64 {
     let maxlen = e.len().max(a.len());
-    (maxlen - levenshtein(e.as_bytes(), a.as_bytes())) as f64 / maxlen as f64 >= 0.85
+    if maxlen == 0 {
+        return 0.0;
+    }
+    (maxlen - levenshtein(e.as_bytes(), a.as_bytes())) as f64 / maxlen as f64
+}
+
+/// Hard merchant check: reject one-character / tiny substring short-circuits.
+/// Accept exact normalized equality, substantial containment (min 4 chars or
+/// full expected length), or similarity >= 0.85.
+fn merchant_matches_hard(expected: &str, actual: &str) -> bool {
+    let (e, a) = (normalize_merchant(expected), normalize_merchant(actual));
+    if e.is_empty() || a.is_empty() {
+        return false;
+    }
+    if e == a {
+        return true;
+    }
+    let min_contain = 4.min(e.len()).min(a.len());
+    if min_contain > 0 && (a.contains(&e) || e.contains(&a)) {
+        // Require the shorter side to be at least `min_contain` so "C" ⊄ hard-pass.
+        let shorter = e.len().min(a.len());
+        if shorter >= min_contain {
+            return true;
+        }
+    }
+    merchant_similarity(&e, &a) >= 0.85
 }
 
 /// Decimal-equal (expected "6.97" vs on-device "6.9700").
@@ -178,14 +219,28 @@ fn public_live_e2e() {
             .unwrap()
             .as_nanos() as u64
     });
-    let picks: Vec<String> = pick_indices(names.len(), count, seed)
+    let mut picks: Vec<String> = pick_indices(names.len(), count, seed)
         .into_iter()
         .map(|i| names[i].clone())
         .collect();
+
+    // Always exercise the hard-parse fixtures (in addition to the random sample).
+    for stem in HARD_PARSE_FIXTURES {
+        assert!(
+            names.iter().any(|n| n == *stem),
+            "hard-parse fixture missing from corpus: {stem}"
+        );
+        if !picks.iter().any(|n| n == *stem) {
+            picks.push((*stem).to_string());
+        }
+    }
+    picks.sort();
+    picks.dedup();
     eprintln!(
-        "public_live_e2e: seed={seed}, picked {:?} of {} fixture(s)",
+        "public_live_e2e: seed={seed}, fixtures {:?} ({} total; hard-parse {:?})",
         picks,
-        names.len()
+        picks.len(),
+        HARD_PARSE_FIXTURES
     );
 
     let mut engine = OcrEngine::from_paths(&det, &rec, Some(&cls)).expect("load PP-OCRv5 models");
@@ -228,15 +283,46 @@ fn public_live_e2e() {
             d.items.len(),
         );
 
-        // SOFT gate: compare to the baseline; divergence -> warning, never failure.
         let expected: Value = serde_json::from_str(
             &fs::read_to_string(fixtures.join(format!("{name}.expected.json"))).unwrap(),
         )
         .unwrap();
+        let hard = HARD_PARSE_FIXTURES.iter().any(|s| *s == name.as_str());
+
+        if hard {
+            // HARD parse gate: both merchant and total are required on the
+            // expectation, then must match (stricter merchant + price tolerance).
+            let m = expected
+                .get("merchant")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| {
+                    panic!("{name}: hard-parse fixture missing string 'merchant' in .expected.json")
+                });
+            let t = expected
+                .get("total")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| {
+                    panic!("{name}: hard-parse fixture missing string 'total' in .expected.json")
+                });
+            assert!(
+                merchant_matches_hard(m, &d.merchant),
+                "{name}: HARD merchant expected '{m}', got '{}'",
+                d.merchant
+            );
+            assert!(
+                price_matches(t, &d.total),
+                "{name}: HARD total expected '{t}', got '{}'",
+                d.total
+            );
+            eprintln!("  HARD parse ok: merchant+total");
+        }
+
+        // SOFT gate: compare to the baseline; divergence -> warning, never failure
+        // (except hard-parse merchant/total already asserted above).
         let mut warn = |msg: String| warnings.push(format!("{name}: {msg}"));
 
         if let Some(m) = expected.get("merchant").and_then(Value::as_str) {
-            if !merchant_matches(m, &d.merchant) {
+            if !hard && !merchant_matches(m, &d.merchant) {
                 warn(format!("merchant expected '{m}', got '{}'", d.merchant));
             }
         }
@@ -247,7 +333,7 @@ fn public_live_e2e() {
             }
         }
         if let Some(t) = expected.get("total").and_then(Value::as_str) {
-            if !price_matches(t, &d.total) {
+            if !hard && !price_matches(t, &d.total) {
                 warn(format!("total expected '{t}', got '{}'", d.total));
             }
         }
@@ -292,7 +378,6 @@ fn public_live_e2e() {
         eprintln!("  ⚠ {w}");
     }
 
-    // The only hard requirement: every picked fixture completed the pipeline.
     assert_eq!(
         ran,
         picks.len(),

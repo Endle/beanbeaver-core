@@ -214,9 +214,8 @@ pub fn parser_rule_layers_with_overrides(
         DEFAULT_ITEM_CLASSIFIER_TOML,
     ))];
     for (i, text) in override_classifier_tomls.iter().enumerate() {
-        let parsed: ClassifierToml = toml::from_str(text).map_err(|e| {
-            format!("invalid override classifier TOML (layer {i}): {e}")
-        })?;
+        let parsed: ClassifierToml = toml::from_str(text)
+            .map_err(|e| format!("invalid override classifier TOML (layer {i}): {e}"))?;
         configs.push(to_build_config(parsed));
     }
     let category_rules = build_rule_layers(default_category_accounts(), configs, vec![]);

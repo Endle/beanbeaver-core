@@ -1491,6 +1491,10 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
 
 #[cfg(test)]
 mod tests {
+    // Word bounding boxes below are real OCR-derived, normalized coordinates;
+    // some (e.g. 0.318) land near a math constant (1/π) purely by coincidence.
+    #![allow(clippy::approx_constant)]
+
     use super::{extract_spatial_items, is_price_word, BboxInput, LineInput, PageInput, WordInput};
 
     #[test]
