@@ -777,10 +777,7 @@ mod tests {
         assert_eq!(edited.tenders.len(), 1);
         assert!(!edited.confidence.needs_review);
         // Classifier key preserved despite account override in beancount.
-        assert_eq!(
-            edited.items[0].category.as_deref(),
-            Some("grocery_dairy")
-        );
+        assert_eq!(edited.items[0].category.as_deref(), Some("grocery_dairy"));
     }
 
     #[test]

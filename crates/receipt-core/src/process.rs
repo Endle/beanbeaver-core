@@ -237,11 +237,10 @@ fn resolve_rule_layers(options: &ProcessOptions) -> Result<ParserRuleLayers, Str
 fn parse_iso_ymd(iso: &str) -> Result<(i32, u32, u32), String> {
     let iso = iso.trim();
     let mut parts = iso.split('-');
-    let (Some(ys), Some(ms), Some(ds), None) = (parts.next(), parts.next(), parts.next(), parts.next())
+    let (Some(ys), Some(ms), Some(ds), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
     else {
-        return Err(format!(
-            "date_iso must be YYYY-MM-DD (got {iso:?})"
-        ));
+        return Err(format!("date_iso must be YYYY-MM-DD (got {iso:?})"));
     };
     if ys.len() != 4 || ms.len() != 2 || ds.len() != 2 {
         return Err(format!(
@@ -689,6 +688,9 @@ mod tests {
             &opts,
         )
         .unwrap_err();
-        assert!(err.contains("TOML") || err.contains("toml") || err.contains("invalid"), "{err}");
+        assert!(
+            err.contains("TOML") || err.contains("toml") || err.contains("invalid"),
+            "{err}"
+        );
     }
 }
