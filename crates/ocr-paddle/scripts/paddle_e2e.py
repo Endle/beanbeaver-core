@@ -19,11 +19,15 @@ MAX_DIM, PAD = 3000, 50
 
 
 def resize_and_pad(path):
+    """Pillow-parity with receipt_image::resize_cap_long_side: int() truncation, not round()."""
     img = ImageOps.exif_transpose(Image.open(path).convert("RGB"))
     w, h = img.size
     if max(w, h) > MAX_DIM:
-        r = MAX_DIM / max(w, h)
-        img = img.resize((max(1, round(w * r)), max(1, round(h * r))), Image.Resampling.LANCZOS)
+        if w > h:
+            nw, nh = MAX_DIM, int(h * (MAX_DIM / w))
+        else:
+            nw, nh = int(w * (MAX_DIM / h)), MAX_DIM
+        img = img.resize((max(1, nw), max(1, nh)), Image.Resampling.LANCZOS)
     w, h = img.size
     c = Image.new("RGB", (w + 2 * PAD, h + 2 * PAD), (255, 255, 255))
     c.paste(img, (PAD, PAD))

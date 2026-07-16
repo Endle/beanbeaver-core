@@ -49,8 +49,7 @@ pub fn preprocess_image_bytes(
     quality: u8,
 ) -> Result<Vec<u8>, PreprocessError> {
     let rgb = decode_oriented_rgb(bytes)?;
-    let resized = resize_cap_long_side(&rgb, max_dim);
-    let padded = pad_white(&resized, padding);
+    let padded = resize_and_pad(&rgb, max_dim, padding);
     encode_jpeg(&padded, quality)
 }
 
@@ -76,7 +75,7 @@ fn decode_oriented_rgb(bytes: &[u8]) -> Result<RgbImage, PreprocessError> {
 /// Cap the longer side at `max_dim` with Lanczos, mirroring `resize_max_dim_op`.
 /// Uses Python `int()` truncation for the derived side (NOT rounding) so the
 /// output dimensions match Pillow exactly.
-fn resize_cap_long_side(img: &RgbImage, max_dim: u32) -> RgbImage {
+pub fn resize_cap_long_side(img: &RgbImage, max_dim: u32) -> RgbImage {
     let (w, h) = (img.width(), img.height());
     if w <= max_dim && h <= max_dim {
         return img.clone();
@@ -90,7 +89,7 @@ fn resize_cap_long_side(img: &RgbImage, max_dim: u32) -> RgbImage {
 }
 
 /// Surround with `padding` px of white, mirroring `ImageOps.expand(fill="white")`.
-fn pad_white(img: &RgbImage, padding: u32) -> RgbImage {
+pub fn pad_white(img: &RgbImage, padding: u32) -> RgbImage {
     if padding == 0 {
         return img.clone();
     }
@@ -101,6 +100,13 @@ fn pad_white(img: &RgbImage, padding: u32) -> RgbImage {
     );
     image::imageops::overlay(&mut out, img, padding as i64, padding as i64);
     out
+}
+
+/// Cap long side then white-pad — the in-memory prep shared by on-device OCR
+/// (`ocr-paddle`) and the encode path in [`preprocess_image_bytes`].
+pub fn resize_and_pad(img: &RgbImage, max_dim: u32, padding: u32) -> RgbImage {
+    let resized = resize_cap_long_side(img, max_dim);
+    pad_white(&resized, padding)
 }
 
 /// Encode RGB → baseline JPEG at `quality`, mirroring `save(format="JPEG", quality=…)`.
@@ -168,5 +174,14 @@ mod tests {
         let padded = pad_white(&src, 5);
         assert_eq!(*padded.get_pixel(0, 0), Rgb([255, 255, 255]));
         assert_eq!(*padded.get_pixel(7, 7), Rgb([10, 10, 10]));
+    }
+
+    #[test]
+    fn resize_and_pad_matches_compose() {
+        let src = RgbImage::from_pixel(4000, 2000, Rgb([1, 2, 3]));
+        let composed = pad_white(&resize_cap_long_side(&src, 3000), 50);
+        let once = resize_and_pad(&src, 3000, 50);
+        assert_eq!(once.dimensions(), composed.dimensions());
+        assert_eq!(once.dimensions(), (3100, 1600));
     }
 }
