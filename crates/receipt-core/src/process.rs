@@ -67,6 +67,10 @@ pub struct ProcessedReceipt {
     pub document_relpath: Option<String>,
     /// Heuristic field confidences for review UX.
     pub confidence: FieldConfidence,
+    /// The raw OCR detections this parse was built from (padded-image pixel
+    /// coordinates, pre-transform), surfaced for debugging/E2E snapshot diffing.
+    /// Empty on the reformat path (no OCR was run).
+    pub detections: Vec<RawDetection>,
 }
 
 /// User corrections applied when regenerating beancount without re-running OCR.
@@ -430,6 +434,9 @@ pub fn process_receipt_with_options(
         .clone()
         .unwrap_or_else(default_merchant_families);
 
+    // Keep a copy of the raw detections for debugging/E2E diffing before
+    // `transform` consumes them.
+    let detections_out = detections.clone();
     let ocr = transform(detections, padded_width, padded_height, padding);
 
     let parsed = parse_receipt(
@@ -459,6 +466,7 @@ pub fn process_receipt_with_options(
         beanbeaver_id,
         document_relpath,
         confidence,
+        detections: detections_out,
     })
 }
 
@@ -516,6 +524,7 @@ pub fn reformat_parsed_receipt(
         beanbeaver_id,
         document_relpath,
         confidence,
+        detections: Vec::new(),
     })
 }
 
