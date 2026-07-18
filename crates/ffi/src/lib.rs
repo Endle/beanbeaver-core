@@ -214,6 +214,20 @@ pub struct ReceiptResult {
     pub timings: ScanTimings,
     /// Field-level confidence / needs-review hint for the UI.
     pub confidence: FieldConfidences,
+    /// Raw OCR detection boxes this parse was built from (padded-image pixel
+    /// coordinates). Populated on a real scan; empty on reformat. Intended for
+    /// debugging / E2E snapshot-vs-live geometry diffing, not the normal UI.
+    pub detections: Vec<OcrDetection>,
+}
+
+/// One OCR detection box as emitted by the engine, surfaced on
+/// [`ReceiptResult`] for debugging. Mirrors [`DetectionInput`]'s shape.
+#[derive(uniffi::Record)]
+pub struct OcrDetection {
+    /// Polygon points as `[x0, y0, x1, y1, …]` in padded-image pixels.
+    pub points_xy: Vec<f64>,
+    pub text: String,
+    pub confidence: f64,
 }
 
 /// One OCR detection box for [`parse_detections`] (no ONNX required).
@@ -530,6 +544,15 @@ fn to_process_options(options: &ParseOptions) -> ProcessOptions {
 /// Flatten the rich `ProcessedReceipt` into the FFI record.
 fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
     let confidence = p.confidence.clone().into();
+    let detections = p
+        .detections
+        .iter()
+        .map(|det| OcrDetection {
+            points_xy: det.points.iter().flat_map(|(x, y)| [*x, *y]).collect(),
+            text: det.text.clone(),
+            confidence: det.confidence,
+        })
+        .collect();
     let d = p.parsed;
     let warning_after_item_indices: Vec<i32> = d
         .warnings
@@ -574,6 +597,7 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
         document_relpath: p.document_relpath,
         timings,
         confidence,
+        detections,
     }
 }
 
@@ -715,6 +739,7 @@ mod tests {
                 items_categorized: 1.0,
                 needs_review: false,
             },
+            detections: vec![],
         }
     }
 

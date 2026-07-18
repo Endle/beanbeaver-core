@@ -115,8 +115,12 @@ pub fn transform(
         let mut helper_words = Vec::with_capacity(group.len());
         let mut spatial_words = Vec::with_capacity(group.len());
         let mut texts = Vec::with_capacity(group.len());
+        let mut line_height = 0.0f64;
+        let mut sum_center_y = 0.0f64;
         for &idx in &group {
             let det = &detection_data[idx];
+            line_height = line_height.max(det.y_max - det.y_min);
+            sum_center_y += det.center_y;
             let xs: Vec<f64> = det.bbox.iter().map(|(x, _)| *x).collect();
             let ys: Vec<f64> = det.bbox.iter().map(|(_, y)| *y).collect();
             let bbox = BboxInput {
@@ -145,10 +149,17 @@ pub fn transform(
             });
         }
         let line_text = texts.join(" ");
+        let center_y = if group.is_empty() {
+            0.0
+        } else {
+            sum_center_y / group.len() as f64
+        };
         full_text_lines.push(line_text.clone());
         helper_lines.push(MerchantLineInput {
             text: line_text.clone(),
             words: helper_words,
+            height: line_height,
+            center_y,
         });
         spatial_lines.push(LineInput {
             text: line_text,
