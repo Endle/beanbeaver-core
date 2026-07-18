@@ -46,3 +46,12 @@ aliases = ["FOODY MART"]
 [[families]]
 canonical = "SHOPPERS DRUG MART"
 aliases = ["SHOPPERS DRUG MART"]
+
+# Pharmasave stores print the independently-owned franchise name as the top
+# banner line (e.g. "GRAND GENESIS") with the "PHARMASAVE" banner on the line
+# below, so the raw header is the franchise name and the merchant is otherwise
+# unrecognized. The exact alias match on "PHARMASAVE" anywhere in the receipt
+# recovers the drugstore banner (like Shoppers above).
+[[families]]
+canonical = "PHARMASAVE"
+aliases = ["PHARMASAVE"]

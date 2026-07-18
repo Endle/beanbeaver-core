@@ -192,10 +192,7 @@ pub fn resolve(
             }
         }
         if let Some((score, family)) = best {
-            let corroborated = family
-                .corroborators
-                .iter()
-                .any(|token| full_text_upper.contains(&token.to_ascii_uppercase()));
+            let corroborated = corroborator_present(full_text_upper, &family.corroborators);
             if score >= HIGH_SIMILARITY && corroborated {
                 return MerchantMatch {
                     raw,
@@ -222,6 +219,23 @@ pub fn resolve(
         status: MerchantMatchStatus::Unknown,
         score: 0.0,
     }
+}
+
+/// True if any corroborator token appears in the receipt text. Besides a direct
+/// substring, the whitespace-collapsed text is also checked so a corroborator the
+/// OCR split across a space still counts — e.g. Costco's "WHOLESALE" frequently
+/// reads as "WHOL ESALE", which would otherwise drop the fuzzy header match
+/// ("OSTCO" -> "COSTCO") from an authoritative `Corrected` down to a `Suggested`.
+/// `full_text_upper` is expected pre-uppercased.
+fn corroborator_present(full_text_upper: &str, corroborators: &[String]) -> bool {
+    if corroborators.is_empty() {
+        return false;
+    }
+    let collapsed: String = full_text_upper.split_whitespace().collect();
+    corroborators.iter().any(|token| {
+        let token = token.to_ascii_uppercase();
+        full_text_upper.contains(&token) || collapsed.contains(&token.replace(' ', ""))
+    })
 }
 
 /// True if `needle` occurs in `haystack` bounded by word boundaries. Both are
@@ -330,6 +344,22 @@ mod tests {
     }
 
     #[test]
+    fn split_corroborator_still_corrects_costco() {
+        // OCR dropped Costco's leading C ("OSTCO") and split "WHOLESALE" across a
+        // space ("WHOL ESALE"). The fuzzy header still matches COSTCO, and the
+        // whitespace-collapsed corroborator recovers "WHOLESALE" so the match is
+        // authoritative (Corrected) rather than a non-applied Suggestion.
+        let m = resolve(
+            "OSTCO WHOL ESALE",
+            "OSTCO WHOL ESALE #545 65 KIRKHAM DRIVE",
+            &[],
+            &families(),
+        );
+        assert_eq!(m.status, MerchantMatchStatus::Corrected);
+        assert_eq!(m.display(), "COSTCO");
+    }
+
+    #[test]
     fn lookalike_without_corroborator_is_not_silently_rewritten() {
         // "COSTLESS" is close-ish to COSTCO but is a different, real store and
         // there is no corroborator: never auto-applied, display stays raw.
@@ -349,6 +379,27 @@ mod tests {
         );
         assert_eq!(m.status, MerchantMatchStatus::Corrected);
         assert_eq!(m.display(), "FRESHCO");
+    }
+
+    #[test]
+    fn pharmasave_recovered_from_franchise_banner() {
+        // The independently-owned franchise name ("GRAND GENESIS") is the raw
+        // header; the "PHARMASAVE" banner sits on the line below and recovers the
+        // drugstore, so the merchant is no longer left Unknown.
+        let families = vec![MerchantFamily {
+            canonical: "PHARMASAVE".to_string(),
+            aliases: vec!["PHARMASAVE".to_string()],
+            corroborators: vec![],
+        }];
+        let m = resolve(
+            "GRAND GENESIS",
+            "GRAND GENESIS PHARMASAVE HAVE A GREAT DAY",
+            &[],
+            &families,
+        );
+        assert_eq!(m.status, MerchantMatchStatus::Corrected);
+        assert_eq!(m.display(), "PHARMASAVE");
+        assert_eq!(m.raw, "GRAND GENESIS");
     }
 
     #[test]
