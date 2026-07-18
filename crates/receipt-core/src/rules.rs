@@ -311,4 +311,10 @@ mod tests {
         let merchants = default_known_merchants();
         assert!(merchants.iter().any(|m| m == "COSTCO"));
     }
+
+    #[test]
+    fn default_merchant_families_include_pharmasave() {
+        let families = default_merchant_families();
+        assert!(families.iter().any(|f| f.canonical == "PHARMASAVE"));
+    }
 }

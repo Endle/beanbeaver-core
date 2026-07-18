@@ -352,6 +352,27 @@ mod tests {
     }
 
     #[test]
+    fn pharmasave_recovered_from_franchise_banner() {
+        // The independently-owned franchise name ("GRAND GENESIS") is the raw
+        // header; the "PHARMASAVE" banner sits on the line below and recovers the
+        // drugstore, so the merchant is no longer left Unknown.
+        let families = vec![MerchantFamily {
+            canonical: "PHARMASAVE".to_string(),
+            aliases: vec!["PHARMASAVE".to_string()],
+            corroborators: vec![],
+        }];
+        let m = resolve(
+            "GRAND GENESIS",
+            "GRAND GENESIS PHARMASAVE HAVE A GREAT DAY",
+            &[],
+            &families,
+        );
+        assert_eq!(m.status, MerchantMatchStatus::Corrected);
+        assert_eq!(m.display(), "PHARMASAVE");
+        assert_eq!(m.raw, "GRAND GENESIS");
+    }
+
+    #[test]
     fn exact_known_keyword_is_exact_and_preserved() {
         let m = resolve(
             "COSTCO",
