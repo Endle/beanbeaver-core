@@ -183,6 +183,8 @@ fn phase5_on_device_vs_expected() {
             &format!("{name}.jpg"),
             (2026, 6, 21),
             "Liabilities:CreditCard",
+            "CAD",
+            "Expenses:Tax:HST",
             None,
         )
         .expect("process_image");

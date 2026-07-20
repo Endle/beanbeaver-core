@@ -265,6 +265,8 @@ fn public_live_e2e() {
             &format!("{name}.jpg"),
             TODAY,
             CREDIT_CARD_ACCOUNT,
+            "CAD",
+            "Expenses:Tax:HST",
             None,
         )
         .unwrap_or_else(|e| panic!("{name}: pipeline did not finish: {e}"));

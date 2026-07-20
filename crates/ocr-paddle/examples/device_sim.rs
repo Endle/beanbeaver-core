@@ -532,6 +532,8 @@ fn run_attrib(engine: &mut OcrEngine, path: &Path) {
             &format!("{name}.jpg"),
             today,
             "Liabilities:CreditCard",
+            "CAD",
+            "Expenses:Tax:HST",
             None,
         )
         .expect("process_image");
@@ -710,6 +712,8 @@ fn extract(
                 None,
                 today,
                 "Liabilities:CreditCard",
+                "CAD",
+                "Expenses:Tax:HST",
                 None,
             ),
             None,
@@ -723,6 +727,8 @@ fn extract(
             &filename,
             today,
             "Liabilities:CreditCard",
+            "CAD",
+            "Expenses:Tax:HST",
             None,
         )
         .expect("process_image");
@@ -1047,6 +1053,8 @@ fn run_reccached(
             None,
             today,
             "Liabilities:CreditCard",
+            "CAD",
+            "Expenses:Tax:HST",
             None,
         );
         let expected: Value = serde_json::from_str(

@@ -31,6 +31,12 @@ pub struct FormatterReceiptInput {
     pub items: Vec<FormatterItemInput>,
     pub warnings: Vec<FormatterWarningInput>,
     pub tenders: Vec<FormatterTenderInput>,
+    /// Beancount commodity for every amount on this entry (e.g. `CAD`, `USD`,
+    /// `GBP`). The user's per-device operating currency — not hard-coded.
+    pub currency: String,
+    /// Account the tax posting lands on (e.g. `Expenses:Tax:HST`,
+    /// `Expenses:Tax:VAT`). Per-device, since the tax regime is stable per user.
+    pub tax_account: String,
 }
 
 fn pending_account_for_kind(kind: &str) -> &'static str {
@@ -50,12 +56,13 @@ fn build_payment_postings(
     fallback_account: &str,
     total_cents: i64,
 ) -> Vec<(String, String, Option<String>)> {
+    let currency = &receipt.currency;
     let card_comment =
         extract_card_last4(&receipt.raw_text).map(|last4| format!("card ****{last4}"));
     if receipt.tenders.is_empty() {
         return vec![(
             fallback_account.to_string(),
-            format!("{} CAD", cents_to_fixed(-total_cents)),
+            format!("{} {currency}", cents_to_fixed(-total_cents)),
             card_comment,
         )];
     }
@@ -78,7 +85,7 @@ fn build_payment_postings(
             };
             (
                 account,
-                format!("{} CAD", cents_to_fixed(-amount_cents)),
+                format!("{} {currency}", cents_to_fixed(-amount_cents)),
                 comment,
             )
         })
@@ -255,6 +262,7 @@ pub fn format_parsed_receipt(
     credit_card_account: &str,
     image_sha256: Option<&str>,
 ) -> String {
+    let currency = &receipt.currency;
     let total_cents = decimal_to_cents(&receipt.total);
     let tax_cents = receipt.tax.as_deref().map(decimal_to_cents);
     let mut lines = Vec::new();
@@ -320,7 +328,7 @@ pub fn format_parsed_receipt(
         };
         postings.push((
             item.posting_account.clone(),
-            format!("{} CAD", cents_to_fixed(decimal_to_cents(&item.price))),
+            format!("{} {currency}", cents_to_fixed(decimal_to_cents(&item.price))),
             comment,
         ));
         item_total_cents += decimal_to_cents(&item.price);
@@ -329,8 +337,8 @@ pub fn format_parsed_receipt(
     if let Some(tax_cents) = tax_cents {
         if tax_cents != 0 {
             postings.push((
-                "Expenses:Tax:HST".to_string(),
-                format!("{} CAD", cents_to_fixed(tax_cents)),
+                receipt.tax_account.clone(),
+                format!("{} {currency}", cents_to_fixed(tax_cents)),
                 None,
             ));
             item_total_cents += tax_cents;
@@ -342,7 +350,7 @@ pub fn format_parsed_receipt(
         if diff > 0 {
             postings.push((
                 "Expenses:FIXME".to_string(),
-                format!("{} CAD", cents_to_fixed(diff)),
+                format!("{} {currency}", cents_to_fixed(diff)),
                 Some("FIXME: unaccounted amount".to_string()),
             ));
         }
@@ -374,6 +382,7 @@ pub fn format_draft_beancount(
     receipt: &FormatterReceiptInput,
     credit_card_account: &str,
 ) -> String {
+    let currency = &receipt.currency;
     let total_cents = decimal_to_cents(&receipt.total);
     let tax_cents = receipt.tax.as_deref().map(decimal_to_cents);
     let mut lines = Vec::new();
@@ -409,7 +418,7 @@ pub fn format_draft_beancount(
         };
         postings.push((
             item.posting_account.clone(),
-            format!("{} CAD", cents_to_fixed(decimal_to_cents(&item.price))),
+            format!("{} {currency}", cents_to_fixed(decimal_to_cents(&item.price))),
             comment,
         ));
         item_total_cents += decimal_to_cents(&item.price);
@@ -418,8 +427,8 @@ pub fn format_draft_beancount(
     if let Some(tax_cents) = tax_cents {
         if tax_cents != 0 {
             postings.push((
-                "Expenses:Tax:HST".to_string(),
-                format!("{} CAD", cents_to_fixed(tax_cents)),
+                receipt.tax_account.clone(),
+                format!("{} {currency}", cents_to_fixed(tax_cents)),
                 None,
             ));
             item_total_cents += tax_cents;
@@ -431,7 +440,7 @@ pub fn format_draft_beancount(
         if diff > 0 {
             postings.push((
                 "Expenses:FIXME".to_string(),
-                format!("{} CAD", cents_to_fixed(diff)),
+                format!("{} {currency}", cents_to_fixed(diff)),
                 Some("FIXME: unaccounted amount".to_string()),
             ));
         } else if diff < 0 {
@@ -559,6 +568,7 @@ pub fn format_enriched_transaction(
     beanbeaver_id: Option<&str>,
     document: Option<&str>,
 ) -> String {
+    let currency = &receipt.currency;
     let receipt_total_cents = decimal_to_cents(&receipt.total);
     let tax_cents = receipt.tax.as_deref().map(decimal_to_cents);
     let mut lines = Vec::new();
@@ -635,7 +645,7 @@ pub fn format_enriched_transaction(
             };
             postings.push((
                 account,
-                format!("{} CAD", cents_to_fixed(-amount_cents)),
+                format!("{} {currency}", cents_to_fixed(-amount_cents)),
                 comment,
             ));
         }
@@ -643,13 +653,13 @@ pub fn format_enriched_transaction(
     {
         postings.push((
             cc_account,
-            format!("{} CAD", cents_to_fixed(cc_amount_cents)),
+            format!("{} {currency}", cents_to_fixed(cc_amount_cents)),
             None,
         ));
     } else {
         postings.push((
             "Liabilities:CreditCard:FIXME".to_string(),
-            format!("{} CAD", cents_to_fixed(-receipt_total_cents)),
+            format!("{} {currency}", cents_to_fixed(-receipt_total_cents)),
             None,
         ));
     }
@@ -664,7 +674,7 @@ pub fn format_enriched_transaction(
         };
         postings.push((
             item.posting_account.clone(),
-            format!("{} CAD", cents_to_fixed(decimal_to_cents(&item.price))),
+            format!("{} {currency}", cents_to_fixed(decimal_to_cents(&item.price))),
             comment,
         ));
         items_total_cents += decimal_to_cents(&item.price);
@@ -673,8 +683,8 @@ pub fn format_enriched_transaction(
     if let Some(tax_cents) = tax_cents {
         if tax_cents != 0 {
             postings.push((
-                "Expenses:Tax:HST".to_string(),
-                format!("{} CAD", cents_to_fixed(tax_cents)),
+                receipt.tax_account.clone(),
+                format!("{} {currency}", cents_to_fixed(tax_cents)),
                 None,
             ));
             items_total_cents += tax_cents;
@@ -695,7 +705,7 @@ pub fn format_enriched_transaction(
         if diff > 1 {
             postings.push((
                 expense_base.clone(),
-                format!("{} CAD", cents_to_fixed(diff)),
+                format!("{} {currency}", cents_to_fixed(diff)),
                 Some("remaining/unitemized".to_string()),
             ));
         } else if diff < -1 {
@@ -751,6 +761,8 @@ mod tests {
             items: vec![],
             warnings: vec![],
             tenders: vec![],
+            currency: "CAD".to_string(),
+            tax_account: "Expenses:Tax:HST".to_string(),
         }
     }
 
