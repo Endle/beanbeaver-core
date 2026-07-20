@@ -633,7 +633,8 @@ mod tests {
             warnings: vec![],
             tenders: vec![],
         };
-        let doc = build_parsed_receipt_stage(&receipt, &layers, "r", "t", None, None, "b", "p", "CAD");
+        let doc =
+            build_parsed_receipt_stage(&receipt, &layers, "r", "t", None, None, "b", "p", "CAD");
         assert_eq!(doc.receipt.date, None);
         // Empty image filename => no meta image filename.
         assert_eq!(doc.meta.image_filename, None);

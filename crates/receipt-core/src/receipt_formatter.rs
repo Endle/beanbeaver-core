@@ -328,7 +328,10 @@ pub fn format_parsed_receipt(
         };
         postings.push((
             item.posting_account.clone(),
-            format!("{} {currency}", cents_to_fixed(decimal_to_cents(&item.price))),
+            format!(
+                "{} {currency}",
+                cents_to_fixed(decimal_to_cents(&item.price))
+            ),
             comment,
         ));
         item_total_cents += decimal_to_cents(&item.price);
@@ -418,7 +421,10 @@ pub fn format_draft_beancount(
         };
         postings.push((
             item.posting_account.clone(),
-            format!("{} {currency}", cents_to_fixed(decimal_to_cents(&item.price))),
+            format!(
+                "{} {currency}",
+                cents_to_fixed(decimal_to_cents(&item.price))
+            ),
             comment,
         ));
         item_total_cents += decimal_to_cents(&item.price);
@@ -674,7 +680,10 @@ pub fn format_enriched_transaction(
         };
         postings.push((
             item.posting_account.clone(),
-            format!("{} {currency}", cents_to_fixed(decimal_to_cents(&item.price))),
+            format!(
+                "{} {currency}",
+                cents_to_fixed(decimal_to_cents(&item.price))
+            ),
             comment,
         ));
         items_total_cents += decimal_to_cents(&item.price);
