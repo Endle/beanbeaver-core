@@ -267,6 +267,7 @@ pub fn classify_item_semantic(
     Some(ClassificationData { category, tags })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_parsed_receipt_stage(
     receipt: &ReceiptInput,
     rule_layers: &StageRuleLayers,
@@ -276,6 +277,10 @@ pub fn build_parsed_receipt_stage(
     image_sha256: Option<String>,
     created_by: &str,
     pass_name: &str,
+    // The user's per-device operating currency. TODO(multi-currency): once we
+    // OCR the currency off the receipt itself, a per-receipt detected value
+    // (e.g. a traveller's USD receipt) would override this device default.
+    currency: &str,
 ) -> BuiltStageDocument {
     let mut item_docs = Vec::with_capacity(receipt.items.len());
     let mut top_level_warnings = Vec::new();
@@ -341,7 +346,7 @@ pub fn build_parsed_receipt_stage(
             } else {
                 Some(receipt.date_iso.clone())
             },
-            currency: "CAD".to_string(),
+            currency: currency.to_string(),
             subtotal: receipt.subtotal.clone(),
             tax: receipt.tax.clone(),
             total: Some(receipt.total.clone()),
@@ -561,6 +566,7 @@ mod tests {
             Some("deadbeef".to_string()),
             "unit-test",
             "parsed-pass",
+            "CAD",
         );
 
         // meta
@@ -627,7 +633,8 @@ mod tests {
             warnings: vec![],
             tenders: vec![],
         };
-        let doc = build_parsed_receipt_stage(&receipt, &layers, "r", "t", None, None, "b", "p");
+        let doc =
+            build_parsed_receipt_stage(&receipt, &layers, "r", "t", None, None, "b", "p", "CAD");
         assert_eq!(doc.receipt.date, None);
         // Empty image filename => no meta image filename.
         assert_eq!(doc.meta.image_filename, None);

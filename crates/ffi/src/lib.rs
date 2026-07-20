@@ -315,11 +315,15 @@ impl OcrSession {
         image_bytes: Vec<u8>,
         today: DateYmd,
         credit_card_account: String,
+        currency: String,
+        tax_account: String,
     ) -> Result<ReceiptResult, ScanError> {
         self.scan_with_options(
             image_bytes,
             today,
             credit_card_account,
+            currency,
+            tax_account,
             ParseOptions {
                 item_classifier_override_tomls: vec![],
                 known_merchants: vec![],
@@ -337,6 +341,8 @@ impl OcrSession {
         image_bytes: Vec<u8>,
         today: DateYmd,
         credit_card_account: String,
+        currency: String,
+        tax_account: String,
         options: ParseOptions,
     ) -> Result<ReceiptResult, ScanError> {
         let img = image::load_from_memory(&image_bytes)
@@ -368,6 +374,8 @@ impl OcrSession {
                 "receipt.jpg",
                 (today.year, today.month, today.day),
                 &credit_card_account,
+                &currency,
+                &tax_account,
                 Some(&image_sha256),
             )
             .map_err(|e| ScanError::Inference { msg: e.to_string() })?;
@@ -415,6 +423,8 @@ impl OcrSession {
             "receipt.jpg",
             (today.year, today.month, today.day),
             &credit_card_account,
+            &currency,
+            &tax_account,
             Some(&image_sha256),
             &opts,
         )
@@ -438,6 +448,7 @@ impl OcrSession {
 /// Use after an external OCR backend, or to re-parse a frozen detection list
 /// with different rule overlays. `points_xy` is a flat `[x,y,…]` list per box.
 #[uniffi::export]
+#[allow(clippy::too_many_arguments)]
 pub fn parse_detections(
     detections: Vec<DetectionInput>,
     padded_width: i64,
@@ -446,6 +457,8 @@ pub fn parse_detections(
     image_filename: String,
     today: DateYmd,
     credit_card_account: String,
+    currency: String,
+    tax_account: String,
     image_sha256: Option<String>,
     options: ParseOptions,
 ) -> Result<ReceiptResult, ScanError> {
@@ -459,6 +472,8 @@ pub fn parse_detections(
         &image_filename,
         (today.year, today.month, today.day),
         &credit_card_account,
+        &currency,
+        &tax_account,
         image_sha256.as_deref(),
         &opts,
     )
@@ -475,10 +490,13 @@ pub fn parse_detections(
 /// Round-trip `raw_text`, `image_filename`, and `tenders` from the prior scan so
 /// multi-tender postings and card-last4 metadata survive the edit.
 #[uniffi::export]
+#[allow(clippy::too_many_arguments)]
 pub fn reformat_receipt(
     previous: ReceiptResult,
     today: DateYmd,
     credit_card_account: String,
+    currency: String,
+    tax_account: String,
     image_sha256: Option<String>,
     edits: ReceiptEdits,
     options: ParseOptions,
@@ -498,6 +516,8 @@ pub fn reformat_receipt(
         &parsed,
         (today.year, today.month, today.day),
         &credit_card_account,
+        &currency,
+        &tax_account,
         image_sha256.as_deref(),
         &corrections,
         Some(&opts),
@@ -761,6 +781,8 @@ mod tests {
                 day: 1,
             },
             "Liabilities:CreditCard".into(),
+            "CAD".into(),
+            "Expenses:Tax:HST".into(),
             None,
             ParseOptions {
                 item_classifier_override_tomls: vec![],
@@ -780,6 +802,8 @@ mod tests {
                 day: 18,
             },
             "Liabilities:CreditCard".into(),
+            "CAD".into(),
+            "Expenses:Tax:HST".into(),
             Some("deadbeef".into()),
             ReceiptEdits {
                 merchant: Some("Costco Wholesale".into()),
@@ -815,6 +839,8 @@ mod tests {
                 day: 18,
             },
             "Liabilities:CreditCard".into(),
+            "CAD".into(),
+            "Expenses:Tax:HST".into(),
             None,
             ReceiptEdits {
                 merchant: None,
@@ -850,6 +876,8 @@ mod tests {
                 day: 1,
             },
             "Liabilities:CreditCard".into(),
+            "CAD".into(),
+            "Expenses:Tax:HST".into(),
             None,
             ParseOptions {
                 item_classifier_override_tomls: vec!["not {{ valid toml".into()],
@@ -878,6 +906,8 @@ mod tests {
                     day: 18,
                 },
                 "Liabilities:CreditCard".to_string(),
+                "CAD".to_string(),
+                "Expenses:Tax:HST".to_string(),
             )
             .expect("scan");
 

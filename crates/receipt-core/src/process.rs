@@ -286,11 +286,14 @@ fn days_in_month(year: i32, month: u32) -> u32 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn format_from_parsed(
     parsed: &ParsedReceiptData,
     rule_layers: &ParserRuleLayers,
     today: (i32, u32, u32),
     credit_card_account: &str,
+    currency: &str,
+    tax_account: &str,
     image_sha256: Option<&str>,
     corrections: Option<&ReceiptCorrections>,
 ) -> Result<(String, Option<String>, Option<String>), String> {
@@ -343,6 +346,8 @@ fn format_from_parsed(
                 posting_account: account.clone(),
             })
             .collect(),
+        currency: currency.to_string(),
+        tax_account: tax_account.to_string(),
         warnings: parsed
             .warnings
             .iter()
@@ -390,6 +395,8 @@ pub fn process_receipt(
     known_merchants: Option<Vec<String>>,
     today: (i32, u32, u32),
     credit_card_account: &str,
+    currency: &str,
+    tax_account: &str,
     image_sha256: Option<&str>,
 ) -> ProcessedReceipt {
     let mut options = ProcessOptions::default();
@@ -402,6 +409,8 @@ pub fn process_receipt(
         image_filename,
         today,
         credit_card_account,
+        currency,
+        tax_account,
         image_sha256,
         &options,
     )
@@ -421,6 +430,8 @@ pub fn process_receipt_with_options(
     image_filename: &str,
     today: (i32, u32, u32),
     credit_card_account: &str,
+    currency: &str,
+    tax_account: &str,
     image_sha256: Option<&str>,
     options: &ProcessOptions,
 ) -> Result<ProcessedReceipt, String> {
@@ -456,6 +467,8 @@ pub fn process_receipt_with_options(
         &rule_layers,
         today,
         credit_card_account,
+        currency,
+        tax_account,
         image_sha256,
         None,
     )?;
@@ -475,10 +488,13 @@ pub fn process_receipt_with_options(
 /// `options` supplies classifier overrides (for account resolution only).
 ///
 /// Returns `Err` on invalid override TOML or invalid `corrections.date_iso`.
+#[allow(clippy::too_many_arguments)]
 pub fn reformat_parsed_receipt(
     parsed: &ParsedReceiptData,
     today: (i32, u32, u32),
     credit_card_account: &str,
+    currency: &str,
+    tax_account: &str,
     image_sha256: Option<&str>,
     corrections: &ReceiptCorrections,
     options: Option<&ProcessOptions>,
@@ -514,6 +530,8 @@ pub fn reformat_parsed_receipt(
         &rule_layers,
         today,
         credit_card_account,
+        currency,
+        tax_account,
         image_sha256,
         Some(corrections),
     )?;
@@ -606,6 +624,8 @@ mod tests {
             &parsed,
             (2026, 7, 1),
             "Liabilities:CreditCard",
+            "CAD",
+            "Expenses:Tax:HST",
             Some("abcd"),
             &corrections,
             None,
@@ -642,6 +662,8 @@ mod tests {
             &parsed,
             (2026, 7, 1),
             "Liabilities:CreditCard",
+            "CAD",
+            "Expenses:Tax:HST",
             None,
             &corrections,
             None,
@@ -665,6 +687,8 @@ mod tests {
             &parsed,
             (2026, 7, 1),
             "Liabilities:CreditCard",
+            "CAD",
+            "Expenses:Tax:HST",
             Some("abcd"),
             &corrections,
             None,
@@ -693,6 +717,8 @@ mod tests {
             "x.jpg",
             (2026, 1, 1),
             "Liabilities:CreditCard",
+            "CAD",
+            "Expenses:Tax:HST",
             None,
             &opts,
         )

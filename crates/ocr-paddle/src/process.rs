@@ -43,6 +43,8 @@ pub fn process_image(
     image_filename: &str,
     today: (i32, u32, u32),
     credit_card_account: &str,
+    currency: &str,
+    tax_account: &str,
     image_sha256: Option<&str>,
 ) -> ort::Result<ProcessedReceipt> {
     Ok(process_image_timed(
@@ -51,6 +53,8 @@ pub fn process_image(
         image_filename,
         today,
         credit_card_account,
+        currency,
+        tax_account,
         image_sha256,
     )?
     .0)
@@ -59,12 +63,15 @@ pub fn process_image(
 /// Like [`process_image`] but also returns per-stage [`ScanTimings`] for
 /// on-device profiling.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub fn process_image_timed(
     engine: &mut OcrEngine,
     img: &RgbImage,
     image_filename: &str,
     today: (i32, u32, u32),
     credit_card_account: &str,
+    currency: &str,
+    tax_account: &str,
     image_sha256: Option<&str>,
 ) -> ort::Result<(ProcessedReceipt, ScanTimings)> {
     let t_all = Instant::now();
@@ -98,6 +105,8 @@ pub fn process_image_timed(
         None, // bundled default known-merchants
         today,
         credit_card_account,
+        currency,
+        tax_account,
         image_sha256,
     );
     let parse_ms = ms_since(t);
@@ -144,6 +153,8 @@ mod tests {
             "costco_20260218_redact",
             (2026, 2, 18),
             "Liabilities:CreditCard:PENDING",
+            "CAD",
+            "Expenses:Tax:HST",
             None,
         )
         .unwrap();
