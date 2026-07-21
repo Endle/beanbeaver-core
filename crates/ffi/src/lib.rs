@@ -68,42 +68,67 @@ pub struct ReceiptTender {
     pub raw_label: String,
 }
 
-/// Per-stage on-device timings (milliseconds) for one scan, for profiling.
-/// `total_ms` is the whole Rust pipeline (prep → OCR → parse); it excludes the
-/// JPEG/PNG decode that happens before `process_image` (and the Swift-observed
-/// wall time, which the app measures separately).
-#[derive(uniffi::Record)]
+/// One pipeline phase — the single source of truth for phase *names*, shared by
+/// every consumer. The Rust core fills the on-device phases (`Decode`…`Parse`);
+/// each app appends its own UI-side phases (`Acquire`, `Encode`, `Render`) using
+/// these same variants. Because UniFFI generates one enum for Swift and Kotlin,
+/// the phase names match across platforms by construction — they can't drift.
+///
+/// Ordered by pipeline position. Adding a finer phase later (e.g. splitting
+/// `Detect` into infer/postprocess) is one new variant — no record-shape break.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Phase {
+    /// App-side: capture / pick the image into memory. Filled by the app.
+    Acquire,
+    /// App-side: encode/normalize to the JPEG/PNG bytes handed to `scan`. App-filled.
+    Encode,
+    /// Core: decode the received JPEG/PNG bytes into pixels.
+    Decode,
+    /// Core: resize + white-pad for OCR.
+    Prep,
+    /// Core: text-box detection (DB).
+    Detect,
+    /// Core: textline-orientation classification.
+    Classify,
+    /// Core: text recognition.
+    Recognize,
+    /// Core: detections → itemized receipt + beancount.
+    Parse,
+    /// App-side: build/display the result UI. Filled by the app.
+    Render,
+}
+
+/// One measured phase. `ScanTimings` is just an ordered list of these, so the
+/// debug view can iterate generically and new phases render with no UI change.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct PhaseSpan {
+    pub phase: Phase,
+    pub ms: f64,
+}
+
+/// Per-phase on-device timings (milliseconds) for one scan, surfaced behind the
+/// app's debug toggle for profiling. The total is the sum of `spans`; the app's
+/// own wall-clock is measured separately. Empty for the model-free
+/// `parse_detections` path.
+#[derive(uniffi::Record, Clone, Debug, Default)]
 pub struct ScanTimings {
-    pub prep_ms: f64,
-    pub detect_ms: f64,
-    pub classify_ms: f64,
-    pub recognize_ms: f64,
-    pub parse_ms: f64,
-    pub total_ms: f64,
+    pub spans: Vec<PhaseSpan>,
 }
 
-impl From<CoreScanTimings> for ScanTimings {
-    fn from(t: CoreScanTimings) -> Self {
+impl ScanTimings {
+    /// Build the core (on-device) spans from the OCR pipeline's stage timings
+    /// plus the FFI-measured image `decode` step. App-side spans (`Acquire`,
+    /// `Encode`, `Render`) are appended by the caller on each platform.
+    fn from_core(t: CoreScanTimings, decode_ms: f64) -> Self {
         Self {
-            prep_ms: t.prep_ms,
-            detect_ms: t.detect_ms,
-            classify_ms: t.classify_ms,
-            recognize_ms: t.recognize_ms,
-            parse_ms: t.parse_ms,
-            total_ms: t.total_ms,
-        }
-    }
-}
-
-impl Default for ScanTimings {
-    fn default() -> Self {
-        Self {
-            prep_ms: 0.0,
-            detect_ms: 0.0,
-            classify_ms: 0.0,
-            recognize_ms: 0.0,
-            parse_ms: 0.0,
-            total_ms: 0.0,
+            spans: vec![
+                PhaseSpan { phase: Phase::Decode, ms: decode_ms },
+                PhaseSpan { phase: Phase::Prep, ms: t.prep_ms },
+                PhaseSpan { phase: Phase::Detect, ms: t.detect_ms },
+                PhaseSpan { phase: Phase::Classify, ms: t.classify_ms },
+                PhaseSpan { phase: Phase::Recognize, ms: t.recognize_ms },
+                PhaseSpan { phase: Phase::Parse, ms: t.parse_ms },
+            ],
         }
     }
 }
@@ -345,9 +370,13 @@ impl OcrSession {
         tax_account: String,
         options: ParseOptions,
     ) -> Result<ReceiptResult, ScanError> {
+        use std::time::Instant;
+
+        let t_decode = Instant::now();
         let img = image::load_from_memory(&image_bytes)
             .map_err(|e| ScanError::ImageDecode { msg: e.to_string() })?
             .to_rgb8();
+        let decode_ms = t_decode.elapsed().as_secs_f64() * 1e3;
 
         let image_sha256 = sha256_hex(&image_bytes);
 
@@ -379,7 +408,7 @@ impl OcrSession {
                 Some(&image_sha256),
             )
             .map_err(|e| ScanError::Inference { msg: e.to_string() })?;
-            return Ok(to_result(processed, timings.into()));
+            return Ok(to_result(processed, ScanTimings::from_core(timings, decode_ms)));
         }
 
         // Overlay path: reuse process_image_timed's prep/OCR by calling it, then
@@ -390,9 +419,7 @@ impl OcrSession {
         // separately re-run OCR… That's double. Better: use engine.recognize after prep.
         use ocr_paddle::process::{resize_and_pad, OCR_IMAGE_PADDING};
         use receipt_core::ocr_transform::RawDetection as CoreRaw;
-        use std::time::Instant;
 
-        let t_all = Instant::now();
         let t = Instant::now();
         let prepared = resize_and_pad(&img);
         let prep_ms = t.elapsed().as_secs_f64() * 1e3;
@@ -432,12 +459,14 @@ impl OcrSession {
         let parse_ms = t.elapsed().as_secs_f64() * 1e3;
 
         let timings = ScanTimings {
-            prep_ms,
-            detect_ms: ocr.detect_ms,
-            classify_ms: ocr.classify_ms,
-            recognize_ms: ocr.recognize_ms,
-            parse_ms,
-            total_ms: t_all.elapsed().as_secs_f64() * 1e3,
+            spans: vec![
+                PhaseSpan { phase: Phase::Decode, ms: decode_ms },
+                PhaseSpan { phase: Phase::Prep, ms: prep_ms },
+                PhaseSpan { phase: Phase::Detect, ms: ocr.detect_ms },
+                PhaseSpan { phase: Phase::Classify, ms: ocr.classify_ms },
+                PhaseSpan { phase: Phase::Recognize, ms: ocr.recognize_ms },
+                PhaseSpan { phase: Phase::Parse, ms: parse_ms },
+            ],
         };
         Ok(to_result(processed, timings))
     }
@@ -921,17 +950,14 @@ mod tests {
         println!("{}", r.beancount);
 
         let t = &r.timings;
-        println!(
-            "timings(ms): prep={:.1} detect={:.1} classify={:.1} recognize={:.1} parse={:.1} total={:.1}",
-            t.prep_ms, t.detect_ms, t.classify_ms, t.recognize_ms, t.parse_ms, t.total_ms
-        );
-        assert!(t.total_ms > 0.0, "total_ms should be positive");
-        let stages = t.prep_ms + t.detect_ms + t.classify_ms + t.recognize_ms + t.parse_ms;
+        for s in &t.spans {
+            println!("  timing {:?}: {:.1}ms", s.phase, s.ms);
+        }
+        let total: f64 = t.spans.iter().map(|s| s.ms).sum();
+        assert!(total > 0.0, "sum of phase spans should be positive");
         assert!(
-            t.total_ms + 1.0 >= stages,
-            "total {} < sum of stages {}",
-            t.total_ms,
-            stages
+            t.spans.iter().any(|s| s.phase == Phase::Parse),
+            "expected a Parse span in on-device timings"
         );
     }
 }
