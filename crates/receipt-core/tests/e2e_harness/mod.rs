@@ -299,7 +299,7 @@ pub fn run_cached_corpus(receipts_dir: &Path, overrides: &[&str]) -> CorpusResul
                     .filter(|it| item_desc_matches(&it.description, desc))
                     .collect();
                 let price_ok = matched.iter().any(|it| price_matches(price, &it.price));
-                let cat_ok = want_cat.is_none_or(|c| {
+                let cat_ok = want_cat.map_or(true, |c| {
                     matched
                         .iter()
                         .filter(|it| price_matches(price, &it.price))

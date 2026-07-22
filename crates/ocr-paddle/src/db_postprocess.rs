@@ -50,6 +50,7 @@ pub struct Quad {
 /// `prob` is the `h*w` row-major probability map at the *resized* detection
 /// dims; `ratio_w`/`ratio_h` are `resized/original` (from `DetInput`) used to map
 /// boxes back to original pixels of size `orig_w`/`orig_h`.
+#[allow(clippy::too_many_arguments)]
 pub fn boxes_from_bitmap(
     prob: &[f32],
     h: usize,

@@ -289,7 +289,7 @@ fn public_live_e2e() {
             &fs::read_to_string(fixtures.join(format!("{name}.expected.json"))).unwrap(),
         )
         .unwrap();
-        let hard = HARD_PARSE_FIXTURES.iter().any(|s| *s == name.as_str());
+        let hard = HARD_PARSE_FIXTURES.contains(&name.as_str());
 
         if hard {
             // HARD parse gate: both merchant and total are required on the
