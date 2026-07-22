@@ -63,7 +63,6 @@ pub fn process_image(
 /// Like [`process_image`] but also returns per-stage [`ScanTimings`] for
 /// on-device profiling.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 pub fn process_image_timed(
     engine: &mut OcrEngine,
     img: &RgbImage,

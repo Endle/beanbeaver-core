@@ -151,7 +151,7 @@ fn banner_by_size(lines: &[&MerchantLineInput]) -> Option<String> {
         let Some(cleaned) = line_merchant_candidate(line) else {
             continue;
         };
-        if best.as_ref().is_none_or(|(h, _)| line.height > *h) {
+        if best.as_ref().map_or(true, |(h, _)| line.height > *h) {
             best = Some((line.height, cleaned));
         }
     }

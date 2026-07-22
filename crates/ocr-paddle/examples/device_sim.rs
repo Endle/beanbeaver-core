@@ -1252,7 +1252,7 @@ fn score(
     let total_ok = expected
         .get("total")
         .and_then(Value::as_str)
-        .is_none_or(|t| price_matches(t, &d.total));
+        .map_or(true, |t| price_matches(t, &d.total));
 
     let mut items_ok = 0;
     let mut items_total = 0;
@@ -1282,7 +1282,7 @@ fn score(
                 .filter(|it| item_desc_matches(&it.description, desc))
                 .collect();
             let ok = matched.iter().any(|it| price_matches(price, &it.price))
-                && category.is_none_or(|cat| {
+                && category.map_or(true, |cat| {
                     matched
                         .iter()
                         .filter(|it| price_matches(price, &it.price))
