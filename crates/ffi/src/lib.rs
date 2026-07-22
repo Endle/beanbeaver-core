@@ -122,12 +122,30 @@ impl ScanTimings {
     fn from_core(t: CoreScanTimings, decode_ms: f64) -> Self {
         Self {
             spans: vec![
-                PhaseSpan { phase: Phase::Decode, ms: decode_ms },
-                PhaseSpan { phase: Phase::Prep, ms: t.prep_ms },
-                PhaseSpan { phase: Phase::Detect, ms: t.detect_ms },
-                PhaseSpan { phase: Phase::Classify, ms: t.classify_ms },
-                PhaseSpan { phase: Phase::Recognize, ms: t.recognize_ms },
-                PhaseSpan { phase: Phase::Parse, ms: t.parse_ms },
+                PhaseSpan {
+                    phase: Phase::Decode,
+                    ms: decode_ms,
+                },
+                PhaseSpan {
+                    phase: Phase::Prep,
+                    ms: t.prep_ms,
+                },
+                PhaseSpan {
+                    phase: Phase::Detect,
+                    ms: t.detect_ms,
+                },
+                PhaseSpan {
+                    phase: Phase::Classify,
+                    ms: t.classify_ms,
+                },
+                PhaseSpan {
+                    phase: Phase::Recognize,
+                    ms: t.recognize_ms,
+                },
+                PhaseSpan {
+                    phase: Phase::Parse,
+                    ms: t.parse_ms,
+                },
             ],
         }
     }
@@ -408,7 +426,10 @@ impl OcrSession {
                 Some(&image_sha256),
             )
             .map_err(|e| ScanError::Inference { msg: e.to_string() })?;
-            return Ok(to_result(processed, ScanTimings::from_core(timings, decode_ms)));
+            return Ok(to_result(
+                processed,
+                ScanTimings::from_core(timings, decode_ms),
+            ));
         }
 
         // Overlay path: reuse process_image_timed's prep/OCR by calling it, then
@@ -460,12 +481,30 @@ impl OcrSession {
 
         let timings = ScanTimings {
             spans: vec![
-                PhaseSpan { phase: Phase::Decode, ms: decode_ms },
-                PhaseSpan { phase: Phase::Prep, ms: prep_ms },
-                PhaseSpan { phase: Phase::Detect, ms: ocr.detect_ms },
-                PhaseSpan { phase: Phase::Classify, ms: ocr.classify_ms },
-                PhaseSpan { phase: Phase::Recognize, ms: ocr.recognize_ms },
-                PhaseSpan { phase: Phase::Parse, ms: parse_ms },
+                PhaseSpan {
+                    phase: Phase::Decode,
+                    ms: decode_ms,
+                },
+                PhaseSpan {
+                    phase: Phase::Prep,
+                    ms: prep_ms,
+                },
+                PhaseSpan {
+                    phase: Phase::Detect,
+                    ms: ocr.detect_ms,
+                },
+                PhaseSpan {
+                    phase: Phase::Classify,
+                    ms: ocr.classify_ms,
+                },
+                PhaseSpan {
+                    phase: Phase::Recognize,
+                    ms: ocr.recognize_ms,
+                },
+                PhaseSpan {
+                    phase: Phase::Parse,
+                    ms: parse_ms,
+                },
             ],
         };
         Ok(to_result(processed, timings))
