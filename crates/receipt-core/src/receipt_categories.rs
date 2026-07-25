@@ -572,6 +572,9 @@ mod tests {
             ("1727590 CASCADE PLUS", "Expenses:Home:HouseholdSupply"),
             ("1185 BAKING SODA", "Expenses:Home:HouseholdSupply"),
             ("1796144 TOLIET 2PK", "Expenses:Home:HouseholdSupply"),
+            // "Tissue" abbreviated on the slip, so the TISSUE keyword misses it
+            // (FreshCo unknown-date_freshco_157_38).
+            ("Bath Tiss Jmbo 202s", "Expenses:Home:HouseholdSupply"),
             ("LYSOL BATH P 059631882930", "Expenses:Home:HouseholdSupply"),
             ("LYS0L BATH P 059631882930", "Expenses:Home:HouseholdSupply"),
             ("LYSDL BATH P 059631882930", "Expenses:Home:HouseholdSupply"),
