@@ -26,6 +26,8 @@ use std::cmp::Reverse;
 
 use regex::Regex;
 
+use crate::ocr_confusion::similarity;
+
 /// One canonical merchant and the spellings that map to it. Loaded from
 /// `rules/default_merchant_families.toml` (see `rules::default_merchant_families`).
 #[derive(Clone, Debug)]
@@ -90,9 +92,6 @@ impl MerchantMatch {
 const HIGH_SIMILARITY: f64 = 0.82;
 /// Below `HIGH` but above this, a match is only ever offered as `Suggested`.
 const MEDIUM_SIMILARITY: f64 = 0.66;
-/// Substitution cost for a visually confusable pair — cheap, so OCR's systematic
-/// glyph swaps rank far ahead of coincidental edits.
-const CONFUSABLE_SUB_COST: f64 = 0.3;
 
 /// Resolve an OCR'd merchant header to a canonical family, conservatively.
 ///
@@ -254,65 +253,6 @@ fn normalize(value: &str) -> String {
         .filter(|c| c.is_ascii_alphanumeric())
         .map(|c| c.to_ascii_uppercase())
         .collect()
-}
-
-/// Visually confusable glyph pairs OCR routinely swaps. Order-independent.
-fn is_confusable(a: char, b: char) -> bool {
-    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-    matches!(
-        (lo, hi),
-        ('0', 'O')
-            | ('0', 'Q')
-            | ('1', 'I')
-            | ('1', 'L')
-            | ('I', 'L')
-            | ('5', 'S')
-            | ('8', 'B')
-            | ('2', 'Z')
-            | ('6', 'G')
-            | ('C', 'G')
-    )
-}
-
-/// Levenshtein distance where a confusable substitution is discounted to
-/// `CONFUSABLE_SUB_COST` (insert/delete/ordinary-substitute cost 1.0).
-fn weighted_distance(a: &[char], b: &[char]) -> f64 {
-    if a.is_empty() {
-        return b.len() as f64;
-    }
-    if b.is_empty() {
-        return a.len() as f64;
-    }
-    let mut prev: Vec<f64> = (0..=b.len()).map(|j| j as f64).collect();
-    let mut curr: Vec<f64> = vec![0.0; b.len() + 1];
-    for i in 1..=a.len() {
-        curr[0] = i as f64;
-        for j in 1..=b.len() {
-            let sub = if a[i - 1] == b[j - 1] {
-                0.0
-            } else if is_confusable(a[i - 1], b[j - 1]) {
-                CONFUSABLE_SUB_COST
-            } else {
-                1.0
-            };
-            curr[j] = (prev[j] + 1.0)
-                .min(curr[j - 1] + 1.0)
-                .min(prev[j - 1] + sub);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-    prev[b.len()]
-}
-
-/// Normalized similarity in `[0, 1]`: `1 - distance / longer_length`.
-fn similarity(a: &str, b: &str) -> f64 {
-    let ca: Vec<char> = a.chars().collect();
-    let cb: Vec<char> = b.chars().collect();
-    let longer = ca.len().max(cb.len());
-    if longer == 0 {
-        return 0.0;
-    }
-    1.0 - weighted_distance(&ca, &cb) / longer as f64
 }
 
 #[cfg(test)]
