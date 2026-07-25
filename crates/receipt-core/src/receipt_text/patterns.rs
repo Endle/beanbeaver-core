@@ -15,7 +15,7 @@ use std::sync::OnceLock;
 // Some merchants print a '*' immediately before the tax letter(s) — e.g.
 // FreshCo's "$25.96*HC" — so an optional leading asterisk is tolerated; without
 // it the whole price token fails to parse and the line is silently dropped.
-pub(crate) const TAX_FLAG_CLASS: &str = r"(?:\*?[CcFfGgHhJjPpTtXx]{1,3}\d{0,2})?";
+pub(crate) const TAX_FLAG_CLASS: &str = r"(?:\*?[BbCcFfGgHhJjPpTtXx]{1,3}\d{0,2})?";
 
 // When the parser sees a bare standalone-price line (e.g. `$8.95` on its own)
 // it walks back up to 5 lines looking for the description that goes with it.
