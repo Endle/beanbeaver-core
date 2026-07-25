@@ -113,6 +113,71 @@ fn collect_expected(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Which top-level subdirectories of a corpus root a run covers.
+///
+/// The private corpus is grouped one directory per merchant, and each merchant
+/// gets its own `#[test]` so libtest runs them across cores and a CI failure
+/// names the merchant. `Excluding` is the catch-all that keeps that split
+/// *total*: any merchant directory not claimed by a named test still runs.
+pub enum Selection<'a> {
+    /// Everything under the root (the vendored public corpus).
+    All,
+    /// Only this top-level subdirectory.
+    Dir(&'a str),
+    /// Every top-level subdirectory NOT named here, plus loose root-level cases.
+    Excluding(&'a [&'a str]),
+}
+
+impl Selection<'_> {
+    fn takes_dir(&self, name: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Dir(d) => name == *d,
+            Self::Excluding(named) => !named.contains(&name),
+        }
+    }
+
+    /// Loose `*.expected.json` sitting directly in the root belong to whichever
+    /// selection is the catch-all, so they can never fall through the split.
+    fn takes_root_files(&self) -> bool {
+        matches!(self, Self::All | Self::Excluding(_))
+    }
+}
+
+/// Collect the `*.expected.json` under `root` that `sel` covers. Filtering
+/// applies to the top level only; a selected directory is walked in full.
+fn collect_selected(root: &Path, sel: &Selection, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if path.is_dir() {
+            if sel.takes_dir(&name) {
+                collect_expected(&path, out);
+            }
+        } else if sel.takes_root_files() && name.ends_with(".expected.json") {
+            out.push(path);
+        }
+    }
+}
+
+/// Top-level subdirectory names under `root`, sorted. Lets the catch-all test
+/// report which merchants it swept up, so a corpus that grows a new merchant is
+/// visible in the CI log rather than silently folded into `other`.
+pub fn top_level_dirs(root: &Path) -> Vec<String> {
+    let mut dirs: Vec<String> = fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    dirs.sort();
+    dirs
+}
+
 /// Parse the raw PaddleOCR `.ocr.json` (`{image_width, image_height,
 /// detections:[[points], [text, conf]]}`) into detections + padded dims. Mirrors
 /// the PyO3 `extract_detections` / `receipt_process_receipt`.
@@ -181,6 +246,17 @@ pub struct CorpusResult {
 /// `overrides` (raw `private_rules.toml` contents) over the bundled public rules.
 /// An empty `overrides` slice ⇒ public rules only.
 pub fn run_cached_corpus(receipts_dir: &Path, overrides: &[&str]) -> CorpusResult {
+    run_cached_corpus_in(receipts_dir, overrides, &Selection::All)
+}
+
+/// [`run_cached_corpus`], restricted to the part of the corpus `sel` covers.
+/// Case ids stay relative to `receipts_dir`, so a failure reads the same
+/// (`costco/<stem>: …`) whether the run was sliced or whole.
+pub fn run_cached_corpus_in(
+    receipts_dir: &Path,
+    overrides: &[&str],
+    sel: &Selection,
+) -> CorpusResult {
     let layers = parser_rule_layers_with_overrides(overrides)
         .unwrap_or_else(|e| panic!("override classifier TOML: {e}"));
     let mapping: HashMap<String, String> = layers.account_mapping.iter().cloned().collect();
@@ -188,7 +264,7 @@ pub fn run_cached_corpus(receipts_dir: &Path, overrides: &[&str]) -> CorpusResul
     let merchant_families = default_merchant_families();
 
     let mut expected_files = Vec::new();
-    collect_expected(receipts_dir, &mut expected_files);
+    collect_selected(receipts_dir, sel, &mut expected_files);
     expected_files.sort();
 
     let mut ran = 0usize;

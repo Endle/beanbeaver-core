@@ -16,9 +16,17 @@ jobs:
   private-cached-e2e:
     name: Private cached E2E (receipt-core)
     runs-on: ubuntu-latest
-    # The debug-build corpus run takes ~11s/case on CI runners (108 cases ≈ 19
-    # min as of 2026-07); leave headroom for the corpus to keep growing.
-    timeout-minutes: 45
+    # Two things keep this fast, and both matter (2026-07, 109 cases):
+    #   * --release. The parser is ~12x faster optimized (locally 449s -> 37s for
+    #     the whole corpus); a debug build was the single biggest cost here. The
+    #     optimized test target itself builds in seconds — receipt-core has three
+    #     dependencies. Debug-assertion/overflow coverage is not lost: ci.yml
+    #     still runs the unit tests and the public corpus unoptimized.
+    #   * One #[test] per merchant (see tests/private_e2e.rs), so libtest spreads
+    #     the corpus over every core instead of looping on one. Wall clock is now
+    #     the largest single merchant, not the sum.
+    # Together: ~19 min -> ~1-2 min. Headroom left for corpus growth.
+    timeout-minutes: 20
     env:
       # Fine-grained PAT or GitHub App token with read-only access to the
       # private test repository contents. Add it in the repo's Actions secrets.
@@ -66,13 +74,47 @@ jobs:
           cp -R .private-tests-src/. "${RUNNER_TEMP}/beanbeaver-private-tests/"
           rm -rf .private-tests-src
 
+      # Failures name the merchant (`private_cached_e2e_costco ... FAILED`), so
+      # the summary below is usually enough to locate a regression without
+      # reading the full log. Every merchant runs even if an earlier one fails.
       - name: Run cached private E2E (receipt-core)
         shell: bash
         env:
           BEANBEAVER_PRIVATE_TESTS_DIR: ${{ runner.temp }}/beanbeaver-private-tests
         run: |
           set -euo pipefail
-          cargo test -p receipt-core --test private_e2e -- --nocapture
+          cargo test --release -p receipt-core --test private_e2e -- --nocapture \
+            2>&1 | tee "${RUNNER_TEMP}/private-e2e.log"
+
+      # Lift the per-merchant results onto the run's summary page, so a red build
+      # is diagnosable from the Actions overview without opening the log. Safe to
+      # grep: the case ids it echoes are merchant/<stem> paths, never receipt
+      # contents (the private corpus itself is scrubbed in the next step).
+      - name: Summarize per-merchant results
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          log="${RUNNER_TEMP}/private-e2e.log"
+          [ -f "$log" ] || exit 0
+          {
+            echo "### Private cached E2E — per merchant"
+            echo
+            echo "| Merchant | Result |"
+            echo "| --- | --- |"
+            grep -E '^test private_cached_e2e_' "$log" \
+              | sort \
+              | sed -e 's/^test private_cached_e2e_\(.*\) \.\.\. \(.*\)$/| \1 | \2 |/' \
+                    -e 's/| ok |$/| ✅ ok |/' \
+                    -e 's/| FAILED |$/| ❌ FAILED |/'
+            if grep -q '✗' "$log"; then
+              echo
+              echo "#### Divergences"
+              echo '```'
+              grep '✗' "$log"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Scrub private test checkout
         if: always()
