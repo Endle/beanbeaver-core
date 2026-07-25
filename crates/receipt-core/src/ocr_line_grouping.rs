@@ -63,6 +63,104 @@ fn adaptive_middle_y_threshold(dets: &[Detection]) -> f64 {
     (median_height * 0.8).clamp(12.0, 30.0)
 }
 
+/// What kind of RIGHT-column amount a LEFT-column label is allowed to claim.
+///
+/// The right column leans up on skewed/curled receipts — by two-thirds of a row
+/// on the worst corpus cases — so a sub-line printed *above* an item can overlap
+/// that item's price and claim it first. The item is then dropped for having no
+/// price, and because prices are consumed one-to-one in reading order, every
+/// following row inherits its neighbour's amount until something breaks the
+/// chain. Typing the label is what breaks it: a row that cannot legally hold the
+/// amount in front of it declines, and the whole downstream run re-aligns on its
+/// own.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AmountClaim {
+    /// Ordinary item or summary row: takes the first overlapping amount.
+    Any,
+    /// Row that never carries an amount of its own — code stubs, POS headers,
+    /// quantity breakdowns, and already-priced-in savings notices.
+    Never,
+    /// Reduction row: the amount that belongs to it is *negative*, so a positive
+    /// (tax-coded) price overlapping it belongs to a neighbour instead.
+    NegativeOnly,
+    /// Loyalty row: what belongs to it is a points figure (`125 PTS`), never
+    /// money, so a price overlapping it is the neighbouring item's.
+    PointsOnly,
+}
+
+impl AmountClaim {
+    /// Whether `text` — a RIGHT-column amount — is one this label may take.
+    fn accepts(self, text: &str) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Never => false,
+            Self::NegativeOnly => is_negative_amount(text),
+            Self::PointsOnly => is_points_amount(text),
+        }
+    }
+}
+
+/// True for a loyalty-points figure rather than money — `125 PTS`, `1300 PTS`.
+/// A currency marker disqualifies it, so a tax-coded price never reads as points.
+fn is_points_amount(text: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    !text.contains('$')
+        && RE
+            .get_or_init(|| Regex::new(r"(?i)\d\s*(?:PTS|POINTS)\b").unwrap())
+            .is_match(text)
+}
+
+/// True for a negative amount, in either of the two conventions receipts use:
+/// a leading sign (`-$6.00`, `$-6.00`) or a trailing one (`6.00-`, common on
+/// older POS printers).
+fn is_negative_amount(text: &str) -> bool {
+    let trimmed = text.trim();
+    // A run of dashes is a rule separator, not an amount, so require a digit
+    // before reading either sign convention.
+    if !trimmed.contains(|c: char| c.is_ascii_digit()) {
+        return false;
+    }
+    let leading = trimmed.trim_start_matches(['$', '(', ' ']).starts_with('-');
+    let trailing = trimmed
+        .trim_end_matches([' ', ')'])
+        .strip_suffix('-')
+        .is_some_and(|head| head.trim_end().ends_with(|c: char| c.is_ascii_digit()));
+    leading || trailing
+}
+
+/// The claim a LEFT-column label may make on the right column. Everything not
+/// recognised here is an ordinary row and takes the next amount, so a wrong
+/// answer costs at most the row it names — but see the cascade note on
+/// [`AmountClaim`]: a label typed `Never` by mistake hands its price to the row
+/// below and shifts the rest of the receipt, so these patterns are deliberately
+/// narrow and anchored.
+///
+/// The vocabulary here is Sobeys/FreshCo's (`INSTANT SAVINGS`, `YOU SAVED`);
+/// other chains word it differently (Costco prints `TPD/<sku>`), which is why
+/// this wants to move into the merchant rules data rather than grow inline.
+fn amount_claim(text: &str) -> AmountClaim {
+    if is_code_stub_label(text) || is_transaction_id_label(text) || is_priced_in_savings_label(text)
+    {
+        return AmountClaim::Never;
+    }
+    if is_reduction_label(text) {
+        return AmountClaim::NegativeOnly;
+    }
+    if is_points_label(text) {
+        return AmountClaim::PointsOnly;
+    }
+    AmountClaim::Any
+}
+
+/// True for the loyalty rows that report points rather than money — FreshCo
+/// prints `POINTS EARNED` between two item lines, where it is well placed to
+/// swallow the second one's price.
+fn is_points_label(text: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)^\s*(?:TOTAL\s+)?POINTS?\s+EARNED\b").unwrap())
+        .is_match(text)
+}
+
 /// True for gift-card activation code rows: a "PC" prefix followed by nothing
 /// but a long digit run (e.g. Costco's "PC 339919953764897" printed between a
 /// gift-card label and its amount). The prefix is required: a bare digit run
@@ -89,6 +187,48 @@ fn is_transaction_id_label(text: &str) -> bool {
     }
     let rest = trimmed[11..].trim_start_matches([' ', '#', ':']).trim();
     rest.len() >= 4 && rest.chars().all(|ch| ch.is_ascii_digit())
+}
+
+/// True for the quantity/unit-price breakdown a multi-buy item prints under its
+/// description — `2 @ 1/ $8.99`, `6 @ 1/$8.99`, `1.280 kg @ $1.52 / kg`.
+///
+/// Whether such a row carries an amount is a **per-chain layout choice, and the
+/// corpus contains both**: FreshCo prints the extended price on the description
+/// row and leaves the breakdown bare, while Loblaw chains print it on the
+/// breakdown itself (No Frills: `2 @ $9.54 ea` … `19.08`). So this predicate
+/// only identifies the shape — the caller decides from the surrounding receipt,
+/// not from the merchant.
+///
+/// Anchored on a leading quantity so it can't match a description that merely
+/// mentions "@".
+fn is_quantity_breakdown_label(text: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)^\s*\d+(?:[.,]\d+)?\s*(?:kg|lbs?|g|ea)?\s*@").unwrap())
+        .is_match(text)
+}
+
+/// True for savings notices whose amount is *already reflected* in the item
+/// price above them and is printed inline in the label itself — FreshCo's
+/// `YOU SAVED $2.00`. These are informational: they are not part of the
+/// subtotal, so they must neither claim a right-column price nor become a line
+/// item. (On the corpus's FreshCo receipts the `YOU SAVED` amounts sum with the
+/// `INSTANT SAVINGS` ones to the printed "Your Total Savings", which is what
+/// confirms the two are different kinds of thing.)
+fn is_priced_in_savings_label(text: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)^\s*YOU\s+SAVED\b").unwrap())
+        .is_match(text)
+}
+
+/// True for a real line-item reduction — a row whose negative amount *is* part
+/// of the subtotal (FreshCo's `INSTANT SAVINGS`), as opposed to the priced-in
+/// notices above. Anchored at the start so the summary rows that merely contain
+/// the word ("Your Total Savings", "Discounts & Specials", both of which carry a
+/// positive figure) keep claiming their own amounts.
+fn is_reduction_label(text: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)^\s*INSTANT\s+SAVINGS\b").unwrap())
+        .is_match(text)
 }
 
 fn line_y_span(dets: &[Detection], line: &[usize]) -> (f64, f64) {
@@ -186,17 +326,30 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
     let mut assigned_prices = vec![false; right.len()];
     let mut lines: Vec<Vec<usize>> = Vec::new();
 
-    // Each LEFT item claims the first unassigned RIGHT price that overlaps it.
-    // This sequential first-fit keeps the two columns monotonically aligned,
-    // which is the strongest signal on receipts (overlap-quality ranking was
-    // tried and mis-pairs receipts whose amounts lean a half-row down). The
-    // one exception: bare gift-card activation code stubs never carry their
-    // own amount, so they must not steal the next row's price (Costco prints
-    // "PC <code>" between "LCBO CARD" and its 400.00, overlapping both).
-    for &left_index in &left {
-        if is_code_stub_label(&dets[left_index].text)
-            || is_transaction_id_label(&dets[left_index].text)
-        {
+    // Each LEFT item claims the first unassigned RIGHT price that overlaps it
+    // *and that its label may legally hold* (see `AmountClaim`). This sequential
+    // first-fit keeps the two columns monotonically aligned, which is the
+    // strongest signal on receipts (overlap-quality ranking was tried and
+    // mis-pairs receipts whose amounts lean a half-row down); the type check is
+    // what keeps a sub-line from consuming the slot its item needs.
+    //
+    // Whether the last row that was *allowed* to take an amount actually took
+    // one — the context a quantity breakdown needs (see below). Rows typed
+    // `Never` are skipped rather than recorded, so a breakdown separated from
+    // its item by a savings notice still sees the item's outcome.
+    let mut last_eligible_claimed = false;
+    for (position, &left_index) in left.iter().enumerate() {
+        let mut claim = amount_claim(&dets[left_index].text);
+        // A breakdown row holds the extended price on some chains and nothing on
+        // others. Rather than key that off the merchant, read it off the
+        // receipt: if the row this breakdown belongs to already took a price,
+        // the extended price is up there and the breakdown must not take the
+        // *next* item's — which is exactly how FreshCo produce lines lose theirs.
+        let breakdown = is_quantity_breakdown_label(&dets[left_index].text);
+        if claim == AmountClaim::Any && last_eligible_claimed && breakdown {
+            claim = AmountClaim::Never;
+        }
+        if claim == AmountClaim::Never {
             lines.push(vec![left_index]);
             continue;
         }
@@ -205,11 +358,31 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
             if assigned_prices[slot] {
                 continue;
             }
-            if boxes_overlap_y(&dets[left_index], &dets[right_index], 0.3) {
-                matched = Some(slot);
-                break;
+            if !boxes_overlap_y(&dets[left_index], &dets[right_index], 0.3)
+                || !claim.accepts(&dets[right_index].text)
+            {
+                continue;
             }
+            // Second guard for breakdowns, for the chains that print the item
+            // name *below* its quantity line (Foody Mart): first-fit hands the
+            // amount to whichever row comes first in reading order, so a
+            // breakdown that merely brushes the amount outranks the item row
+            // that squarely lines up with it. Yield when the next row is the
+            // better fit — items are the price carriers, breakdowns only
+            // sometimes are.
+            if breakdown {
+                let mine = line_overlap_ratio(dets, right_index, &[left_index]);
+                let next_is_better = left
+                    .get(position + 1)
+                    .is_some_and(|&next| line_overlap_ratio(dets, right_index, &[next]) > mine);
+                if next_is_better {
+                    continue;
+                }
+            }
+            matched = Some(slot);
+            break;
         }
+        last_eligible_claimed = matched.is_some();
         match matched {
             Some(slot) => {
                 lines.push(vec![left_index, right[slot]]);
@@ -410,6 +583,155 @@ mod tests {
             rendered.contains(&"FESHRIMP PASTE150g $11.92".to_string()),
             "{rendered:?}"
         );
+    }
+
+    /// Render lines as text, the way the summary-block tests above do.
+    fn rendered(dets: &[Detection], width: f64) -> Vec<String> {
+        group_detections_into_lines(dets, width)
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|&i| dets[i].text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn savings_rows_do_not_claim_the_item_price() {
+        // FreshCo unknown-date_freshco_157_38 (image width 913): the price
+        // column leans up by ~15px against a 34px row pitch, so each savings
+        // sub-line overlaps the price of the item *below* it. Untyped, the
+        // savings rows took those prices and Soft Drink Orange / Sprite Zero
+        // were dropped for having none.
+        let dets = vec![
+            det_span("INSTANT SAVINGS", 103.0, 597.0, 644.0),
+            det_span("YOU SAVED $2.00", 116.0, 630.0, 678.0),
+            det_span("$17.98 HC", 640.0, 655.0, 701.0),
+            det_span("Soft Drink Orange", 103.0, 668.0, 713.0),
+            det_span("INSTANT SAVINGS", 102.0, 736.0, 787.0),
+            det_span("$53.94 HC", 640.0, 757.0, 805.0),
+            det_span("Sprite Zero", 103.0, 778.0, 822.0),
+        ];
+        let lines = rendered(&dets, 913.0);
+        assert!(
+            lines.contains(&"Soft Drink Orange $17.98 HC".to_string()),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&"Sprite Zero $53.94 HC".to_string()),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn quantity_breakdown_yields_when_its_item_already_has_a_price() {
+        // Same receipt: "1.280 kg @ $1.52 / kg" sits under a Bananas row that
+        // already took $1.95, so the $2.99 it overlaps is the next item's.
+        let dets = vec![
+            det_span("$1.95 C", 655.0, 1067.0, 1118.0),
+            det_span("Bananas", 105.0, 1099.0, 1132.0),
+            det_span("1.280 kg @ $1.52 / kg", 114.0, 1116.0, 1171.0),
+            det_span("$2.99 C", 654.0, 1135.0, 1188.0),
+            det_span("Cocomax Coconut Wtr", 105.0, 1156.0, 1205.0),
+        ];
+        let lines = rendered(&dets, 913.0);
+        assert!(lines.contains(&"Bananas $1.95 C".to_string()), "{lines:?}");
+        assert!(
+            lines.contains(&"Cocomax Coconut Wtr $2.99 C".to_string()),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn quantity_breakdown_keeps_the_price_when_it_is_the_carrier() {
+        // The opposite layout, which the same rule must not break: No Frills
+        // 2026-04-30_nofrills_34_94 (image width 1723) prints the extended
+        // price *on* the breakdown row, and the description row above it has
+        // none of its own.
+        let dets = vec![
+            det_span("$7.99 lmt 2,", 223.0, 964.0, 1032.0),
+            det_span("19.08", 1478.0, 1024.0, 1089.0),
+            det_span("2 @ $9.54 ea", 225.0, 1031.0, 1094.0),
+            det_span("NO NAME EGGS", 226.0, 1094.0, 1153.0),
+        ];
+        let lines = rendered(&dets, 1723.0);
+        assert!(
+            lines.contains(&"2 @ $9.54 ea 19.08".to_string()),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn points_row_does_not_claim_a_currency_amount() {
+        // FreshCo prints POINTS EARNED between two Eggs Large rows; it takes
+        // the points figure, never the second egg carton's price.
+        let dets = vec![
+            det_span("$9.18 C", 652.0, 1446.0, 1494.0),
+            det_span("Eggs Large", 107.0, 1471.0, 1514.0),
+            det_span("125 PTS", 572.0, 1485.0, 1530.0),
+            det_span("POINTS EARNED", 106.0, 1501.0, 1548.0),
+            det_span("$9.18 C", 653.0, 1516.0, 1565.0),
+            det_span("Eggs Large", 106.0, 1539.0, 1586.0),
+        ];
+        let lines = rendered(&dets, 913.0);
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|l| l.contains("Eggs Large $9.18 C"))
+                .count(),
+            2,
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn amount_claim_typing() {
+        assert!(matches!(
+            amount_claim("Natrel 2% Milk 4L"),
+            AmountClaim::Any
+        ));
+        assert!(matches!(
+            amount_claim("YOU SAVED $1.00"),
+            AmountClaim::Never
+        ));
+        assert!(matches!(
+            amount_claim("INSTANT SAVINGS"),
+            AmountClaim::NegativeOnly
+        ));
+        assert!(matches!(
+            amount_claim("POINTS EARNED"),
+            AmountClaim::PointsOnly
+        ));
+        // Summary rows that merely contain the word still take their own
+        // (positive) figures.
+        assert!(matches!(
+            amount_claim("Your Total Savings"),
+            AmountClaim::Any
+        ));
+        assert!(matches!(
+            amount_claim("Discounts & Specials"),
+            AmountClaim::Any
+        ));
+
+        assert!(AmountClaim::NegativeOnly.accepts("-$6.00"));
+        assert!(AmountClaim::NegativeOnly.accepts("6.00-"));
+        assert!(!AmountClaim::NegativeOnly.accepts("$53.94 HC"));
+        assert!(AmountClaim::PointsOnly.accepts("125 PTS"));
+        assert!(!AmountClaim::PointsOnly.accepts("$9.18 C"));
+        // A dash separator is not an amount.
+        assert!(!AmountClaim::NegativeOnly.accepts("--------"));
+    }
+
+    #[test]
+    fn quantity_breakdown_shapes() {
+        assert!(is_quantity_breakdown_label("2 @ 1/ $8.99"));
+        assert!(is_quantity_breakdown_label("1.280 kg @ $1.52 / kg"));
+        assert!(is_quantity_breakdown_label("6 @ $1.99"));
+        // Not a breakdown: a description that happens to contain "@".
+        assert!(!is_quantity_breakdown_label("(7125H 800g)@13.99(1/$9.98)"));
+        assert!(!is_quantity_breakdown_label("EMAIL@STORE.CA"));
     }
 
     #[test]
