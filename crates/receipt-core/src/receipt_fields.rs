@@ -163,6 +163,15 @@ fn extract_max_price_from_line(line: &str) -> Option<i64> {
         .max()
 }
 
+/// Every amount on `line`, in printed order.
+fn prices_in_line(line: &str) -> Vec<i64> {
+    let normalized = normalize_decimal_spacing(line);
+    re_price_anywhere()
+        .captures_iter(&normalized)
+        .filter_map(|captures| captures.get(1).and_then(|m| parse_cents(m.as_str())))
+        .collect()
+}
+
 /// Public total extractor: the raw label-scan pick, then a guarded
 /// reconciliation against the payment block (see `reconcile_total_with_charge`).
 pub fn extract_total(lines: &[String]) -> i64 {
@@ -277,6 +286,24 @@ fn extract_total_raw(lines: &[String]) -> i64 {
                 {
                     if let Some(next_amount) = extract_price_from_line(&lines[idx + 1]) {
                         return next_amount;
+                    }
+                }
+                // A TOTAL row can also collect a *neighbouring* row's amount
+                // when the price column leans up: FreshCo's gift-card tender
+                // lands on the total row as "TOTAL $157.38 $116.24", and the
+                // trailing-price pick takes the tender. The printed subtotal
+                // and tax settle which one is the total — but only when their
+                // sum is actually one of the amounts on this line, so a
+                // receipt whose total legitimately differs from subtotal + tax
+                // (fees, rounding, tax-inclusive pricing) is never overridden.
+                if prices_in_line(&lines[idx]).len() > 1 {
+                    if let (Some(subtotal), Some(tax)) =
+                        (extract_subtotal(lines), extract_tax(lines))
+                    {
+                        let expected = subtotal + tax;
+                        if expected != amount && prices_in_line(&lines[idx]).contains(&expected) {
+                            return expected;
+                        }
                     }
                 }
                 // Collapsed two-column TOTAL row: when the same line carries
@@ -606,6 +633,37 @@ mod tests {
         ];
 
         assert_eq!(extract_total(&lines), 11_295);
+    }
+
+    #[test]
+    fn total_row_carrying_a_tender_amount_is_settled_by_subtotal_plus_tax() {
+        // FreshCo unknown-date_freshco_157_38: the price column leans up, so
+        // the Corp Gift Card tender's 116.24 lands on the TOTAL row. The
+        // trailing-price pick takes the tender; subtotal + tax says otherwise,
+        // and 157.38 is right there on the same line.
+        let lines = vec![
+            "SUBTOTAL $146.48".to_string(),
+            "TOTAL TAX $10.90".to_string(),
+            "TOTAL $157.38 $116.24".to_string(),
+            "Corp Gift Card TENDER".to_string(),
+        ];
+
+        assert_eq!(extract_total(&lines), 15_738);
+    }
+
+    #[test]
+    fn total_row_is_left_alone_when_the_sum_is_not_printed_on_it() {
+        // The override needs the arithmetic to be corroborated *on that row*.
+        // Here subtotal + tax = 157.38 but the row carries no such amount, so
+        // the ordinary pick stands — receipts whose total legitimately differs
+        // from subtotal + tax (fees, rounding) must not be rewritten.
+        let lines = vec![
+            "SUBTOTAL $146.48".to_string(),
+            "TOTAL TAX $10.90".to_string(),
+            "TOTAL $160.00".to_string(),
+        ];
+
+        assert_eq!(extract_total(&lines), 16_000);
     }
 
     #[test]
