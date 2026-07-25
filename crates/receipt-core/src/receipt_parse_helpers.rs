@@ -67,6 +67,12 @@ const MIN_BANNER_HEIGHT_RATIO: f64 = 1.8;
 /// the banner, so a large-font total/footer can't masquerade as the merchant.
 const BANNER_TOP_FRACTION: f64 = 0.25;
 
+/// A line adjacent to the banner joins it when it is at least this fraction of
+/// the banner's height — i.e. it is another line of the same stacked logo rather
+/// than body text. Costco's "WHOLESALE" is 0.67× its "COSTCO"; the receipt's
+/// first address line is 0.53×, which is what sets the gap this sits in.
+const STACKED_BANNER_MIN_RATIO: f64 = 0.6;
+
 fn clean_merchant_candidate(value: &str) -> String {
     re_clean_merchant()
         .replace_all(value, "")
@@ -137,8 +143,8 @@ fn banner_by_size(lines: &[&MerchantLineInput]) -> Option<String> {
         .fold(f64::NEG_INFINITY, f64::max);
     let cut = min_y + BANNER_TOP_FRACTION * (max_y - min_y);
 
-    let mut best: Option<(f64, String)> = None;
-    for line in lines {
+    let mut best: Option<usize> = None;
+    for (index, line) in lines.iter().enumerate() {
         if line.center_y > cut {
             continue;
         }
@@ -148,14 +154,57 @@ fn banner_by_size(lines: &[&MerchantLineInput]) -> Option<String> {
         if re_banner_reject().is_match(&line.text) {
             continue;
         }
-        let Some(cleaned) = line_merchant_candidate(line) else {
+        if line_merchant_candidate(line).is_none() {
             continue;
-        };
-        if best.as_ref().map_or(true, |(h, _)| line.height > *h) {
-            best = Some((line.height, cleaned));
+        }
+        if best.map_or(true, |b| line.height > lines[b].height) {
+            best = Some(index);
         }
     }
-    best.map(|(_, cleaned)| cleaned)
+    let best = best?;
+
+    // A stacked display logo splits the name across two banner-sized lines —
+    // Costco prints "COSTCO" over "WHOLESALE" — and the tallest line alone is
+    // only half the name. Absorb vertically adjacent display lines outward from
+    // the banner so the matcher sees "OSTC WHOLESALE" rather than "OSTC": the
+    // former clears the fuzzy bar against the "COSTCO WHOLESALE" alias, the
+    // latter does not.
+    let mut first = best;
+    let mut last = best;
+    while first > 0 && joins_banner(lines[first - 1], lines[first], lines[best].height, cut) {
+        first -= 1;
+    }
+    while last + 1 < lines.len()
+        && joins_banner(lines[last + 1], lines[last], lines[best].height, cut)
+    {
+        last += 1;
+    }
+
+    let joined = (first..=last)
+        .filter_map(|index| line_merchant_candidate(lines[index]))
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!joined.is_empty()).then_some(joined)
+}
+
+/// Whether `cand` is another line of the same stacked logo as `neighbor`, given
+/// the height of the banner line the walk started from.
+///
+/// Body text fails the height ratio; a date/address/price row fails
+/// [`re_banner_reject`]; a line printed far below the logo fails the adjacency
+/// check, whose budget is the two lines' mean height — roughly "no more than one
+/// display line of blank space between them".
+fn joins_banner(
+    cand: &MerchantLineInput,
+    neighbor: &MerchantLineInput,
+    banner_height: f64,
+    cut: f64,
+) -> bool {
+    cand.center_y <= cut
+        && cand.height >= STACKED_BANNER_MIN_RATIO * banner_height
+        && !re_banner_reject().is_match(&cand.text)
+        && line_merchant_candidate(cand).is_some()
+        && (cand.center_y - neighbor.center_y).abs() <= (cand.height + neighbor.height) / 2.0
 }
 
 pub fn extract_merchant_with_confidence(pages: &[MerchantPageInput]) -> Option<String> {
@@ -344,6 +393,44 @@ mod tests {
         let pages = one_page(vec![
             mline("roegnoroxeholbem", 0.9, 30.0, 30.0), // garbage, first-plausible
             mline("Loblaws", 0.95, 75.0, 65.0),         // tall banner (top region)
+            mline("Milk", 0.9, 28.0, 150.0),
+            mline("Bread", 0.9, 28.0, 190.0),
+            mline("Eggs", 0.9, 28.0, 230.0),
+        ]);
+        assert_eq!(
+            extract_merchant_with_confidence(&pages).as_deref(),
+            Some("Loblaws")
+        );
+    }
+
+    #[test]
+    fn stacked_banner_halves_join_into_one_candidate() {
+        // costco/2026-07-22_costco_67_82, real line geometry: the logo stacks
+        // "COSTCO" (h=208) over "WHOLESALE" (h=140). Only the taller half clears
+        // the 1.8x-median bar, but the half alone ("OSTC", the C dropped by OCR)
+        // is too far from "COSTCO" to correct. Joined, it clears the fuzzy bar
+        // against the "COSTCO WHOLESALE" alias.
+        let pages = one_page(vec![
+            mline("OSTC", 0.96, 208.0, 374.0),
+            mline("WHOLESALE", 0.99, 140.0, 502.0),
+            mline("Markham #545", 0.99, 111.0, 628.0),
+            mline("65 Kirkham Drive", 1.0, 94.0, 718.0),
+            mline("1424970 CASHMERE TP 26.99 H", 0.99, 88.0, 1235.0),
+            mline("430 XL EGGS 9.69", 0.99, 82.0, 1389.0),
+        ]);
+        assert_eq!(
+            extract_merchant_with_confidence(&pages).as_deref(),
+            Some("OSTC WHOLESALE")
+        );
+    }
+
+    #[test]
+    fn body_text_under_the_banner_does_not_join_it() {
+        // The join must stop at the logo: the address line below Loblaws is
+        // nowhere near banner height, so the candidate stays the banner alone.
+        let pages = one_page(vec![
+            mline("Loblaws", 0.95, 75.0, 65.0),
+            mline("123 Main Street", 0.95, 28.0, 110.0),
             mline("Milk", 0.9, 28.0, 150.0),
             mline("Bread", 0.9, 28.0, 190.0),
             mline("Eggs", 0.9, 28.0, 230.0),
