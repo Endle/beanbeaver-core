@@ -23,6 +23,13 @@ const COST_SAME_GLYPH: f64 = 0.1;
 /// Distinct glyphs sharing a stroke skeleton: a faded, blotted, or bridged
 /// stroke turns one into the other. `M`/`H` is the motivating case — a thermal
 /// `M` whose middle diagonal drops out reads as `H`.
+///
+/// Keep this tier evidence-driven. `M`/`N` was once listed here on plausibility
+/// alone and had to be removed: it made the bakery keyword `NAAN` match
+/// `VAN`**`NAAM`**`EI` (a frozen shrimp item) for 0.3, inside the equality budget,
+/// which misfiled two corpus fixtures as `Bakery`. A pair that only *sounds*
+/// reasonable is a false-positive generator — add one when a real receipt
+/// demands it, not before.
 const COST_SHARED_SKELETON: f64 = 0.3;
 
 /// Confusable only under heavy smearing. Plausible, but weak evidence, so it
@@ -64,7 +71,6 @@ pub fn confusion_cost(a: char, b: char) -> f64 {
         | ('E', 'F')
         | ('H', 'M')
         | ('H', 'N')
-        | ('M', 'N')
         | ('M', 'W')
         | ('U', 'V') => COST_SHARED_SKELETON,
 
@@ -100,6 +106,106 @@ pub fn weighted_distance(a: &[char], b: &[char]) -> f64 {
         std::mem::swap(&mut prev, &mut curr);
     }
     prev[b.len()]
+}
+
+/// Budget for treating two strings as "equal apart from OCR noise": one
+/// shared-skeleton confusion, or up to three same-glyph ones.
+///
+/// Deliberately absolute rather than length-scaled. These are *equality*
+/// relaxations feeding an exact-match verdict, so the budget must not grow with
+/// the string — a long keyword should not become progressively easier to match
+/// exactly. Genuinely loose matching is the fuzzy stage's job.
+///
+/// Set a hair above `COST_SHARED_SKELETON` rather than equal to it, because
+/// `3.0 * COST_SAME_GLYPH` is `0.30000000000000004` in binary floating point: an
+/// exact `0.3` would reject the three-cheap-swaps case this budget is documented
+/// to allow. The slack is numerical headroom only — it admits no additional class
+/// of error, which the compile-time assertions below pin.
+pub const NOISE_TOLERANCE: f64 = 0.35;
+
+// The budget's documented meaning, enforced at compile time so retuning any of
+// these constants is a deliberate decision rather than a silent behavior change.
+const _: () = assert!(COST_SHARED_SKELETON <= NOISE_TOLERANCE);
+const _: () = assert!(3.0 * COST_SAME_GLYPH <= NOISE_TOLERANCE);
+// And nothing beyond that: not four cheap swaps, not two skeleton errors, and
+// never a smeared or wholly unrelated character.
+const _: () = assert!(4.0 * COST_SAME_GLYPH > NOISE_TOLERANCE);
+const _: () = assert!(2.0 * COST_SHARED_SKELETON > NOISE_TOLERANCE);
+const _: () = assert!(COST_SMEAR_ONLY > NOISE_TOLERANCE);
+const _: () = assert!(COST_UNRELATED > NOISE_TOLERANCE);
+
+/// Class representative for glyphs that print identically (the
+/// [`COST_SAME_GLYPH`] tier), or `ch` unchanged when it has no twin.
+///
+/// Only the same-glyph tier is collapsed, because only it is a true equivalence
+/// relation — `1`/`I`/`L` are mutually interchangeable. The skeleton tier is
+/// **not**: `M`/`H`, `H`/`N` and `M`/`W` are each plausible, but folding them into
+/// one class would make `W` equal `N`, which no OCR engine would do. Graded
+/// [`confusion_cost`] handles those instead.
+pub fn same_glyph_canonical(ch: char) -> char {
+    match ch {
+        '0' | 'O' => 'O',
+        '1' | 'I' | 'L' => 'I',
+        '5' | 'S' => 'S',
+        '8' | 'B' => 'B',
+        '2' | 'Z' => 'Z',
+        '6' | 'G' => 'G',
+        other => other,
+    }
+}
+
+/// Map every char through [`same_glyph_canonical`], so strings differing only by
+/// interchangeable glyphs compare equal.
+pub fn canonicalize_same_glyph(text: &str) -> String {
+    text.chars().map(same_glyph_canonical).collect()
+}
+
+/// Cheapest confusion cost of aligning all of `needle` against *any* substring of
+/// `haystack`, with the matching window's start offset.
+///
+/// Substring semantics: skipping haystack before and after the window is free,
+/// while every edit inside it is priced by [`confusion_cost`]. This is the
+/// approximate counterpart of `str::find` — `(0.0, pos)` means a literal hit.
+///
+/// Returns `(f64::INFINITY, 0)` when `needle` is longer than `haystack`, since no
+/// window can contain it.
+pub fn min_substring_cost(needle: &[char], haystack: &[char]) -> (f64, usize) {
+    if needle.is_empty() {
+        return (0.0, 0);
+    }
+    if needle.len() > haystack.len() {
+        return (f64::INFINITY, 0);
+    }
+    // `prev[j]` = cost of matching needle[..i] ending at haystack[j], carrying the
+    // window start that achieved it. Row 0 is all zeros: a window may open at any
+    // offset for free.
+    let mut prev: Vec<(f64, usize)> = (0..=haystack.len()).map(|j| (0.0, j)).collect();
+    let mut curr: Vec<(f64, usize)> = vec![(0.0, 0); haystack.len() + 1];
+    for i in 1..=needle.len() {
+        // Deleting needle chars with no haystack left costs a full edit each.
+        curr[0] = (i as f64, 0);
+        for j in 1..=haystack.len() {
+            let (sub_cost, sub_start) = prev[j - 1];
+            let substitute = (
+                sub_cost + confusion_cost(needle[i - 1], haystack[j - 1]),
+                sub_start,
+            );
+            let (del_cost, del_start) = prev[j];
+            let delete = (del_cost + 1.0, del_start);
+            let (ins_cost, ins_start) = curr[j - 1];
+            let insert = (ins_cost + 1.0, ins_start);
+            curr[j] = [substitute, delete, insert]
+                .into_iter()
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .expect("three candidates");
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev.iter()
+        .skip(1)
+        .copied()
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .unwrap_or((f64::INFINITY, 0))
 }
 
 /// Normalized similarity in `[0, 1]`: `1 - distance / longer_length`. Dividing by
@@ -197,6 +303,82 @@ mod tests {
         // Same single unrelated substitution costs proportionally less on a
         // longer string, which is what makes one absolute threshold workable.
         assert!(similarity("COSTCOXX", "COSTCOXZ") > similarity("CAT", "CAZ"));
+    }
+
+    #[test]
+    fn canonicalization_agrees_with_the_same_glyph_tier() {
+        // The invariant that stops the collapse table and the cost table from
+        // drifting apart, which is exactly how the old ad-hoc `0|D -> O` table
+        // ended up disagreeing with the graded costs.
+        for a in ('A'..='Z').chain('0'..='9') {
+            for b in ('A'..='Z').chain('0'..='9') {
+                let collapses_together = same_glyph_canonical(a) == same_glyph_canonical(b);
+                let free_or_same_glyph = confusion_cost(a, b) <= COST_SAME_GLYPH;
+                assert_eq!(
+                    collapses_together,
+                    free_or_same_glyph,
+                    "{a} vs {b}: collapse={collapses_together} cost={}",
+                    confusion_cost(a, b)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn canonicalization_is_idempotent() {
+        let once = canonicalize_same_glyph("LYS0L 1KG 8OX");
+        assert_eq!(canonicalize_same_glyph(&once), once);
+    }
+
+    #[test]
+    fn skeleton_tier_is_deliberately_not_collapsed() {
+        // Folding the 0.3 tier into classes would make W equal N via M.
+        assert_ne!(same_glyph_canonical('W'), same_glyph_canonical('N'));
+        assert_ne!(same_glyph_canonical('D'), same_glyph_canonical('O'));
+    }
+
+    fn substring_cost(needle: &str, haystack: &str) -> f64 {
+        min_substring_cost(
+            &needle.chars().collect::<Vec<_>>(),
+            &haystack.chars().collect::<Vec<_>>(),
+        )
+        .0
+    }
+
+    #[test]
+    fn substring_search_is_free_outside_the_window() {
+        let (cost, pos) = min_substring_cost(
+            &"LYSOL".chars().collect::<Vec<_>>(),
+            &"BATHLYSOLCLEANER".chars().collect::<Vec<_>>(),
+        );
+        assert_eq!(cost, 0.0);
+        assert_eq!(pos, 4);
+    }
+
+    #[test]
+    fn substring_search_prices_the_documented_lysol_misreads() {
+        // The two regressions the old hard-collapse existed to protect.
+        assert_eq!(substring_cost("LYSOL", "LYS0L BATH P 059"), COST_SAME_GLYPH);
+        assert_eq!(
+            substring_cost("LYSOL", "LYSDL BATH P 059"),
+            COST_SHARED_SKELETON
+        );
+        // Both must land inside the equality budget, or categorization regresses.
+        assert!(substring_cost("LYSOL", "LYS0L BATH P 059") <= NOISE_TOLERANCE);
+        assert!(substring_cost("LYSDL", "LYSOL BATH P 059") <= NOISE_TOLERANCE);
+    }
+
+    #[test]
+    fn substring_search_rejects_a_genuinely_different_word() {
+        assert!(substring_cost("LYSOL", "PEPSI BATH P 059") > NOISE_TOLERANCE);
+        assert!(substring_cost("CHICKEN", "CHOCOLATE BAR") > NOISE_TOLERANCE);
+    }
+
+    #[test]
+    fn substring_search_handles_degenerate_inputs() {
+        assert_eq!(substring_cost("", "ANYTHING"), 0.0);
+        assert!(substring_cost("TOOLONG", "SHORT").is_infinite());
+        assert_eq!(substring_cost("EXACT", "EXACT"), 0.0);
     }
 
     #[test]
