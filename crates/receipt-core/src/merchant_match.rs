@@ -108,6 +108,18 @@ pub fn resolve(
 ) -> MerchantMatch {
     let raw = raw_header.trim().to_string();
 
+    // Search a line-break-free view of the receipt. A stacked store logo prints
+    // its name across two display lines ("SHOPPERS" over "DRUG MART"), which the
+    // line grouper correctly keeps apart, so the name only exists in the text
+    // with a newline through the middle and a `\bSHOPPERS DRUG MART\b` probe
+    // misses it. Collapsing runs of whitespace to single spaces is the same
+    // tolerance `corroborator_present` already applies for OCR-split tokens.
+    let flat_text_upper = full_text_upper
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let full_text_upper = flat_text_upper.as_str();
+
     let canonical_for = |surface_upper: &str| -> Option<String> {
         families
             .iter()
@@ -297,6 +309,27 @@ mod tests {
         );
         assert_eq!(m.status, MerchantMatchStatus::Corrected);
         assert_eq!(m.display(), "COSTCO");
+    }
+
+    #[test]
+    fn merchant_name_stacked_across_two_lines_still_resolves() {
+        // shoppers/2026-06-30_shoppers_15_01: the logo stacks "SHOPPERS" over
+        // "DRUG MART", so once the line grouper stops merging stacked logos the
+        // name exists in the receipt text only with a newline through it. The
+        // header itself is deskew garbage from the receipt's curled top edge.
+        let families = vec![MerchantFamily {
+            canonical: "SHOPPERS DRUG MART".to_string(),
+            aliases: vec![],
+            corroborators: vec![],
+        }];
+        let m = resolve(
+            "QQORI",
+            "QQORI\nSHOPPERS\nDRUG MART\nSTEPHANIE LE PHARMACY INC.",
+            &[],
+            &families,
+        );
+        assert_eq!(m.status, MerchantMatchStatus::Corrected);
+        assert_eq!(m.display(), "SHOPPERS DRUG MART");
     }
 
     #[test]

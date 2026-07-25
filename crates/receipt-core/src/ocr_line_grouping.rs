@@ -260,6 +260,28 @@ fn line_overlap_ratio(dets: &[Detection], det_index: usize, line: &[usize]) -> f
     overlap / det_height.min(line_height)
 }
 
+/// Whether `det` and `line` plausibly belong to the *same* row of text, judged by
+/// their centers rather than by raw overlap.
+///
+/// Overlap alone is not enough when the two boxes have very different heights: a
+/// stacked display logo (Costco prints "COSTCO" over "WHOLESALE", each several
+/// times the body height) puts one glyph's descender region inside the other's
+/// ascender region, which is a healthy-looking overlap *ratio* — 0.33 on
+/// costco/2026-07-22_costco_67_82 — even though the two are unmistakably separate
+/// lines. Merged, they render in x-order as "WHOLESALE OSTC": the banner reversed,
+/// which no merchant matcher can recover.
+///
+/// Two boxes genuinely sharing a row always have at least one center inside the
+/// other's vertical span, so require that. Boxes that merely graze each other's
+/// extremes — which is all a stacked logo does — fail it from both directions.
+fn centers_agree(dets: &[Detection], det_index: usize, line: &[usize]) -> bool {
+    let det = &dets[det_index];
+    let (line_min, line_max) = line_y_span(dets, line);
+    let line_cy = line_center_y(dets, line);
+    (line_min <= det.center_y && det.center_y <= line_max)
+        || (det.y_min <= line_cy && line_cy <= det.y_max)
+}
+
 fn distance_to_line_span(dets: &[Detection], det_index: usize, line: &[usize]) -> f64 {
     let center_y = dets[det_index].center_y;
     let (line_min, line_max) = line_y_span(dets, line);
@@ -410,6 +432,9 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
             let center_distance =
                 (dets[mid_index].center_y - line_center_y(dets, &lines[line_idx])).abs();
             if overlap_ratio < overlap_threshold && center_distance > y_threshold {
+                continue;
+            }
+            if !centers_agree(dets, mid_index, &lines[line_idx]) {
                 continue;
             }
             let score = (
@@ -732,6 +757,40 @@ mod tests {
         // Not a breakdown: a description that happens to contain "@".
         assert!(!is_quantity_breakdown_label("(7125H 800g)@13.99(1/$9.98)"));
         assert!(!is_quantity_breakdown_label("EMAIL@STORE.CA"));
+    }
+
+    #[test]
+    fn stacked_logo_halves_do_not_merge_into_one_line() {
+        // costco/2026-07-22_costco_67_82 (image width 1485): the banner stacks
+        // "COSTCO" over "WHOLESALE", each several times the body height, so the
+        // two boxes overlap by 46px — 0.33 of the shorter one, comfortably past
+        // the 0.25 merge bar — despite being unmistakably separate lines. Merged,
+        // they sort by x into "WHOLESALE OSTC": the name reversed, which drops
+        // the merchant to Unknown. Neither box's center lies inside the other's
+        // span, which is what tells them apart from real same-row text.
+        let dets = vec![
+            det_span("OSTC", 475.0, 320.0, 528.0),
+            det_span("WHOLESALE", 383.0, 482.0, 622.0),
+            det_span("Markham #545", 490.0, 623.0, 734.0),
+        ];
+        let lines = rendered(&dets, 1485.0);
+        assert_eq!(
+            lines,
+            vec!["OSTC", "WHOLESALE", "Markham #545"],
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn same_row_text_still_merges_when_boxes_differ_in_height() {
+        // The guard above must not split a genuine row: a short price box next to
+        // a taller description still has its center inside the other's span.
+        let dets = vec![
+            det_span("MILK 2%", 105.0, 500.0, 560.0),
+            det_span("6.09", 760.0, 512.0, 548.0),
+        ];
+        let lines = rendered(&dets, 1000.0);
+        assert_eq!(lines, vec!["MILK 2% 6.09"], "{lines:?}");
     }
 
     #[test]
