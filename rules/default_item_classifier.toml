@@ -248,7 +248,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0027"
-keywords = ["WATER", "SPARKLING WATER", "MINERAL WATER", "SPRING WATER", "COCONUT WATER", "SPORTS DRINK", "SOFT DRINK", "GATORADE", "POWERADE", "ENERGY DRINK", "RED BULL", "MONSTER", "CRUSH", "FANTA STRAUBERRY", "FANTA STRAWBERRY", "FANTA", "PEACE TEA", "DRINK", "BEVERAGE", "ZOA", "BIOSTEEL", "MILK TEA", "BUBBLE TEA"]
+keywords = ["WATER", "SPARKLING WATER", "MINERAL WATER", "SPRING WATER", "COCONUT WATER", "COCONUT WTR", "SPORTS DRINK", "SOFT DRINK", "GATORADE", "POWERADE", "ENERGY DRINK", "RED BULL", "MONSTER", "MNSTR", "CRUSH", "FANTA STRAUBERRY", "FANTA STRAWBERRY", "FANTA", "PEACE TEA", "DRINK", "BEVERAGE", "ZOA", "BIOSTEEL", "MILK TEA", "BUBBLE TEA"]
 category = "grocery_drink"
 tags = ["grocery", "drink"]
 priority = 0
@@ -661,7 +661,7 @@ exact_only = false
 
 [[rules]]
 id = "semantic_tag_0103"
-keywords = ["MONSTER"]
+keywords = ["MONSTER", "MNSTR"]
 tags = ["energy_drink"]
 priority = 0
 exact_only = false
