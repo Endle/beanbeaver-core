@@ -721,6 +721,21 @@ mod tests {
             .iter()
             .any(|x| x == "energy_drink"));
 
+        // FreshCo drops vowels ("Mnstr", "Wtr"), so the spelled-out `MONSTER` and
+        // `COCONUT WATER` keywords never fire and a fuzzy hit fills the vacuum:
+        // `RADISH` scores exactly 0.80 against a window of "Pa-RADIS-e", meeting
+        // the 0.80 medium-keyword bar, and "Coconut Wtr" falls through to bare
+        // `COCONUT` as fruit. The abbreviations are exact hits, and exactness
+        // outranks fuzz at equal priority.
+        assert_eq!(
+            key("Mnstr Ultra Paradise").as_deref(),
+            Some("grocery_drink")
+        );
+        assert!(tags("Mnstr Ultra Paradise")
+            .iter()
+            .any(|x| x == "energy_drink"));
+        assert_eq!(key("Cocomax Coconut Wtr").as_deref(), Some("grocery_drink"));
+
         // MARUTAI is a project-only override; public rules must not classify it.
         assert_eq!(key("MARUTAI"), None);
         assert!(tags("MARUTAI").is_empty());
