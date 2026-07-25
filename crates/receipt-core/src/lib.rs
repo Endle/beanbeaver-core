@@ -8,6 +8,7 @@
 
 pub mod detection_normalization;
 pub mod merchant_match;
+pub mod merchant_vocab;
 pub mod ocr_confusion;
 pub mod ocr_line_grouping;
 pub mod ocr_transform;
