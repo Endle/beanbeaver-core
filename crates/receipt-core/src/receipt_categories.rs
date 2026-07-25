@@ -3,6 +3,15 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
+use crate::ocr_confusion;
+
+// Bigram-similarity bars for the fuzzy keyword stage, by keyword length.
+//
+// These are hand-tuned values, and they are tuned against the *specific* input
+// normalization `legacy_bigram_collapse` applies — not against raw text. Read that
+// function's docs before touching either: the two are coupled, and we intend to
+// retune these gradually so the collapse can be deleted. Nudging a threshold to
+// rescue one fixture, without a corpus run, is how this knot was tied.
 const FUZZY_THRESHOLD_SHORT: f64 = 0.75;
 const FUZZY_THRESHOLD_MEDIUM: f64 = 0.80;
 const FUZZY_THRESHOLD_LONG: f64 = 0.70;
@@ -90,13 +99,20 @@ fn get_threshold(keyword_len: usize) -> f64 {
     }
 }
 
-fn normalize_ocr_confusables(text: &str) -> String {
-    text.chars()
-        .map(|ch| match ch {
-            '0' | 'D' => 'O',
-            _ => ch,
-        })
-        .collect()
+/// True when `keyword` occurs in `description` allowing only OCR glyph noise —
+/// the approximate counterpart of `str::find`, returning the hit offset.
+///
+/// Replaces what used to be an ad-hoc `'0' | 'D' => 'O'` collapse. That table
+/// made `D` and `O` globally interchangeable (so `DOG` equalled `OOG`) while
+/// knowing nothing about the other glyph pairs OCR actually confuses. Pricing the
+/// alignment with the shared cost model is both narrower — `D`/`O` costs a real
+/// 0.3 instead of being free — and broader, since every pair in the table now
+/// counts, not just two.
+fn confusable_find(keyword: &str, description: &str) -> Option<usize> {
+    let needle: Vec<char> = keyword.chars().collect();
+    let haystack: Vec<char> = description.chars().collect();
+    let (cost, position) = ocr_confusion::min_substring_cost(&needle, &haystack);
+    (cost <= ocr_confusion::NOISE_TOLERANCE).then_some(position)
 }
 
 fn contains_with_single_char_noise(keyword: &str, description: &str) -> Option<usize> {
@@ -132,11 +148,68 @@ fn compact_without_spaces(value: &str) -> String {
     value.chars().filter(|ch| !ch.is_whitespace()).collect()
 }
 
+/// The original ad-hoc collapse, retained **only** as the bigram stage's input
+/// normalization. Frozen — do not "fix", widen, or unify it without recalibrating
+/// `FUZZY_THRESHOLD_*` against the corpus.
+///
+/// It is not a defensible OCR model (it makes `D` and `O` globally
+/// interchangeable, so `DOG` equals `OOG`, while ignoring every other confusable
+/// pair). Everywhere a *confusable-equality* decision is made, the shared
+/// [`ocr_confusion`] cost model has replaced it. But this stage is different: the
+/// fuzzy thresholds were hand-tuned against precisely this normalization, and it
+/// turns out to be load-bearing by accident.
+///
+/// Measured on `LUCKY HENAN NOODLES` against the snacks keyword `NOODLE SNACK`:
+///
+/// | input normalization | bigram score | vs 0.70 bar |
+/// |---|---|---|
+/// | this collapse | 0.6667 | no match — correct |
+/// | raw text | 0.7000 | matches — misfiles as snacks |
+/// | same-glyph collapse | 0.7000 | matches — misfiles as snacks |
+///
+/// Collapsing `D` merges the keyword's `OD`/`DL` bigrams into `OO`/`OL`, shrinking
+/// its bigram *set* and so lowering the intersection ratio. That accident is the
+/// only thing holding a genuine false positive below the bar, and the rule table
+/// makes it bite: the snacks rule is priority 80 against staple's 0, and
+/// `compare_match_rank` weighs priority above exactness, so a fuzzy snacks hit
+/// outranks a literal `NOODLES` staple hit.
+///
+/// # Planned direction — this function is meant to die
+///
+/// Keeping it is a staging decision, not an endorsement. The intended path, to be
+/// walked **gradually**, a step per PR, each measured against the cached corpus:
+///
+/// 1. Retune `FUZZY_THRESHOLD_SHORT` / `_MEDIUM` / `_LONG` so the fuzzy stage no
+///    longer depends on this collapse's accidental bigram-set shrinkage. The
+///    `NOODLE SNACK` case above is the canary: it must stay below the bar on
+///    **raw** input before the collapse can go.
+/// 2. Stop compacting multi-word keywords across word boundaries, which is what
+///    lets an 11-char keyword drift across `HENAN|NOODLES` and score at all.
+/// 3. Delete this function and route the fuzzy stage through
+///    [`ocr_confusion`] like every other stage.
+///
+/// Perfection is explicitly *not* the bar for those steps — core is expected to
+/// carry some divergence, and a step that trades a stale false positive for a
+/// smaller new one is still progress. Do not let "the corpus must stay at zero
+/// divergences" block the sequence; do record what moved, in both directions.
+///
+/// Until step 1 lands, treat every constant this feeds as coupled: changing the
+/// thresholds and this normalization independently is how the two silently
+/// drifted apart in the first place.
+fn legacy_bigram_collapse(text: &str) -> String {
+    text.chars()
+        .map(|ch| match ch {
+            '0' | 'D' => 'O',
+            _ => ch,
+        })
+        .collect()
+}
+
 fn fuzzy_contains(keyword: &str, description: &str, threshold: Option<f64>) -> (bool, isize, bool) {
     let desc_raw = description.to_ascii_uppercase();
     let kw_raw = keyword.trim().to_ascii_uppercase();
-    let desc_conf_raw = normalize_ocr_confusables(&desc_raw);
-    let kw_conf_raw = normalize_ocr_confusables(&kw_raw);
+    let desc_conf_raw = ocr_confusion::canonicalize_same_glyph(&desc_raw);
+    let kw_conf_raw = ocr_confusion::canonicalize_same_glyph(&kw_raw);
     let exact_only = threshold.is_some_and(|value| value >= 1.0);
 
     let kw_len_raw = kw_raw.chars().filter(|ch| !ch.is_whitespace()).count();
@@ -149,7 +222,7 @@ fn fuzzy_contains(keyword: &str, description: &str, threshold: Option<f64>) -> (
         }
         if !exact_only {
             for token_match in re_word_token().find_iter(&desc_raw) {
-                if normalize_ocr_confusables(token_match.as_str()) == kw_conf_raw {
+                if ocr_confusion::canonicalize_same_glyph(token_match.as_str()) == kw_conf_raw {
                     return (true, token_match.start() as isize, true);
                 }
             }
@@ -159,14 +232,15 @@ fn fuzzy_contains(keyword: &str, description: &str, threshold: Option<f64>) -> (
 
     let desc = compact_without_spaces(&desc_raw);
     let kw = compact_without_spaces(&kw_raw);
-    let desc_conf = compact_without_spaces(&desc_conf_raw);
-    let kw_conf = compact_without_spaces(&kw_conf_raw);
 
     if let Some(position) = desc.find(&kw) {
         return (true, position as isize, true);
     }
     if !exact_only {
-        if let Some(position) = desc_conf.find(&kw_conf) {
+        // Priced against the raw text, not the canonicalized copy: the cost model
+        // already treats interchangeable glyphs as near-free, and keeps the pairs
+        // it merely considers *plausible* (D/O and friends) at a real cost.
+        if let Some(position) = confusable_find(&kw, &desc) {
             return (true, position as isize, true);
         }
     }
@@ -186,8 +260,8 @@ fn fuzzy_contains(keyword: &str, description: &str, threshold: Option<f64>) -> (
         return (false, -1, false);
     }
 
-    let desc_chars: Vec<char> = desc_conf.chars().collect();
-    let kw_chars: Vec<char> = kw_conf.chars().collect();
+    let desc_chars: Vec<char> = legacy_bigram_collapse(&desc).chars().collect();
+    let kw_chars: Vec<char> = legacy_bigram_collapse(&kw).chars().collect();
     let window_size = keyword_len + 1;
     let mut best_similarity = 0.0;
     let mut best_position = -1;
