@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 
 use crate::merchant_match::MerchantFamily;
+use crate::merchant_vocab::{Expansion, MerchantVocab};
 use crate::receipt_categories::{build_rule_layers, BuildClassifierConfig, BuildRuleEntry};
 use crate::receipt_parser::ParserRuleLayers;
 
@@ -19,6 +20,8 @@ const DEFAULT_MERCHANT_RULES_TOML: &str =
     include_str!("../../../rules/default_merchant_rules.toml");
 const DEFAULT_MERCHANT_FAMILIES_TOML: &str =
     include_str!("../../../rules/default_merchant_families.toml");
+const DEFAULT_MERCHANT_VOCAB_TOML: &str =
+    include_str!("../../../rules/default_merchant_vocab.toml");
 
 /// Two-stage category-key -> beancount-account mapping. Ported verbatim from
 /// `receipt/item_categories.py::DEFAULT_CATEGORY_ACCOUNTS`.
@@ -195,6 +198,7 @@ pub fn default_parser_rule_layers() -> ParserRuleLayers {
     ParserRuleLayers {
         category_rules,
         account_mapping,
+        merchant_vocab: default_merchant_vocab(),
     }
 }
 
@@ -227,6 +231,7 @@ pub fn parser_rule_layers_with_overrides(
     Ok(ParserRuleLayers {
         category_rules,
         account_mapping,
+        merchant_vocab: default_merchant_vocab(),
     })
 }
 
@@ -269,6 +274,63 @@ pub fn default_merchant_families() -> Vec<MerchantFamily> {
             canonical: family.canonical,
             aliases: family.aliases,
             corroborators: family.corroborators,
+        })
+        .collect()
+}
+
+#[derive(Debug, Deserialize)]
+struct MerchantVocabExpansionToml {
+    short: String,
+    full: String,
+    /// Whether this expansion may feed the classifier. Defaults to `true`;
+    /// brand and flavour entries set it `false` (see `Expansion::classify`).
+    #[serde(default = "default_true")]
+    classify: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+struct MerchantVocabEntryToml {
+    canonical: String,
+    #[serde(default)]
+    expansions: Vec<MerchantVocabExpansionToml>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MerchantVocabToml {
+    #[serde(default)]
+    merchants: Vec<MerchantVocabEntryToml>,
+}
+
+/// Load the bundled merchant-scoped abbreviation vocabulary that
+/// [`crate::merchant_vocab`] applies before classification.
+///
+/// Abbreviations are keyed uppercase; the expansion keeps the casing written in
+/// the TOML, since it is what surfaces in the recovered item name.
+pub fn default_merchant_vocab() -> Vec<MerchantVocab> {
+    let parsed: MerchantVocabToml = toml::from_str(DEFAULT_MERCHANT_VOCAB_TOML)
+        .expect("bundled default_merchant_vocab.toml is valid");
+    parsed
+        .merchants
+        .into_iter()
+        .map(|entry| MerchantVocab {
+            canonical: entry.canonical,
+            expansions: entry
+                .expansions
+                .into_iter()
+                .map(|e| {
+                    (
+                        e.short.trim().to_ascii_uppercase(),
+                        Expansion {
+                            full: e.full,
+                            classify: e.classify,
+                        },
+                    )
+                })
+                .collect(),
         })
         .collect()
 }

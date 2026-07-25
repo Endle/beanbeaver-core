@@ -1,0 +1,83 @@
+# Merchant-scoped abbreviation vocabulary.
+#
+# Warehouse and grocery chains print item names into a fixed-width column, and
+# each chain has its own house style for squeezing them in: Costco drops vowels
+# to a consonant skeleton (`LNDRY`), FreshCo does the same to brand names
+# (`Mnstr`), Foody Mart truncates at ~25 characters. That wrecks keyword
+# matching, because the classifier's vocabulary is spelled out in full.
+#
+# This file fixes that the *precision-preserving* way: per merchant, a table of
+# abbreviation -> expansion, applied as **exact, whole-token** substitutions
+# before classification. It is deliberately NOT a fuzzy-matching tolerance.
+#
+# ## Why not just loosen the fuzzy threshold for these merchants?
+#
+# Measured, on the two uncategorized items of a real Costco receipt:
+#
+# | keyword     | best window | bigram score | current bar |
+# |-------------|-------------|--------------|-------------|
+# | `LAUNDRY`   | `LIQLNDRY`  | 0.500        | 0.70        |
+# | `LIQUID`    | `13KSLIQ`   | 0.400        | 0.80        |
+# | `DISH SOAP` | `POWERWASH` | 0.143        | 0.70        |
+#
+# Recovering `LNDRY -> LAUNDRY` needs the bar at 0.50 — but a *confirmed false*
+# positive (`RADISH` inside "Pa-radis-e") scores 0.800. The orderings are
+# inverted: every wrong match outranks the right one, so no threshold, global or
+# per-merchant, separates them. Dropping a vowel destroys two bigrams and invents
+# one, so bigram similarity is close to the worst possible metric for this
+# abbreviation style.
+#
+# Exact token substitution has none of that failure mode: an unknown
+# abbreviation simply doesn't expand, degrading to "no match" rather than "wrong
+# match".
+#
+# ## Why merchant scope is the right axis
+#
+# `KS` means Kirkland Signature *at Costco* and would be reckless as a global
+# keyword. Scoping the vocabulary to a merchant is what makes these short,
+# otherwise-ambiguous tokens safe to expand at all.
+#
+# `canonical` must match the canonical merchant family name that
+# `merchant_match` resolves to (see `default_merchant_families.toml`), not the
+# raw OCR text. A receipt whose merchant does not resolve gets no expansions —
+# the feature fails closed.
+#
+# ## Scope
+#
+# Expansions are *literal*: `LNDRY` means "Laundry", not "Laundry Detergent".
+# Semantic knowledge ("laundry products are household supplies") belongs in
+# `default_item_classifier.toml`, so the two stay separately reviewable.
+
+# ## `classify = false`
+#
+# An expansion always improves the *displayed* name, but not every expansion
+# belongs in the string the classifier reads. Brand names and flavour words
+# carry no category signal and plenty of collision risk. Both entries below were
+# demoted after a corpus run caught them red-handed:
+#
+# - `KS -> Kirkland Signature` scores 0.70 against the **Pharmacy** keyword
+#   `KIRKLAND IBU` — exactly the long-keyword bar — filing Kirkland organic milk
+#   as pharmacy.
+# - `ORNGE -> Orange` turned Grand Marnier liqueur into `Grocery:Fruit`.
+#
+# Entries are added only when a real receipt in the corpus needs them.
+# Speculative abbreviations are unmeasured risk, so this table stays small.
+
+[[merchants]]
+canonical = "COSTCO"
+expansions = [
+    # Kirkland Signature, Costco's house brand — the most common prefix, and
+    # display-only: it names a brand, not a product type.
+    { short = "KS", full = "Kirkland Signature", classify = false },
+    # Vowel-dropped product types. These carry the category signal.
+    { short = "LIQ", full = "Liquid" },
+    { short = "LNDRY", full = "Laundry" },
+    { short = "CHOCO", full = "Chocolate" },
+    { short = "ORG", full = "Organic" },
+    # Flavour word: display-only (see above).
+    { short = "ORNGE", full = "Orange", classify = false },
+    # "TIDE CQLDWTR" is cold-water laundry detergent. Display-only, because
+    # expanding it into the classifier makes `WATER` match and files detergent
+    # as a beverage.
+    { short = "CQLDWTR", full = "Cold Water", classify = false },
+]

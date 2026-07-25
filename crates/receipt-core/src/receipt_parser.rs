@@ -10,6 +10,10 @@ use crate::receipt_text;
 pub struct ParserRuleLayers {
     pub category_rules: receipt_categories::CategoryRuleLayers,
     pub account_mapping: Vec<(String, String)>,
+    /// Per-merchant abbreviation tables, applied before classification so that
+    /// a chain's fixed-width shorthand (`KS LIQ LNDRY`) can reach keywords that
+    /// are spelled out in full. See [`crate::merchant_vocab`].
+    pub merchant_vocab: Vec<crate::merchant_vocab::MerchantVocab>,
 }
 
 #[derive(Clone, Debug)]
@@ -142,6 +146,77 @@ fn item_tags(description: &str, rule_layers: &ParserRuleLayers) -> Vec<String> {
     receipt_categories::classify_item_tags(description, &rule_layers.category_rules)
 }
 
+/// Assemble one parsed item, applying the merchant's abbreviation vocabulary.
+///
+/// `category_source` is the string the extractor decided should drive
+/// classification — the same line as `description` on the spatial path, but a
+/// separate (often longer) source on the text path. Both get expanded, so the
+/// recovered name and the category always agree about what the item is.
+///
+/// When `vocab` is `None` — no merchant table, or a merchant that never
+/// resolved — every expansion is a no-op and this is exactly the old behavior.
+fn build_item(
+    description: String,
+    price: String,
+    quantity: i32,
+    category_source: &str,
+    rule_layers: &ParserRuleLayers,
+    vocab: Option<&crate::merchant_vocab::MerchantVocab>,
+) -> ParsedReceiptItem {
+    // Expansion is a **fallback, never an override**. Classify the printed text
+    // first and keep that answer whenever it produces one; only reach for the
+    // expanded reading when the shorthand classified to nothing.
+    //
+    // This is load-bearing in two directions, both found by corpus measurement:
+    //
+    //  - Expansions can collide with another category. `CQLDWTR -> Cold Water`
+    //    turns Tide detergent into "TIDE Cold Water", and `WATER` is a Drink
+    //    keyword — so an override would have filed laundry soap as a beverage.
+    //  - Several existing rules are keyed to the *abbreviated* text
+    //    (`KS BAGS 60`, `TIDE CQLDWTR`, `KS ORG 2%`). Rewriting the string out
+    //    from under them makes those rules stop matching.
+    //
+    // Fallback ordering sidesteps both: a line the rules already understand is
+    // untouched, and expansion can only ever fill a gap.
+    let printed_category = categorize_description(category_source, rule_layers);
+    let (category, tags) = if printed_category.is_some() {
+        (
+            printed_category,
+            item_tags(category_source, rule_layers),
+        )
+    } else {
+        match vocab
+            .and_then(|vocab| crate::merchant_vocab::expand_for_classification(category_source, vocab))
+        {
+            Some(expanded) => (
+                categorize_description(&expanded, rule_layers),
+                item_tags(&expanded, rule_layers),
+            ),
+            None => (None, item_tags(category_source, rule_layers)),
+        }
+    };
+
+    // The printed text stays the leading part of the description: it is what the
+    // receipt actually says, so it must survive for ledger review and for
+    // matching against a bank line. The recovered reading is appended, not
+    // substituted.
+    let description = match vocab
+        .and_then(|v| crate::merchant_vocab::expand(&description, v))
+        .and_then(|recovered| crate::merchant_vocab::recovered_tail(&description, &recovered))
+    {
+        Some(tail) => format!("{description} ({tail})"),
+        None => description,
+    };
+
+    ParsedReceiptItem {
+        description,
+        price,
+        quantity,
+        category,
+        tags,
+    }
+}
+
 pub fn parse_receipt(
     full_text: &str,
     pages_for_helper: &[receipt_parse_helpers::MerchantPageInput],
@@ -167,6 +242,14 @@ pub fn parse_receipt(
         merchant_families,
     );
     let merchant = merchant_match.display().to_string();
+    // Scoped to the *canonical* family, not the raw OCR header: an unresolved
+    // merchant gets no expansions, so the feature fails closed.
+    let vocab = merchant_match
+        .canonical
+        .as_deref()
+        .and_then(|canonical| {
+            crate::merchant_vocab::for_merchant(canonical, &rule_layers.merchant_vocab)
+        });
     let parsed_date = receipt_fields::extract_date(&lines, full_text, current_year);
     let date = parsed_date.map(|value| (value.year, value.month, value.day));
     let date_is_placeholder = date.is_none();
@@ -195,12 +278,15 @@ pub fn parse_receipt(
             (
                 items
                     .into_iter()
-                    .map(|item| ParsedReceiptItem {
-                        description: item.description.clone(),
-                        price: cents_to_fixed(item.price_cents),
-                        quantity: item.quantity,
-                        category: categorize_description(&item.category_source, rule_layers),
-                        tags: item_tags(&item.category_source, rule_layers),
+                    .map(|item| {
+                        build_item(
+                            item.description.clone(),
+                            cents_to_fixed(item.price_cents),
+                            item.quantity,
+                            &item.category_source,
+                            rule_layers,
+                            vocab,
+                        )
                     })
                     .collect(),
                 warnings
@@ -216,12 +302,15 @@ pub fn parse_receipt(
                 spatial_outcome
                     .items
                     .into_iter()
-                    .map(|item| ParsedReceiptItem {
-                        description: item.description.clone(),
-                        price: scaled_to_fixed(item.price_scaled, 10_000),
-                        quantity: 1,
-                        category: categorize_description(&item.description, rule_layers),
-                        tags: item_tags(&item.description, rule_layers),
+                    .map(|item| {
+                        build_item(
+                            item.description.clone(),
+                            scaled_to_fixed(item.price_scaled, 10_000),
+                            1,
+                            &item.description,
+                            rule_layers,
+                            vocab,
+                        )
                     })
                     .collect(),
                 spatial_outcome
@@ -239,12 +328,15 @@ pub fn parse_receipt(
         (
             items
                 .into_iter()
-                .map(|item| ParsedReceiptItem {
-                    description: item.description.clone(),
-                    price: cents_to_fixed(item.price_cents),
-                    quantity: item.quantity,
-                    category: categorize_description(&item.category_source, rule_layers),
-                    tags: item_tags(&item.category_source, rule_layers),
+                .map(|item| {
+                    build_item(
+                        item.description.clone(),
+                        cents_to_fixed(item.price_cents),
+                        item.quantity,
+                        &item.category_source,
+                        rule_layers,
+                        vocab,
+                    )
                 })
                 .collect(),
             warnings
