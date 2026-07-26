@@ -180,14 +180,11 @@ fn build_item(
     // untouched, and expansion can only ever fill a gap.
     let printed_category = categorize_description(category_source, rule_layers);
     let (category, tags) = if printed_category.is_some() {
-        (
-            printed_category,
-            item_tags(category_source, rule_layers),
-        )
+        (printed_category, item_tags(category_source, rule_layers))
     } else {
-        match vocab
-            .and_then(|vocab| crate::merchant_vocab::expand_for_classification(category_source, vocab))
-        {
+        match vocab.and_then(|vocab| {
+            crate::merchant_vocab::expand_for_classification(category_source, vocab)
+        }) {
             Some(expanded) => (
                 categorize_description(&expanded, rule_layers),
                 item_tags(&expanded, rule_layers),
@@ -244,12 +241,9 @@ pub fn parse_receipt(
     let merchant = merchant_match.display().to_string();
     // Scoped to the *canonical* family, not the raw OCR header: an unresolved
     // merchant gets no expansions, so the feature fails closed.
-    let vocab = merchant_match
-        .canonical
-        .as_deref()
-        .and_then(|canonical| {
-            crate::merchant_vocab::for_merchant(canonical, &rule_layers.merchant_vocab)
-        });
+    let vocab = merchant_match.canonical.as_deref().and_then(|canonical| {
+        crate::merchant_vocab::for_merchant(canonical, &rule_layers.merchant_vocab)
+    });
     let parsed_date = receipt_fields::extract_date(&lines, full_text, current_year);
     let date = parsed_date.map(|value| (value.year, value.month, value.day));
     let date_is_placeholder = date.is_none();
