@@ -105,6 +105,15 @@ Project-local overrides belong in the consumer app (or private test `private_rul
 Public redacted receipts: [`crates/receipt-core/tests/receipts_e2e/`](crates/receipt-core/tests/receipts_e2e/).  
 How to add cases without leaking PII: [docs/contributing-fixtures.md](docs/contributing-fixtures.md).
 
+## Releasing
+
+Consumers (`beanbeaver/`, `beanbeaver-ios/`, `beanbeaver-android/`) pin this repo by **git tag**, so the tag is the version identifier — and `[workspace.package] version` in the root `Cargo.toml` must agree with it. Every crate here inherits that one value via `version.workspace = true`.
+
+1. In the PR that will be released, bump `[workspace.package] version` and run `cargo update --workspace` to refresh `Cargo.lock`.
+2. After merge, tag the merge commit `vX.Y.Z` with the **same** version and push the tag.
+3. `.github/workflows/release-tag.yml` runs on that push and fails if any workspace crate's version differs from the tag (it also rejects a `v*` tag that isn't `vMAJOR.MINOR.PATCH`). Fix by bumping `Cargo.toml` and re-cutting the tag.
+4. Update the pinned tag in each consumer. For `beanbeaver-ios/`, rerun `./build-xcframework.sh` after the bump or it compiles against stale generated Swift bindings.
+
 ## License
 
 [MIT](LICENSE). Copyright © Zhenbo Li and contributors.

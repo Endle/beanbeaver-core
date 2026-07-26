@@ -1,0 +1,67 @@
+name: Release tag
+
+# Consumers (beanbeaver/, beanbeaver-ios/, beanbeaver-android/) pin core by git
+# tag, so the tag is the real version identifier -- but `cargo metadata` on a
+# checked-out tag reports whatever `[workspace.package] version` says. When the
+# two drift, a consumer building `v0.6.4` sees a crate claiming `0.1.0`. This
+# job makes the tag push fail loudly instead.
+#
+# Deliberately separate from ci.yml: that workflow builds ONNX and downloads
+# models (~30 min); this is a metadata-only check that should answer in seconds.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version-matches-tag:
+    name: Cargo.toml version == tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out core (public)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # ubuntu-latest ships a toolchain already, but pin it the way ci.yml does
+      # so an image change can't turn this into a "cargo: not found" red build.
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Compare every workspace crate's version against the tag
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag '$tag' is not a vMAJOR.MINOR.PATCH release tag"
+            exit 1
+          fi
+          want="${tag#v}"
+
+          # `--no-deps` skips dependency resolution, so this needs no registry
+          # access and no compilation. Checking every member (rather than just
+          # the workspace default) also catches a crate that quietly stopped
+          # inheriting `version.workspace = true`.
+          bad=0
+          while read -r name version; do
+            if [[ "$version" == "$want" ]]; then
+              echo "ok    $name $version"
+            else
+              echo "::error file=Cargo.toml::$name is version $version, but the tag is $tag (expected $want)"
+              bad=1
+            fi
+          done < <(cargo metadata --no-deps --offline --format-version 1 \
+                     | jq -r '.packages[] | "\(.name) \(.version)"')
+
+          if [[ "$bad" -ne 0 ]]; then
+            echo "::error::Cargo.toml does not match tag $tag -- bump [workspace.package] version to $want, then re-cut the tag"
+            exit 1
+          fi
+          echo "All workspace crates are at $want, matching $tag"
