@@ -38,7 +38,7 @@ mod tests {
             layers
                 .account_mapping
                 .iter()
-                .find(|(k, _)| k == "grocery_dairy")
+                .find(|(k, _)| k == "grocery/dairy")
                 .map(|(_, v)| v.as_str()),
             Some("Expenses:Food:Grocery:Dairy")
         );

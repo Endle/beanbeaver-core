@@ -1,0 +1,253 @@
+# Item tag vocabulary, and the default tag -> beancount account mapping.
+#
+# These are two DIFFERENT things and are deliberately kept apart:
+#
+#   [[tags]]    what an item *is*. Parser output. Core's job. No ledger knowledge.
+#   [accounts]  where a tag lands in *your* ledger. Policy. Meant to be overridden.
+#
+# A tag is a PATH, not a bare name. `grocery/dairy` implies its ancestors, so a
+# rule declaring it yields the tags ["grocery", "dairy"] — least specific first,
+# which is the order consumers render (most specific = the deepest = last).
+#
+# Because a tag is a path, the same leaf word can appear under two parents
+# (`household/supply` and `pet/supply`) with no ambiguity.
+#
+# `display` is authored, never derived. Deriving it by capitalizing the path
+# segment is what rendered `energy_drink` as "Energy_drink" in the app.
+
+# ---------------------------------------------------------------- vocabulary
+
+[[tags]]
+path = "grocery"
+display = "Grocery"
+
+[[tags]]
+path = "grocery/bakery"
+display = "Bakery"
+
+[[tags]]
+path = "grocery/dairy"
+display = "Dairy"
+
+# Was the tag-only rule `semantic_tag_0101`. It sits under dairy rather than
+# standing alone; measured, this changes nothing, because every description
+# reaching it already matches the dairy rule and so already carries both
+# ancestors through the tag union.
+[[tags]]
+path = "grocery/dairy/milk"
+display = "Milk"
+
+[[tags]]
+path = "grocery/drink"
+display = "Drink"
+
+[[tags]]
+path = "grocery/drink/cocacola"
+display = "Coca-Cola"
+
+[[tags]]
+path = "grocery/drink/coffee"
+display = "Coffee"
+
+# Was `semantic_tag_0103` (MONSTER / MNSTR).
+[[tags]]
+path = "grocery/drink/energy_drink"
+display = "Energy Drink"
+
+[[tags]]
+path = "grocery/drink/juice"
+display = "Juice"
+
+# Was `semantic_tag_0104`. Its only keyword is "SOY BEVERAGE", so it belongs
+# under drink; a future soy-sauce rule wants a seasoning path instead.
+[[tags]]
+path = "grocery/drink/soy"
+display = "Soy"
+
+[[tags]]
+path = "grocery/frozen"
+display = "Frozen"
+
+[[tags]]
+path = "grocery/frozen/dumpling"
+display = "Dumpling"
+
+[[tags]]
+path = "grocery/frozen/icecream"
+display = "Ice Cream"
+
+[[tags]]
+path = "grocery/fruit"
+display = "Fruit"
+
+[[tags]]
+path = "grocery/meat"
+display = "Meat"
+
+# Was `semantic_tag_0100` (CHICKEN / ROTISSERIE CHICKEN).
+[[tags]]
+path = "grocery/meat/chicken"
+display = "Chicken"
+
+# One concept, so one path segment. The old key `grocery_prepared_meal` split on
+# "_" into ["grocery","prepared","meal"], inventing a "prepared" level that means
+# nothing on its own.
+[[tags]]
+path = "grocery/prepared_meal"
+display = "Prepared Meal"
+
+[[tags]]
+path = "grocery/seafood"
+display = "Seafood"
+
+[[tags]]
+path = "grocery/seafood/fish"
+display = "Fish"
+
+[[tags]]
+path = "grocery/seafood/shrimp"
+display = "Shrimp"
+
+[[tags]]
+path = "grocery/seasoning"
+display = "Seasoning"
+
+[[tags]]
+path = "grocery/snacks"
+display = "Snacks"
+
+[[tags]]
+path = "grocery/snacks/mint"
+display = "Mint"
+
+[[tags]]
+path = "grocery/staple"
+display = "Staple"
+
+[[tags]]
+path = "grocery/vegetable"
+display = "Vegetable"
+
+[[tags]]
+path = "grocery/vegetable/canned"
+display = "Canned"
+
+# `alcohol` is the property (an LCBO gift card is alcohol-adjacent but is not a
+# drink); `alcohol/beverage` is the item class that carries an account. Keeping
+# them as parent and child is what lets LCBO CARD stay account-less while
+# alcoholic drinks still file correctly.
+[[tags]]
+path = "alcohol"
+display = "Alcohol"
+
+[[tags]]
+path = "alcohol/beverage"
+display = "Beverage"
+
+# Was `semantic_tag_0102`, alongside `alcohol`. A root of its own: a gift card is
+# a gift card whatever the vendor, and it deliberately has no account, so
+# LCBO CARD keeps falling through to Expenses:FIXME as it does today.
+[[tags]]
+path = "gift_card"
+display = "Gift Card"
+
+[[tags]]
+path = "household"
+display = "Household"
+
+[[tags]]
+path = "household/supply"
+display = "Supply"
+
+# The old key `personal_care_tooth` split into ["personal","care","tooth"];
+# "personal" alone is not a thing an item can be.
+[[tags]]
+path = "personal_care"
+display = "Personal Care"
+
+[[tags]]
+path = "personal_care/tooth"
+display = "Dental"
+
+[[tags]]
+path = "pet"
+display = "Pet"
+
+[[tags]]
+path = "pet/supply"
+display = "Supply"
+
+[[tags]]
+path = "health"
+display = "Health"
+
+[[tags]]
+path = "health/pharmacy"
+display = "Pharmacy"
+
+[[tags]]
+path = "shopping"
+display = "Shopping"
+
+[[tags]]
+path = "shopping/clothing"
+display = "Clothing"
+
+[[tags]]
+path = "restaurant"
+display = "Restaurant"
+
+[[tags]]
+path = "restaurant/gift_card"
+display = "Gift Card"
+
+# ------------------------------------------------------------------ accounts
+#
+# Tag path -> beancount account. Overridable: an override document supplying its
+# own [accounts] table replaces matching keys and leaves the rest alone.
+#
+# Resolution is EXACT — a rule claims only the account listed for the precise
+# path it declares, with no walk-up to ancestors. That is what keeps the former
+# tag-only rules account-less: `grocery/dairy/milk` has no entry here, so the
+# milk rule adds a tag and claims nothing, exactly as it behaves today.
+#
+# Paths intentionally absent: grocery/dairy/milk, grocery/meat/chicken,
+# grocery/drink/energy_drink, grocery/drink/soy, alcohol, gift_card, and every
+# bare parent (grocery, household, health, shopping, restaurant, personal_care
+# has one because the old `personal_care` key did).
+
+[accounts]
+"grocery/dairy" = "Expenses:Food:Grocery:Dairy"
+"grocery/meat" = "Expenses:Food:Grocery:Meat"
+"grocery/seafood" = "Expenses:Food:Grocery:Seafood"
+"grocery/seafood/fish" = "Expenses:Food:Grocery:Seafood:Fish"
+"grocery/seafood/shrimp" = "Expenses:Food:Grocery:Seafood:Shrimp"
+"grocery/fruit" = "Expenses:Food:Grocery:Fruit"
+"grocery/vegetable" = "Expenses:Food:Grocery:Vegetable"
+"grocery/vegetable/canned" = "Expenses:Food:Grocery:Vegetable:Canned"
+"grocery/frozen" = "Expenses:Food:Grocery:Frozen"
+"grocery/frozen/dumpling" = "Expenses:Food:Grocery:Frozen:Dumpling"
+"grocery/frozen/icecream" = "Expenses:Food:Grocery:Frozen:IceCream"
+"grocery/prepared_meal" = "Expenses:Food:Grocery:PreparedMeal"
+"grocery/bakery" = "Expenses:Food:Grocery:Bakery"
+"grocery/staple" = "Expenses:Food:Grocery:Staple"
+"grocery/seasoning" = "Expenses:Food:Grocery:Seasoning"
+"grocery/snacks" = "Expenses:Food:Grocery:Snacks"
+"grocery/snacks/mint" = "Expenses:Food:Grocery:Snacks:Mint"
+"grocery/drink" = "Expenses:Food:Grocery:Drink"
+"grocery/drink/cocacola" = "Expenses:Food:Grocery:Drink:CocaCola"
+"grocery/drink/juice" = "Expenses:Food:Grocery:Drink:Juice"
+"grocery/drink/coffee" = "Expenses:Food:Grocery:Drink:Coffee"
+"alcohol/beverage" = "Expenses:Food:AlcoholicBeverage"
+"household/supply" = "Expenses:Home:HouseholdSupply"
+"personal_care" = "Expenses:PersonalCare"
+"personal_care/tooth" = "Expenses:PersonalCare:Tooth"
+"pet" = "Expenses:Pet"
+"pet/supply" = "Expenses:Pet:Supply"
+"health/pharmacy" = "Expenses:Health:Pharmacy"
+"shopping/clothing" = "Expenses:Shopping:Clothing"
+# No rule references this one today. Kept rather than dropped: now that
+# [accounts] is a user-facing table, an unused default is a starting point, not
+# dead code — and LCBO CARD declares plain `gift_card`, not this path, so keeping
+# it does not give that item an account.
+"restaurant/gift_card" = "Expenses:Food:Restaurant:GiftCard"

@@ -18,7 +18,7 @@ use super::corpus;
 use crate::merchant_match::MerchantFamily;
 use crate::receipt_categories::{
     classify_item_key, classify_item_tags, list_item_categories, resolve_account_target,
-    sorted_matches_for_debug,
+    sorted_matches_for_debug, TagNode,
 };
 use crate::receipt_parser::ParserRuleLayers;
 
@@ -174,21 +174,23 @@ impl RuleBook {
             .collect()
     }
 
-    /// The tag vocabulary, derived by unioning every rule's tags and sorting.
+    /// The declared tag vocabulary, in file order.
     ///
-    /// Derived, because the rule format has no vocabulary declaration: a tag
-    /// exists only because some rule mentions it, so a typo silently invents one.
-    pub fn tags(&self) -> Vec<String> {
-        let mut tags: Vec<String> = self
-            .layers
-            .category_rules
-            .rules
+    /// Previously this had to be *derived* by unioning whatever tags the rules
+    /// happened to mention, which meant a typo silently invented a tag. It is now
+    /// declared data, and a rule naming an undeclared path is rejected at load.
+    pub fn tag_vocabulary(&self) -> &[TagNode] {
+        &self.layers.category_rules.tag_vocabulary
+    }
+
+    /// The authored display name for a tag path, falling back to the leaf
+    /// segment for a path the vocabulary does not declare.
+    pub fn tag_display(&self, path: &str) -> String {
+        self.tag_vocabulary()
             .iter()
-            .flat_map(|rule| rule.tags.iter().cloned())
-            .collect();
-        tags.sort();
-        tags.dedup();
-        tags
+            .find(|node| node.path == path)
+            .map(|node| node.display.clone())
+            .unwrap_or_else(|| TagNode::segments(path).pop().unwrap_or_default())
     }
 
     /// Why `description` classifies the way it does: the resolved account and
@@ -255,8 +257,17 @@ mod tests {
         assert!(book
             .categories()
             .iter()
-            .any(|c| c.key == "grocery_dairy" && c.account == "Expenses:Food:Grocery:Dairy"));
-        assert!(book.tags().iter().any(|t| t == "dairy"));
+            .any(|c| c.key == "grocery/dairy" && c.account == "Expenses:Food:Grocery:Dairy"));
+        assert!(book
+            .tag_vocabulary()
+            .iter()
+            .any(|t| t.path == "grocery/dairy" && t.display == "Dairy"));
+        // The display name is authored, not derived: capitalizing the segment is
+        // what put an underscore on screen for this one.
+        assert_eq!(
+            book.tag_display("grocery/drink/energy_drink"),
+            "Energy Drink"
+        );
         assert!(book.known_merchants().iter().any(|m| m == "COSTCO"));
         assert!(book
             .merchant_families()
@@ -319,8 +330,7 @@ mod tests {
 [[rules]]
 id = "user_0001"
 keywords = ["ZZZ TEST WIDGET"]
-category = "grocery_dairy"
-tags = ["grocery", "dairy"]
+tags = ["grocery/dairy"]
 priority = 5
 "#])
         .expect("override parses");

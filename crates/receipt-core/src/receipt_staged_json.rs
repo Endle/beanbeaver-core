@@ -182,6 +182,21 @@ pub struct ResolvedReceiptData {
     pub tenders: Vec<ResolvedTender>,
 }
 
+fn make_warning(message: &str, source: &str, stage: &str) -> StructuredWarning {
+    StructuredWarning {
+        message: message.to_string(),
+        source: source.to_string(),
+        stage: stage.to_string(),
+    }
+}
+
+/// Compatibility shims for **stored** staged JSON.
+///
+/// Unlike the copies removed from `receipt_categories` / `receipt_parser` — which
+/// normalized rule targets that no longer exist — this one reads records written
+/// to disk by earlier desktop versions, so it cannot be migrated away by editing
+/// the rule corpus. Two eras are tolerated: misspelled full accounts, and the
+/// pre-vocabulary snake_case category keys that predate tag paths.
 fn legacy_account_alias(target: &str) -> Option<&'static str> {
     match target {
         "Expenses:Food:Vegetable" => Some("Expenses:Food:Grocery:Vegetable"),
@@ -193,16 +208,33 @@ fn legacy_account_alias(target: &str) -> Option<&'static str> {
     }
 }
 
-fn normalize_legacy_account_target(target: &str) -> String {
-    legacy_account_alias(target).unwrap_or(target).to_string()
+/// Pre-vocabulary category key -> tag path. Spelled out rather than derived,
+/// because five of them are not a plain `_` -> `/` substitution.
+fn legacy_category_key_to_path(key: &str) -> Option<&'static str> {
+    match key {
+        "alcoholic_beverage" => Some("alcohol/beverage"),
+        "home_household_supply" => Some("household/supply"),
+        "personal_care" => Some("personal_care"),
+        "personal_care_tooth" => Some("personal_care/tooth"),
+        "grocery_prepared_meal" => Some("grocery/prepared_meal"),
+        "restaurant_gift_card" => Some("restaurant/gift_card"),
+        _ => None,
+    }
 }
 
-fn make_warning(message: &str, source: &str, stage: &str) -> StructuredWarning {
-    StructuredWarning {
-        message: message.to_string(),
-        source: source.to_string(),
-        stage: stage.to_string(),
+/// Resolve a stored category value to the tag path the current mapping uses.
+fn normalize_legacy_category(target: &str) -> String {
+    if let Some(path) = legacy_category_key_to_path(target) {
+        return path.to_string();
     }
+    if !target.contains('/') && target.contains('_') {
+        return target.replace('_', "/");
+    }
+    target.to_string()
+}
+
+fn normalize_legacy_account_target(target: &str) -> String {
+    legacy_account_alias(target).unwrap_or(target).to_string()
 }
 
 fn semantic_category_from_legacy_target(
@@ -240,8 +272,9 @@ fn resolve_account_target(
             if cleaned.starts_with("Expenses:") {
                 return Some(normalize_legacy_account_target(cleaned));
             }
+            let cleaned = normalize_legacy_category(cleaned);
             for (key, mapped) in &rule_layers.account_mapping {
-                if key == cleaned {
+                if *key == cleaned {
                     return Some(normalize_legacy_account_target(mapped));
                 }
             }
@@ -380,14 +413,27 @@ pub fn account_from_classification(
         }
     }
 
+    // Best-effort fallback for stored records that carry tags but no resolvable
+    // category. Match on the path's **leaf** segment, and pick the
+    // lexicographically smallest candidate.
+    //
+    // Both details matter. Matching any segment meant a broad tag like `grocery`
+    // hit ~20 paths; returning the first of those, while iterating a `Vec` built
+    // from a `HashMap`, made the account genuinely arbitrary between runs.
+    // Leaf-matching narrows `dairy` to `grocery/dairy` and lets `grocery` match
+    // only the bare `grocery` path, which carries no account — so it correctly
+    // resolves to nothing rather than to a coin-flip among its children.
     for tag in &classification.tags {
         if tag.is_empty() {
             continue;
         }
-        for (key, mapped) in &rule_layers.account_mapping {
-            if key.split('_').any(|part| part == tag) {
-                return Some(normalize_legacy_account_target(mapped));
-            }
+        let best = rule_layers
+            .account_mapping
+            .iter()
+            .filter(|(path, _)| path.rsplit('/').next() == Some(tag.as_str()))
+            .min_by(|(left, _), (right, _)| left.cmp(right));
+        if let Some((_, mapped)) = best {
+            return Some(normalize_legacy_account_target(mapped));
         }
     }
 
@@ -806,6 +852,51 @@ mod tests {
         assert_eq!(
             by_alias.as_deref(),
             Some("Expenses:Food:Grocery:Frozen:IceCream")
+        );
+
+        // every legacy misspelling the stored-data shim tolerates (these cases
+        // moved here from receipt_categories when rule-target normalization went
+        // away — the shim now only serves records already written to disk)
+        for (stored, expected) in [
+            (
+                "Expenses:Food:Grocery:Icecream",
+                "Expenses:Food:Grocery:Frozen:IceCream",
+            ),
+            (
+                "Expenses:Food:Grocery:IceCream",
+                "Expenses:Food:Grocery:Frozen:IceCream",
+            ),
+            (
+                "Expenses:Food:Grocery:Dumplings",
+                "Expenses:Food:Grocery:Frozen:Dumpling",
+            ),
+            (
+                "Expenses:Food:Grocery:Dumolings",
+                "Expenses:Food:Grocery:Frozen:Dumpling",
+            ),
+            ("Expenses:Food:Vegetable", "Expenses:Food:Grocery:Vegetable"),
+        ] {
+            let got = account_from_classification(
+                Some(&ClassificationData {
+                    category: Some(stored.to_string()),
+                    tags: vec![],
+                }),
+                &layers,
+            );
+            assert_eq!(got.as_deref(), Some(expected), "legacy alias {stored}");
+        }
+
+        // a pre-vocabulary snake_case key that is NOT a plain _ -> / swap
+        let by_legacy_key = account_from_classification(
+            Some(&ClassificationData {
+                category: Some("personal_care_tooth".to_string()),
+                tags: vec![],
+            }),
+            &layers,
+        );
+        assert_eq!(
+            by_legacy_key.as_deref(),
+            Some("Expenses:PersonalCare:Tooth")
         );
 
         // no category, but a tag that is a unique key-part ("dairy" only in grocery_dairy)

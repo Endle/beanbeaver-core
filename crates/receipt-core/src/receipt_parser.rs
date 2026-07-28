@@ -93,21 +93,6 @@ fn scaled_to_fixed(value: i64, scale: i64) -> String {
     format!("{sign}{whole}.{:04}", frac)
 }
 
-fn legacy_account_alias(target: &str) -> Option<&'static str> {
-    match target {
-        "Expenses:Food:Vegetable" => Some("Expenses:Food:Grocery:Vegetable"),
-        "Expenses:Food:Grocery:Dumolings" => Some("Expenses:Food:Grocery:Frozen:Dumpling"),
-        "Expenses:Food:Grocery:Dumplings" => Some("Expenses:Food:Grocery:Frozen:Dumpling"),
-        "Expenses:Food:Grocery:Icecream" => Some("Expenses:Food:Grocery:Frozen:IceCream"),
-        "Expenses:Food:Grocery:IceCream" => Some("Expenses:Food:Grocery:Frozen:IceCream"),
-        _ => None,
-    }
-}
-
-fn normalize_legacy_account_target(target: &str) -> String {
-    legacy_account_alias(target).unwrap_or(target).to_string()
-}
-
 fn resolve_account_target(
     target: Option<&str>,
     rule_layers: &ParserRuleLayers,
@@ -121,11 +106,11 @@ fn resolve_account_target(
                 return default.map(str::to_string);
             }
             if cleaned.starts_with("Expenses:") {
-                return Some(normalize_legacy_account_target(cleaned));
+                return Some(cleaned.to_string());
             }
             for (key, mapped) in &rule_layers.account_mapping {
                 if key == cleaned {
-                    return Some(normalize_legacy_account_target(mapped));
+                    return Some(mapped.clone());
                 }
             }
             default.map(str::to_string)
@@ -393,9 +378,10 @@ mod tests {
         // A rotisserie chicken matches several rules — the meat rule
         // (grocery, meat), the semantic chicken tag, and the prepared-meal rule
         // — and their tags accumulate (deduped, first-seen order) onto one item.
+        // "prepared_meal" is one tag now: the old category key split it in two.
         assert_eq!(
             item_tags("ROTISSERIE CHICKEN", &layers),
-            vec!["grocery", "meat", "chicken", "prepared", "meal"]
+            vec!["grocery", "meat", "chicken", "prepared_meal"]
         );
         // Milk carries the dairy rule's tags plus its own semantic "milk" tag.
         assert_eq!(item_tags("MILK", &layers), vec!["grocery", "dairy", "milk"]);
