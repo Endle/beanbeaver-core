@@ -7,6 +7,8 @@
 //! (`ocr_helpers.transform_paddleocr_result` + `ocr_result_parser.parse_receipt`
 //! + `formatter.format_parsed_receipt`).
 
+use std::borrow::Cow;
+
 use crate::merchant_match::{MerchantFamily, MerchantMatch, MerchantMatchStatus};
 use crate::ocr_transform::{transform, RawDetection};
 use crate::receipt_categories::resolve_account_target;
@@ -17,10 +19,7 @@ use crate::receipt_formatter::{
 use crate::receipt_parser::{
     parse_receipt, ParsedReceiptData, ParsedReceiptItem, ParserRuleLayers,
 };
-use crate::rules::{
-    default_known_merchants, default_merchant_families, default_parser_rule_layers,
-    parser_rule_layers_with_overrides,
-};
+use crate::rules::RuleBook;
 
 const DEFAULT_ITEM_ACCOUNT: &str = "Expenses:FIXME";
 
@@ -224,16 +223,19 @@ pub fn field_confidence(parsed: &ParsedReceiptData) -> FieldConfidence {
     }
 }
 
-fn resolve_rule_layers(options: &ProcessOptions) -> Result<ParserRuleLayers, String> {
+/// The rule corpus for one parse. With no overrides this hands back the
+/// process-wide cached book instead of re-parsing four TOML documents per
+/// receipt, which is what the old free-function path did.
+fn resolve_rule_book(options: &ProcessOptions) -> Result<Cow<'static, RuleBook>, String> {
     if options.item_classifier_override_tomls.is_empty() {
-        Ok(default_parser_rule_layers())
+        Ok(Cow::Borrowed(RuleBook::bundled()))
     } else {
         let refs: Vec<&str> = options
             .item_classifier_override_tomls
             .iter()
             .map(String::as_str)
             .collect();
-        parser_rule_layers_with_overrides(&refs)
+        RuleBook::with_overrides(&refs).map(Cow::Owned)
     }
 }
 
@@ -435,15 +437,16 @@ pub fn process_receipt_with_options(
     image_sha256: Option<&str>,
     options: &ProcessOptions,
 ) -> Result<ProcessedReceipt, String> {
-    let rule_layers = resolve_rule_layers(options)?;
+    let rule_book = resolve_rule_book(options)?;
+    let rule_layers = rule_book.layers();
     let merchants = options
         .known_merchants
         .clone()
-        .unwrap_or_else(default_known_merchants);
+        .unwrap_or_else(|| rule_book.known_merchants().to_vec());
     let merchant_families = options
         .merchant_families
         .clone()
-        .unwrap_or_else(default_merchant_families);
+        .unwrap_or_else(|| rule_book.merchant_families().to_vec());
 
     // Keep a copy of the raw detections for debugging/E2E diffing before
     // `transform` consumes them.
@@ -454,7 +457,7 @@ pub fn process_receipt_with_options(
         &ocr.full_text,
         &ocr.helper_pages,
         &ocr.spatial_pages,
-        &rule_layers,
+        rule_layers,
         image_filename,
         &merchants,
         &merchant_families,
@@ -464,7 +467,7 @@ pub fn process_receipt_with_options(
     let confidence = field_confidence(&parsed);
     let (beancount, beanbeaver_id, document_relpath) = format_from_parsed(
         &parsed,
-        &rule_layers,
+        rule_layers,
         today,
         credit_card_account,
         currency,
@@ -501,7 +504,8 @@ pub fn reformat_parsed_receipt(
 ) -> Result<ProcessedReceipt, String> {
     let default_opts = ProcessOptions::default();
     let options = options.unwrap_or(&default_opts);
-    let rule_layers = resolve_rule_layers(options)?;
+    let rule_book = resolve_rule_book(options)?;
+    let rule_layers = rule_book.layers();
 
     // Apply corrections first so confidence reflects the edited view.
     let mut parsed_out = parsed.clone();
@@ -527,7 +531,7 @@ pub fn reformat_parsed_receipt(
     let confidence = field_confidence(&parsed_out);
     let (beancount, beanbeaver_id, document_relpath) = format_from_parsed(
         &parsed_out,
-        &rule_layers,
+        rule_layers,
         today,
         credit_card_account,
         currency,

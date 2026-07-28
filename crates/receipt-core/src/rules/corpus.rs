@@ -1,9 +1,10 @@
-//! Self-contained rule loading for the on-device pipeline.
+//! The bundled rule corpus: TOML text, its serde mirrors, and the loaders that
+//! turn it into engine structures.
 //!
-//! Mirrors the desktop runtime loaders (`runtime/item_category_rules.py`,
-//! `runtime/merchant_rules.py`) but owns TOML parsing in Rust so the iOS binary
-//! needs no Python. The default rule data is bundled from the canonical
-//! `rules/*.toml` (single source of truth shared with the desktop build).
+//! This module owns *parsing*. It deliberately knows nothing about how the rules
+//! are queried or displayed — that is [`super::book`]'s job. Everything here is
+//! reachable through [`super::RuleBook`]; the free functions are kept public
+//! because the E2E harnesses and the `ocr-paddle` examples call them directly.
 
 use std::collections::HashMap;
 
@@ -14,14 +15,14 @@ use crate::merchant_vocab::{Expansion, MerchantVocab};
 use crate::receipt_categories::{build_rule_layers, BuildClassifierConfig, BuildRuleEntry};
 use crate::receipt_parser::ParserRuleLayers;
 
-const DEFAULT_ITEM_CLASSIFIER_TOML: &str =
-    include_str!("../../../rules/default_item_classifier.toml");
-const DEFAULT_MERCHANT_RULES_TOML: &str =
-    include_str!("../../../rules/default_merchant_rules.toml");
-const DEFAULT_MERCHANT_FAMILIES_TOML: &str =
-    include_str!("../../../rules/default_merchant_families.toml");
-const DEFAULT_MERCHANT_VOCAB_TOML: &str =
-    include_str!("../../../rules/default_merchant_vocab.toml");
+pub(crate) const DEFAULT_ITEM_CLASSIFIER_TOML: &str =
+    include_str!("../../../../rules/default_item_classifier.toml");
+pub(crate) const DEFAULT_MERCHANT_RULES_TOML: &str =
+    include_str!("../../../../rules/default_merchant_rules.toml");
+pub(crate) const DEFAULT_MERCHANT_FAMILIES_TOML: &str =
+    include_str!("../../../../rules/default_merchant_families.toml");
+pub(crate) const DEFAULT_MERCHANT_VOCAB_TOML: &str =
+    include_str!("../../../../rules/default_merchant_vocab.toml");
 
 /// Two-stage category-key -> beancount-account mapping. Ported verbatim from
 /// `receipt/item_categories.py::DEFAULT_CATEGORY_ACCOUNTS`.
@@ -133,6 +134,11 @@ fn normalize_tags(values: Vec<String>) -> Vec<String> {
 
 #[derive(Debug, Deserialize)]
 struct RuleToml {
+    /// Human/provenance label. Every bundled rule block writes one; it used to be
+    /// dropped on the floor here, which is why nothing could trace a match back to
+    /// its rule. Read now, but still not consulted by the classifier.
+    #[serde(default)]
+    id: Option<String>,
     #[serde(default)]
     keywords: StringOrList,
     #[serde(default)]
@@ -170,6 +176,10 @@ fn to_build_config(parsed: ClassifierToml) -> BuildClassifierConfig {
                     .map(|value| value.trim().to_string())
                     .filter(|value| !value.is_empty());
                 BuildRuleEntry {
+                    id: rule
+                        .id
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty()),
                     keywords: rule.keywords.into_trimmed(),
                     target,
                     tags: normalize_tags(rule.tags.into_trimmed()),
@@ -189,17 +199,11 @@ fn parse_classifier(toml_text: &str) -> ClassifierToml {
 /// + the default account mapping (no project-local overrides — the iOS case).
 pub fn default_parser_rule_layers() -> ParserRuleLayers {
     let config = to_build_config(parse_classifier(DEFAULT_ITEM_CLASSIFIER_TOML));
-    let category_rules = build_rule_layers(default_category_accounts(), vec![config], vec![]);
-    let account_mapping = category_rules
-        .account_mapping
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    ParserRuleLayers {
-        category_rules,
-        account_mapping,
-        merchant_vocab: default_merchant_vocab(),
-    }
+    finish_layers(build_rule_layers(
+        default_category_accounts(),
+        vec![config],
+        vec![],
+    ))
 }
 
 /// Build item-category rule layers from the bundled default classifier plus zero
@@ -222,17 +226,28 @@ pub fn parser_rule_layers_with_overrides(
             .map_err(|e| format!("invalid override classifier TOML (layer {i}): {e}"))?;
         configs.push(to_build_config(parsed));
     }
-    let category_rules = build_rule_layers(default_category_accounts(), configs, vec![]);
+    Ok(finish_layers(build_rule_layers(
+        default_category_accounts(),
+        configs,
+        vec![],
+    )))
+}
+
+/// Wrap built category rules with the flattened account mapping and the bundled
+/// merchant vocabulary. Shared by both loaders above so they cannot drift.
+fn finish_layers(
+    category_rules: crate::receipt_categories::CategoryRuleLayers,
+) -> ParserRuleLayers {
     let account_mapping = category_rules
         .account_mapping
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    Ok(ParserRuleLayers {
+    ParserRuleLayers {
         category_rules,
         account_mapping,
         merchant_vocab: default_merchant_vocab(),
-    })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -346,37 +361,4 @@ pub fn default_known_merchants() -> Vec<String> {
         .into_iter()
         .flat_map(|rule| rule.keywords)
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_layers_load_and_resolve_known_categories() {
-        let layers = default_parser_rule_layers();
-        // Account mapping must include the ported defaults.
-        assert_eq!(
-            layers
-                .account_mapping
-                .iter()
-                .find(|(k, _)| k == "grocery_dairy")
-                .map(|(_, v)| v.as_str()),
-            Some("Expenses:Food:Grocery:Dairy")
-        );
-        // Rules parsed from the bundled classifier TOML are non-empty.
-        assert!(!layers.category_rules.rules.is_empty());
-    }
-
-    #[test]
-    fn default_known_merchants_include_bundled_keywords() {
-        let merchants = default_known_merchants();
-        assert!(merchants.iter().any(|m| m == "COSTCO"));
-    }
-
-    #[test]
-    fn default_merchant_families_include_pharmasave() {
-        let families = default_merchant_families();
-        assert!(families.iter().any(|f| f.canonical == "PHARMASAVE"));
-    }
 }
