@@ -18,10 +18,22 @@ const FUZZY_THRESHOLD_LONG: f64 = 0.70;
 
 #[derive(Clone, Debug)]
 pub struct CategoryRule {
+    /// Provenance label from the source TOML (`legacy_0000`, `semantic_tag_0101`,
+    /// …). Carried purely so a match can be traced back to the rule that caused
+    /// it; the classifier never reads it. `None` for rules built in code.
+    pub id: Option<String>,
     pub keywords: Vec<String>,
     pub category: Option<String>,
     pub tags: Vec<String>,
+    /// Priority **after** the layer boost applied by [`build_rule_layers`].
     pub priority: i32,
+    /// Whether the source rule demanded exact matching. The classifier reads the
+    /// union set `CategoryRuleLayers::exact_only_keywords`, not this field — it is
+    /// kept per-rule so the rule can be displayed accurately.
+    pub exact_only: bool,
+    /// Index of the classifier config this rule came from: 0 is the bundled
+    /// defaults, 1+ are override layers in the order they were supplied.
+    pub layer: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -31,11 +43,14 @@ pub struct CategoryRuleLayers {
     pub account_mapping: HashMap<String, String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct BuildRuleEntry {
+    /// Optional provenance label; see [`CategoryRule::id`].
+    pub id: Option<String>,
     pub keywords: Vec<String>,
     pub target: Option<String>,
     pub tags: Vec<String>,
+    /// Priority as declared in the source, **before** the layer boost.
     pub priority: i32,
     pub exact_only: bool,
 }
@@ -454,10 +469,13 @@ pub fn build_rule_layers(
                 }
             }
             rules.push(CategoryRule {
+                id: rule.id,
                 keywords: rule.keywords,
                 category,
                 tags: rule.tags,
                 priority: rule.priority + layer_priority,
+                exact_only: rule.exact_only,
+                layer: idx,
             });
         }
     }
@@ -748,6 +766,7 @@ mod tests {
         let config = BuildClassifierConfig {
             exact_only_keywords: vec![],
             rules: vec![BuildRuleEntry {
+                id: None,
                 keywords: vec!["CUSTOM DIRECT ACCOUNT".to_string()],
                 target: Some("Expenses:Project:Custom".to_string()),
                 tags: vec![],
@@ -785,6 +804,7 @@ mod tests {
         let config = BuildClassifierConfig {
             exact_only_keywords: vec![],
             rules: vec![BuildRuleEntry {
+                id: None,
                 keywords: vec!["CUSTOM NOODLE BRAND".to_string()],
                 target: Some("grocery_staple".to_string()),
                 tags: vec![],
