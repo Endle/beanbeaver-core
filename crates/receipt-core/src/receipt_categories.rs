@@ -16,6 +16,35 @@ const FUZZY_THRESHOLD_SHORT: f64 = 0.75;
 const FUZZY_THRESHOLD_MEDIUM: f64 = 0.80;
 const FUZZY_THRESHOLD_LONG: f64 = 0.70;
 
+/// One node in the item tag vocabulary.
+///
+/// A tag is a **path** (`grocery/dairy`), so the same leaf word can sit under two
+/// parents (`household/supply`, `pet/supply`) with no ambiguity. `display` is
+/// authored rather than derived — capitalizing the segment is what rendered
+/// `energy_drink` as "Energy_drink" in the app.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TagNode {
+    pub path: String,
+    pub display: String,
+}
+
+impl TagNode {
+    /// The path split into its segment names, least specific first — exactly the
+    /// flat tag list consumers receive for an item carrying this tag.
+    pub fn segments(path: &str) -> Vec<String> {
+        path.split('/')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// This node's parent path, or `None` for a root.
+    pub fn parent(path: &str) -> Option<&str> {
+        path.rsplit_once('/').map(|(head, _)| head)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CategoryRule {
     /// Provenance label from the source TOML (`legacy_0000`, `semantic_tag_0101`,
@@ -23,7 +52,16 @@ pub struct CategoryRule {
     /// it; the classifier never reads it. `None` for rules built in code.
     pub id: Option<String>,
     pub keywords: Vec<String>,
+    /// The tag paths this rule declares, e.g. `["grocery/dairy"]`. A rule may
+    /// declare several unrelated paths (`["alcohol", "gift_card"]`).
+    pub tag_paths: Vec<String>,
+    /// The one declared path that claims an account — the first `tag_paths`
+    /// entry present in the account mapping. `None` for a rule that only adds
+    /// tags. Resolution is exact: a path with no entry does **not** inherit its
+    /// ancestor's account.
     pub category: Option<String>,
+    /// `tag_paths` expanded to segment names, least specific first — the flat
+    /// list consumers receive.
     pub tags: Vec<String>,
     /// Priority **after** the layer boost applied by [`build_rule_layers`].
     pub priority: i32,
@@ -40,7 +78,10 @@ pub struct CategoryRule {
 pub struct CategoryRuleLayers {
     pub rules: Vec<CategoryRule>,
     pub exact_only_keywords: HashSet<String>,
+    /// Tag path -> beancount account. Ledger policy, overridable.
     pub account_mapping: HashMap<String, String>,
+    /// The declared tag vocabulary these rules are validated against.
+    pub tag_vocabulary: Vec<TagNode>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -48,8 +89,10 @@ pub struct BuildRuleEntry {
     /// Optional provenance label; see [`CategoryRule::id`].
     pub id: Option<String>,
     pub keywords: Vec<String>,
-    pub target: Option<String>,
-    pub tags: Vec<String>,
+    /// Declared tag paths. Replaces the old `target` + `tags` pair, which the
+    /// corpus wrote twice: every rule's `category` key was its tag list joined
+    /// by `_` (measured: 83 of 83 agreed, zero disagreements).
+    pub tag_paths: Vec<String>,
     /// Priority as declared in the source, **before** the layer boost.
     pub priority: i32,
     pub exact_only: bool,
@@ -363,74 +406,41 @@ fn compare_match_rank(left: &RuleMatch, right: &RuleMatch) -> Ordering {
         .then_with(|| right.rule_index.cmp(&left.rule_index))
 }
 
-fn invert_account_mapping(account_mapping: &HashMap<String, String>) -> HashMap<String, String> {
-    let mut inverted = HashMap::new();
-    for (key, account) in account_mapping {
-        inverted
-            .entry(account.clone())
-            .or_insert_with(|| key.clone());
-    }
-    inverted
-}
-
-fn normalize_rule_target(
-    target: Option<&str>,
-    account_mapping: &HashMap<String, String>,
-) -> Option<String> {
-    let cleaned = target.map(str::trim).filter(|value| !value.is_empty())?;
-    if cleaned.starts_with("Expenses:") {
-        return Some(
-            invert_account_mapping(account_mapping)
-                .remove(cleaned)
-                .unwrap_or_else(|| cleaned.to_string()),
-        );
-    }
-    Some(cleaned.to_string())
-}
-
-fn legacy_account_alias(target: &str) -> Option<&'static str> {
-    match target {
-        "Expenses:Food:Vegetable" => Some("Expenses:Food:Grocery:Vegetable"),
-        "Expenses:Food:Grocery:Dumolings" => Some("Expenses:Food:Grocery:Frozen:Dumpling"),
-        "Expenses:Food:Grocery:Dumplings" => Some("Expenses:Food:Grocery:Frozen:Dumpling"),
-        "Expenses:Food:Grocery:Icecream" => Some("Expenses:Food:Grocery:Frozen:IceCream"),
-        "Expenses:Food:Grocery:IceCream" => Some("Expenses:Food:Grocery:Frozen:IceCream"),
-        _ => None,
-    }
-}
-
-fn normalize_legacy_account_target(target: &str) -> String {
-    legacy_account_alias(target).unwrap_or(target).to_string()
-}
-
+/// Resolve a declared tag path to a beancount account.
+///
+/// **Exact lookup only** — a path with no entry does not inherit its ancestor's
+/// account. That is what keeps a rule declaring `grocery/dairy/milk` (which has
+/// no account of its own) from claiming Dairy.
+///
+/// An `Expenses:`-prefixed value passes straight through, so an override
+/// document may name an account inline rather than adding an `[accounts]` entry.
 pub fn resolve_account_target(
     target: Option<&str>,
     account_mapping: &HashMap<String, String>,
     default: Option<&str>,
 ) -> Option<String> {
-    match target {
-        None => default.map(str::to_string),
-        Some(raw) => {
-            let cleaned = raw.trim();
-            if cleaned.is_empty() {
-                return default.map(str::to_string);
-            }
-            if cleaned.starts_with("Expenses:") {
-                return Some(normalize_legacy_account_target(cleaned));
-            }
-            let resolved = account_mapping
-                .get(cleaned)
-                .map(String::as_str)
-                .or(default)?;
-            Some(normalize_legacy_account_target(resolved))
-        }
+    let Some(raw) = target else {
+        return default.map(str::to_string);
+    };
+    let cleaned = raw.trim();
+    if cleaned.is_empty() {
+        return default.map(str::to_string);
     }
+    if cleaned.starts_with("Expenses:") {
+        return Some(cleaned.to_string());
+    }
+    account_mapping
+        .get(cleaned)
+        .map(String::as_str)
+        .or(default)
+        .map(str::to_string)
 }
 
 pub fn build_rule_layers(
     default_account_mapping: HashMap<String, String>,
     classifier_configs: Vec<BuildClassifierConfig>,
     account_configs: Vec<HashMap<String, String>>,
+    tag_vocabulary: Vec<TagNode>,
 ) -> CategoryRuleLayers {
     let mut account_mapping = default_account_mapping;
     for config in account_configs {
@@ -456,12 +466,28 @@ pub fn build_rule_layers(
         }
 
         for rule in config.rules {
-            if rule.keywords.is_empty() {
+            if rule.keywords.is_empty() || rule.tag_paths.is_empty() {
                 continue;
             }
-            let category = normalize_rule_target(rule.target.as_deref(), &account_mapping);
-            if category.is_none() && rule.tags.is_empty() {
-                continue;
+            // Exact lookup, no walk-up: `grocery/dairy/milk` has no account
+            // entry, so the milk rule adds a tag and claims nothing — which is
+            // how the former tag-only rules keep behaving as they always have.
+            let category = rule
+                .tag_paths
+                .iter()
+                .find(|path| account_mapping.contains_key(*path))
+                .cloned();
+            // Expand every declared path to its segments, deduped in first-seen
+            // order, so `["grocery/dairy"]` yields the same `["grocery","dairy"]`
+            // the corpus used to write out by hand.
+            let mut tags: Vec<String> = Vec::new();
+            let mut seen = HashSet::new();
+            for path in &rule.tag_paths {
+                for segment in path.split('/').map(str::trim).filter(|s| !s.is_empty()) {
+                    if seen.insert(segment.to_string()) {
+                        tags.push(segment.to_string());
+                    }
+                }
             }
             if rule.exact_only {
                 for keyword in &rule.keywords {
@@ -471,8 +497,9 @@ pub fn build_rule_layers(
             rules.push(CategoryRule {
                 id: rule.id,
                 keywords: rule.keywords,
+                tag_paths: rule.tag_paths,
                 category,
-                tags: rule.tags,
+                tags,
                 priority: rule.priority + layer_priority,
                 exact_only: rule.exact_only,
                 layer: idx,
@@ -484,6 +511,7 @@ pub fn build_rule_layers(
         rules,
         exact_only_keywords,
         account_mapping,
+        tag_vocabulary,
     }
 }
 
@@ -561,7 +589,7 @@ pub fn sorted_matches_for_debug(
 mod tests {
     use super::{
         build_rule_layers, classify_item_key, classify_item_tags, list_item_categories,
-        resolve_account_target, BuildClassifierConfig, BuildRuleEntry,
+        resolve_account_target, BuildClassifierConfig, BuildRuleEntry, TagNode,
     };
     use crate::rules::{default_category_accounts, default_parser_rule_layers};
     use std::collections::HashMap;
@@ -706,7 +734,7 @@ mod tests {
         let key = |d: &str| classify_item_key(d, &layers.category_rules, None);
         let tags = |d: &str| classify_item_tags(d, &layers.category_rules);
 
-        assert_eq!(key("347937 CHICKEN").as_deref(), Some("grocery_meat"));
+        assert_eq!(key("347937 CHICKEN").as_deref(), Some("grocery/meat"));
         for t in ["grocery", "meat", "chicken"] {
             assert!(
                 tags("347937 CHICKEN").iter().any(|x| x == t),
@@ -714,7 +742,7 @@ mod tests {
             );
         }
 
-        assert_eq!(key("435259 FINE-FILT").as_deref(), Some("grocery_dairy"));
+        assert_eq!(key("435259 FINE-FILT").as_deref(), Some("grocery/dairy"));
         for t in ["grocery", "dairy", "milk"] {
             assert!(
                 tags("435259 FINE-FILT").iter().any(|x| x == t),
@@ -733,7 +761,7 @@ mod tests {
 
         assert_eq!(
             key("2773717 MONSTER VRTY").as_deref(),
-            Some("grocery_drink")
+            Some("grocery/drink")
         );
         assert!(tags("2773717 MONSTER VRTY")
             .iter()
@@ -747,20 +775,20 @@ mod tests {
         // outranks fuzz at equal priority.
         assert_eq!(
             key("Mnstr Ultra Paradise").as_deref(),
-            Some("grocery_drink")
+            Some("grocery/drink")
         );
         assert!(tags("Mnstr Ultra Paradise")
             .iter()
             .any(|x| x == "energy_drink"));
-        assert_eq!(key("Cocomax Coconut Wtr").as_deref(), Some("grocery_drink"));
+        assert_eq!(key("Cocomax Coconut Wtr").as_deref(), Some("grocery/drink"));
 
         // MARUTAI is a project-only override; public rules must not classify it.
         assert_eq!(key("MARUTAI"), None);
         assert!(tags("MARUTAI").is_empty());
     }
 
-    /// `list_item_categories` returns key-sorted (key, account) pairs, including
-    /// direct-account rules and account-map entries. Mirrors the desktop test.
+    /// `list_item_categories` returns path-sorted (path, account) pairs drawn
+    /// from both the account map and the rules. Mirrors the desktop test.
     #[test]
     fn list_item_categories_returns_sorted_key_account_pairs() {
         let config = BuildClassifierConfig {
@@ -768,28 +796,33 @@ mod tests {
             rules: vec![BuildRuleEntry {
                 id: None,
                 keywords: vec!["CUSTOM DIRECT ACCOUNT".to_string()],
-                target: Some("Expenses:Project:Custom".to_string()),
-                tags: vec![],
+                tag_paths: vec!["project/custom".to_string()],
                 priority: 0,
                 exact_only: false,
             }],
         };
-        let account_config: HashMap<String, String> =
-            [("zzz_custom".to_string(), "Expenses:Project:Zzz".to_string())]
-                .into_iter()
-                .collect();
+        let mut accounts = default_category_accounts();
+        accounts.insert(
+            "project/custom".to_string(),
+            "Expenses:Project:Custom".to_string(),
+        );
+        accounts.insert("zzz_custom".to_string(), "Expenses:Project:Zzz".to_string());
         let layers = build_rule_layers(
-            default_category_accounts(),
+            accounts,
             vec![config],
-            vec![account_config],
+            vec![],
+            vec![TagNode {
+                path: "project/custom".to_string(),
+                display: "Custom".to_string(),
+            }],
         );
 
         let categories = list_item_categories(&layers);
         let mut sorted = categories.clone();
         sorted.sort_by(|a, b| a.0.cmp(&b.0));
-        assert_eq!(categories, sorted, "not sorted by key");
+        assert_eq!(categories, sorted, "not sorted by path");
         assert!(categories.contains(&(
-            "Expenses:Project:Custom".to_string(),
+            "project/custom".to_string(),
             "Expenses:Project:Custom".to_string()
         )));
         assert!(
@@ -797,8 +830,9 @@ mod tests {
         );
     }
 
-    /// A project classifier rule whose `key` resolves through a project account
-    /// map (mirrors `test_project_rule_key_maps_via_account_config`).
+    /// A project rule reaches an account by declaring a tag path that the
+    /// project's own `[accounts]` table maps (mirrors
+    /// `test_project_rule_key_maps_via_account_config`).
     #[test]
     fn project_rule_key_maps_via_account_config() {
         let config = BuildClassifierConfig {
@@ -806,19 +840,26 @@ mod tests {
             rules: vec![BuildRuleEntry {
                 id: None,
                 keywords: vec!["CUSTOM NOODLE BRAND".to_string()],
-                target: Some("grocery_staple".to_string()),
-                tags: vec![],
+                tag_paths: vec!["grocery/staple".to_string()],
                 priority: 20,
                 exact_only: true,
             }],
         };
-        let account_config: HashMap<String, String> = [(
-            "grocery_staple".to_string(),
+        let accounts: HashMap<String, String> = [(
+            "grocery/staple".to_string(),
             "Expenses:Food:Grocery:Staple".to_string(),
         )]
         .into_iter()
         .collect();
-        let layers = build_rule_layers(HashMap::new(), vec![config], vec![account_config]);
+        let layers = build_rule_layers(
+            accounts,
+            vec![config],
+            vec![],
+            vec![TagNode {
+                path: "grocery/staple".to_string(),
+                display: "Staple".to_string(),
+            }],
+        );
         let key = classify_item_key("CUSTOM NOODLE BRAND", &layers, None).expect("classifies");
         let mapping: HashMap<String, String> = layers
             .account_mapping
@@ -828,46 +869,6 @@ mod tests {
         assert_eq!(
             resolve_account_target(Some(&key), &mapping, None).as_deref(),
             Some("Expenses:Food:Grocery:Staple")
-        );
-    }
-
-    #[test]
-    fn resolve_account_target_normalizes_legacy_icecream_lowercase_c_alias() {
-        assert_eq!(
-            resolve_account_target(
-                Some("Expenses:Food:Grocery:Icecream"),
-                &HashMap::new(),
-                None
-            ),
-            Some("Expenses:Food:Grocery:Frozen:IceCream".to_string())
-        );
-    }
-
-    #[test]
-    fn resolve_account_target_normalizes_legacy_dumpling_aliases() {
-        assert_eq!(
-            resolve_account_target(
-                Some("Expenses:Food:Grocery:Dumplings"),
-                &HashMap::new(),
-                None
-            ),
-            Some("Expenses:Food:Grocery:Frozen:Dumpling".to_string())
-        );
-        assert_eq!(
-            resolve_account_target(
-                Some("Expenses:Food:Grocery:Dumolings"),
-                &HashMap::new(),
-                None
-            ),
-            Some("Expenses:Food:Grocery:Frozen:Dumpling".to_string())
-        );
-    }
-
-    #[test]
-    fn resolve_account_target_normalizes_legacy_food_vegetable_alias() {
-        assert_eq!(
-            resolve_account_target(Some("Expenses:Food:Vegetable"), &HashMap::new(), None),
-            Some("Expenses:Food:Grocery:Vegetable".to_string())
         );
     }
 }
