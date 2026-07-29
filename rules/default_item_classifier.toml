@@ -1,6 +1,13 @@
 # Auto-generated from item_categories.py rule tables
 exact_only_keywords = []
 
+# RULE IDS ARE A COMPATIBILITY SURFACE — FROZEN AND ADDITIVE.
+#
+# An override document may write `disables = ["legacy_0000"]` to void a bundled
+# rule, and an id naming no existing rule is a hard load error. That makes these
+# ids part of the format: renaming or deleting one breaks user documents that
+# reference it. Add new ids freely; do not rename or remove an existing one.
+
 [[rules]]
 id = "legacy_0000"
 # "MILK CHOCOLATE" (note: the product is chocolate made with milk; distinct from

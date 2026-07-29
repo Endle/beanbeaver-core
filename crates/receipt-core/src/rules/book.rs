@@ -42,6 +42,10 @@ pub struct ItemRule {
     /// Effective priority, including the layer boost.
     pub priority: i32,
     pub exact_only: bool,
+    /// Tag paths this rule subtracts when it matches.
+    pub remove_tags: Vec<String>,
+    /// Rule ids this rule voids when it matches.
+    pub disables: Vec<String>,
     /// 0 = bundled defaults; 1+ = override layers, in the order supplied.
     pub layer: usize,
 }
@@ -87,7 +91,9 @@ pub struct ItemExplanation {
     /// The union of every matching rule's tags, in rule order — the same list the
     /// parser puts on the item.
     pub tags: Vec<String>,
-    /// Every rule that fired, strongest first.
+    /// Every rule that fired **and survived subtraction**, strongest first. A
+    /// rule voided by another rule's `disables` does not appear; the surviving
+    /// rule's own `disables` list says why.
     pub matches: Vec<RuleMatchInfo>,
 }
 
@@ -161,6 +167,8 @@ impl RuleBook {
                 account: resolve_account_target(rule.category.as_deref(), mapping, None),
                 priority: rule.priority,
                 exact_only: rule.exact_only,
+                remove_tags: rule.remove_tags.clone(),
+                disables: rule.disables.clone(),
                 layer: rule.layer,
             })
             .collect()
@@ -352,5 +360,157 @@ priority = 5
     #[test]
     fn malformed_override_is_an_error_not_a_panic() {
         assert!(RuleBook::with_overrides(&["this is not valid toml ="]).is_err());
+    }
+
+    /// `remove_tags` subtracts at PATH level, so a shared ancestor survives when
+    /// another path still implies it. This is the case a flat tag-name
+    /// subtraction could not express.
+    #[test]
+    fn remove_tags_subtracts_a_path_without_orphaning_its_ancestor() {
+        let book = RuleBook::with_overrides(&[r#"
+[[rules]]
+id = "user_no_snacks"
+keywords = ["CHOCOLATE MILK"]
+tags = ["grocery/dairy"]
+remove_tags = ["grocery/snacks"]
+priority = 50
+"#])
+        .expect("override loads");
+        let explained = book.explain("CHOCOLATE MILK");
+        assert!(
+            !explained.tags.iter().any(|t| t == "snacks"),
+            "snacks should be subtracted, got {:?}",
+            explained.tags
+        );
+        // The shared ancestor is still justified by grocery/dairy.
+        assert!(explained.tags.iter().any(|t| t == "grocery"));
+        assert!(explained.tags.iter().any(|t| t == "dairy"));
+        // Baseline: without the override, snacks is present.
+        assert!(RuleBook::bundled()
+            .explain("CHOCOLATE MILK")
+            .tags
+            .iter()
+            .any(|t| t == "snacks"));
+    }
+
+    /// Subtracting a rule's account-claiming path also drops its claim — filing
+    /// an item under an account while refusing to tag it that way is incoherent.
+    #[test]
+    fn removing_the_claiming_path_also_drops_the_account() {
+        let book = RuleBook::with_overrides(&[r#"
+[[rules]]
+id = "user_untag_dairy"
+keywords = ["ZZZ PLAIN YOGURT"]
+tags = ["grocery/staple"]
+remove_tags = ["grocery/dairy"]
+priority = 50
+"#])
+        .expect("override loads");
+        let explained = book.explain("ZZZ PLAIN YOGURT");
+        assert_eq!(
+            explained.account.as_deref(),
+            Some("Expenses:Food:Grocery:Staple")
+        );
+        assert!(!explained.tags.iter().any(|t| t == "dairy"));
+    }
+
+    /// `disables` voids a rule's match by id.
+    #[test]
+    fn disables_voids_a_matching_rule_by_id() {
+        let before = RuleBook::bundled().explain("347937 CHICKEN");
+        assert!(before
+            .matches
+            .iter()
+            .any(|m| m.rule_id.as_deref() == Some("semantic_tag_0100")));
+
+        let book = RuleBook::with_overrides(&[r#"
+[[rules]]
+id = "user_no_chicken_tag"
+keywords = ["CHICKEN"]
+tags = ["grocery/meat"]
+disables = ["semantic_tag_0100"]
+priority = 50
+"#])
+        .expect("override loads");
+        let after = book.explain("347937 CHICKEN");
+        assert!(
+            !after
+                .matches
+                .iter()
+                .any(|m| m.rule_id.as_deref() == Some("semantic_tag_0100")),
+            "disabled rule should not appear among matches"
+        );
+        assert!(!after.tags.iter().any(|t| t == "chicken"));
+        // The meat rule is untouched, so the account still resolves.
+        assert_eq!(after.account.as_deref(), Some("Expenses:Food:Grocery:Meat"));
+    }
+
+    /// Every matching rule's `disables` apply at once, including a rule that is
+    /// itself disabled. That keeps the disabled set a pure function of which
+    /// rules matched, rather than something that depends on evaluation order.
+    #[test]
+    fn disables_apply_simultaneously_in_one_pass() {
+        let book = RuleBook::with_overrides(&[r#"
+[[rules]]
+id = "chain_a"
+keywords = ["ZZZ CHAIN ITEM"]
+tags = ["grocery/staple"]
+disables = ["chain_b"]
+priority = 50
+
+[[rules]]
+id = "chain_b"
+keywords = ["ZZZ CHAIN ITEM"]
+tags = ["grocery/snacks"]
+disables = ["chain_c"]
+priority = 40
+
+[[rules]]
+id = "chain_c"
+keywords = ["ZZZ CHAIN ITEM"]
+tags = ["grocery/bakery"]
+priority = 30
+"#])
+        .expect("override loads");
+        let explained = book.explain("ZZZ CHAIN ITEM");
+        let ids: Vec<&str> = explained
+            .matches
+            .iter()
+            .filter_map(|m| m.rule_id.as_deref())
+            .collect();
+        assert!(ids.contains(&"chain_a"));
+        assert!(!ids.contains(&"chain_b"), "b is disabled by a");
+        // c is disabled by b even though b is itself disabled: all matching
+        // rules' `disables` are collected before any are applied.
+        assert!(
+            !ids.contains(&"chain_c"),
+            "expected one-pass semantics, got {ids:?}"
+        );
+    }
+
+    /// A typo in `disables` silently did nothing before it was validated.
+    #[test]
+    fn unknown_disable_id_is_rejected() {
+        let err = RuleBook::with_overrides(&[r#"
+[[rules]]
+id = "user_typo"
+keywords = ["ZZZ"]
+tags = ["grocery/staple"]
+disables = ["legacy_9999"]
+"#])
+        .expect_err("unknown id must not load");
+        assert!(
+            err.contains("legacy_9999"),
+            "error should name the id: {err}"
+        );
+    }
+
+    /// The bundled corpus uses neither operator, so nothing it classifies changes.
+    #[test]
+    fn bundled_corpus_uses_no_subtraction() {
+        let rules = RuleBook::bundled().item_rules();
+        assert!(rules
+            .iter()
+            .all(|r| r.remove_tags.is_empty() && r.disables.is_empty()));
     }
 }
