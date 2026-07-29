@@ -413,26 +413,34 @@ pub fn account_from_classification(
         }
     }
 
-    // Best-effort fallback for stored records that carry tags but no resolvable
-    // category. Match on the path's **leaf** segment, and pick the
-    // lexicographically smallest candidate.
+    // Best-effort fallback for stored records carrying tags but no resolvable
+    // category. Walk tags most-specific-first, since they are ordered least to
+    // most specific and the narrowest account is the better guess.
     //
-    // Both details matter. Matching any segment meant a broad tag like `grocery`
-    // hit ~20 paths; returning the first of those, while iterating a `Vec` built
-    // from a `HashMap`, made the account genuinely arbitrary between runs.
-    // Leaf-matching narrows `dairy` to `grocery/dairy` and lets `grocery` match
-    // only the bare `grocery` path, which carries no account — so it correctly
-    // resolves to nothing rather than to a coin-flip among its children.
-    for tag in &classification.tags {
+    // Two shapes are accepted. Current records store tag *paths*, which the
+    // account map is keyed by, so they resolve by direct lookup. Records written
+    // before the vocabulary stored bare segment names; those fall back to
+    // matching a path's leaf, taking the lexicographically smallest candidate so
+    // the answer is at least stable. Matching *any* segment (what this did
+    // originally) meant a broad tag like `grocery` hit ~20 paths and returned
+    // whichever the HashMap-ordered Vec happened to yield first.
+    for tag in classification.tags.iter().rev() {
         if tag.is_empty() {
             continue;
         }
-        let best = rule_layers
+        if let Some((_, mapped)) = rule_layers
+            .account_mapping
+            .iter()
+            .find(|(path, _)| path == tag)
+        {
+            return Some(normalize_legacy_account_target(mapped));
+        }
+        let legacy_leaf = rule_layers
             .account_mapping
             .iter()
             .filter(|(path, _)| path.rsplit('/').next() == Some(tag.as_str()))
             .min_by(|(left, _), (right, _)| left.cmp(right));
-        if let Some((_, mapped)) = best {
+        if let Some((_, mapped)) = legacy_leaf {
             return Some(normalize_legacy_account_target(mapped));
         }
     }

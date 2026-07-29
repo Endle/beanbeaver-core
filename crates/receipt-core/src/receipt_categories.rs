@@ -603,18 +603,32 @@ pub fn resolve_matches(description: &str, rule_layers: &CategoryRuleLayers) -> V
     surviving
 }
 
-/// Expand tag paths to their segment names, deduped in first-seen order.
+/// Expand tag paths to the full chain of node paths they imply, least specific
+/// first, deduped in first-seen order.
+///
+/// `["grocery/dairy/milk"]` yields `["grocery", "grocery/dairy",
+/// "grocery/dairy/milk"]` — every ancestor as a *path*, not a bare segment name.
+///
+/// Bare segments would be lossy: a rule declaring two unrelated paths
+/// (`["alcohol", "gift_card"]`) flattens to segments that cannot be told apart
+/// from one nested path, so nothing downstream could reconstruct the tree. Paths
+/// also let the account map be consulted directly, since it is keyed by path.
 pub fn expand_tag_paths(paths: &[String]) -> Vec<String> {
-    let mut tags = Vec::new();
+    let mut expanded = Vec::new();
     let mut seen = HashSet::new();
     for path in paths {
+        let mut prefix = String::new();
         for segment in path.split('/').map(str::trim).filter(|s| !s.is_empty()) {
-            if seen.insert(segment.to_string()) {
-                tags.push(segment.to_string());
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(segment);
+            if seen.insert(prefix.clone()) {
+                expanded.push(prefix.clone());
             }
         }
     }
-    tags
+    expanded
 }
 
 pub fn classify_item_key(
@@ -837,7 +851,7 @@ mod tests {
         let tags = |d: &str| classify_item_tags(d, &layers.category_rules);
 
         assert_eq!(key("347937 CHICKEN").as_deref(), Some("grocery/meat"));
-        for t in ["grocery", "meat", "chicken"] {
+        for t in ["grocery", "grocery/meat", "grocery/meat/chicken"] {
             assert!(
                 tags("347937 CHICKEN").iter().any(|x| x == t),
                 "CHICKEN missing tag {t}"
@@ -845,7 +859,7 @@ mod tests {
         }
 
         assert_eq!(key("435259 FINE-FILT").as_deref(), Some("grocery/dairy"));
-        for t in ["grocery", "dairy", "milk"] {
+        for t in ["grocery", "grocery/dairy", "grocery/dairy/milk"] {
             assert!(
                 tags("435259 FINE-FILT").iter().any(|x| x == t),
                 "FINE-FILT missing tag {t}"
@@ -867,7 +881,7 @@ mod tests {
         );
         assert!(tags("2773717 MONSTER VRTY")
             .iter()
-            .any(|x| x == "energy_drink"));
+            .any(|x| x == "grocery/drink/energy_drink"));
 
         // FreshCo drops vowels ("Mnstr", "Wtr"), so the spelled-out `MONSTER` and
         // `COCONUT WATER` keywords never fire and a fuzzy hit fills the vacuum:
@@ -881,7 +895,7 @@ mod tests {
         );
         assert!(tags("Mnstr Ultra Paradise")
             .iter()
-            .any(|x| x == "energy_drink"));
+            .any(|x| x == "grocery/drink/energy_drink"));
         assert_eq!(key("Cocomax Coconut Wtr").as_deref(), Some("grocery/drink"));
 
         // MARUTAI is a project-only override; public rules must not classify it.
