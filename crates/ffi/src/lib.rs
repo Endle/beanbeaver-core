@@ -27,6 +27,7 @@ use receipt_core::process::{
 use receipt_core::receipt_parser::{
     ParsedReceiptData, ParsedReceiptItem, ParsedReceiptTender, ParsedReceiptWarning,
 };
+use receipt_core::rules::RuleBook as CoreRuleBook;
 
 uniffi::setup_scaffolding!();
 
@@ -50,13 +51,27 @@ pub struct ReceiptItem {
     pub description: String,
     pub price: String,
     pub quantity: i32,
-    /// Classifier / semantic category key (not necessarily a beancount account).
-    pub category: Option<String>,
-    /// Beanbeaver-internal semantic tags for this line (e.g.
-    /// `["grocery", "meat", "chicken"]`) — the multi-tag classification the app
-    /// drives its category display from, upstream of the single `category`
-    /// beancount account. Empty when no classifier rule matched.
-    pub tags: Vec<String>,
+    /// The beancount account this line posts to, already resolved. Was
+    /// `category`, which held a classifier key that was *not necessarily* an
+    /// account — callers could not tell which they had been given.
+    pub account: Option<String>,
+    /// This line's classification, one entry per node from least to most
+    /// specific: `[{grocery, "Grocery"}, {grocery/dairy, "Dairy"}]`.
+    ///
+    /// Each entry carries an authored display name, so a consumer never has to
+    /// invent one from the path. Deriving it by capitalizing the segment is what
+    /// rendered `energy_drink` as "Energy_drink". Empty when no rule matched.
+    pub tags: Vec<ItemTag>,
+}
+
+/// One node of an item's tag path, with the name to show for it.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct ItemTag {
+    /// Full path (`grocery/dairy`), stable across releases — the identifier to
+    /// match on.
+    pub path: String,
+    /// Authored label ("Dairy"). Presentation only; never match on it.
+    pub display: String,
 }
 
 /// One payment tender (split tender / multi-payment receipts).
@@ -282,11 +297,16 @@ pub struct DetectionInput {
     pub confidence: f64,
 }
 
-/// Optional parse/scan knobs (rule overlays). Empty TOML list = public defaults.
-#[derive(uniffi::Record)]
+/// Optional parse/scan knobs (rule overlays). Empty list = bundled defaults.
+#[derive(uniffi::Record, Clone, Debug, Default)]
 pub struct ParseOptions {
-    /// Extra item-classifier TOML documents (later layers win).
-    pub item_classifier_override_tomls: Vec<String>,
+    /// Extra rule documents, later layers winning. Each is TOML that may carry
+    /// any mix of `[[tags]]`, `[accounts]` and `[[rules]]` — so one document can
+    /// declare a tag, map it to an account, and use it from a rule.
+    ///
+    /// Malformed TOML, an undeclared tag path, or a `disables` naming an unknown
+    /// rule id all surface as [`ScanError::Parse`] rather than a panic.
+    pub rule_documents: Vec<String>,
     /// Optional known-merchant keyword list; empty means bundled defaults.
     pub known_merchants: Vec<String>,
 }
@@ -299,6 +319,169 @@ pub struct ReceiptEdits {
     pub date_iso: Option<String>,
     /// Parallel to items; empty string means “no override for this index”.
     pub item_account_overrides: Vec<String>,
+}
+
+/// One item-classifier rule as it is actually in force — priorities already
+/// boosted by layer, account already resolved.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct ItemRule {
+    /// Provenance label (`legacy_0000`). Frozen and additive, so it is safe for
+    /// a user document to name in `disables`.
+    pub id: Option<String>,
+    /// Position in the rule list — what [`RuleMatchInfo::rule_index`] refers to.
+    pub index: u32,
+    pub keywords: Vec<String>,
+    /// Declared tag paths.
+    pub tag_paths: Vec<String>,
+    /// Tag paths this rule subtracts when it matches.
+    pub remove_tags: Vec<String>,
+    /// Rule ids this rule voids when it matches.
+    pub disables: Vec<String>,
+    /// The path that claims an account, or `None` for a tag-only rule.
+    pub category_path: Option<String>,
+    /// The account `category_path` resolves to.
+    pub account: Option<String>,
+    pub priority: i32,
+    pub exact_only: bool,
+    /// 0 = bundled defaults; 1+ = override documents, in the order supplied.
+    pub layer: u32,
+}
+
+/// A tag-path -> beancount-account pair.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct ItemCategory {
+    pub path: String,
+    pub account: String,
+}
+
+/// One rule that fired for a description, and how strongly.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct RuleMatchInfo {
+    pub rule_id: Option<String>,
+    pub rule_index: u32,
+    /// The keyword that actually hit — the specific reason this rule matched.
+    pub matched_keyword: String,
+    /// False when the hit came from the fuzzy/bigram stage rather than a literal
+    /// or OCR-confusable substring match.
+    pub is_exact: bool,
+    pub priority: i32,
+    pub keyword_length: u32,
+    pub tag_paths: Vec<String>,
+    pub category_path: Option<String>,
+    /// True for the single match whose category won the ranking contest.
+    pub is_category_winner: bool,
+}
+
+/// Why a description classifies the way it does.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct ItemExplanation {
+    pub description: String,
+    pub category_path: Option<String>,
+    pub account: Option<String>,
+    /// The tags the parser would put on this item.
+    pub tags: Vec<ItemTag>,
+    /// Every rule that fired **and survived subtraction**, strongest first.
+    pub matches: Vec<RuleMatchInfo>,
+}
+
+/// Read access to the rule corpus in force: the bundled defaults plus any
+/// override documents layered on top.
+///
+/// Construct once and reuse — it parses its documents up front, so `explain` is
+/// cheap enough to call per keystroke.
+#[derive(uniffi::Object)]
+pub struct RuleBook {
+    inner: CoreRuleBook,
+}
+
+#[uniffi::export]
+impl RuleBook {
+    /// Build from `options`. Returns [`ScanError::Parse`] on malformed TOML, an
+    /// undeclared tag path, or a `disables` naming an unknown rule id — the same
+    /// validation a scan applies, so this doubles as "would this document load?"
+    #[uniffi::constructor]
+    pub fn new(options: ParseOptions) -> Result<std::sync::Arc<Self>, ScanError> {
+        let refs: Vec<&str> = options.rule_documents.iter().map(String::as_str).collect();
+        let inner = CoreRuleBook::with_overrides(&refs).map_err(|msg| ScanError::Parse { msg })?;
+        Ok(std::sync::Arc::new(RuleBook { inner }))
+    }
+
+    /// The declared tag vocabulary, in file order. Paths whose parent is also
+    /// present form the tree.
+    pub fn tags(&self) -> Vec<ItemTag> {
+        self.inner
+            .tag_vocabulary()
+            .iter()
+            .map(|node| ItemTag {
+                path: node.path.clone(),
+                display: node.display.clone(),
+            })
+            .collect()
+    }
+
+    /// Every tag path that maps to an account, sorted by path.
+    pub fn categories(&self) -> Vec<ItemCategory> {
+        self.inner
+            .categories()
+            .into_iter()
+            .map(|c| ItemCategory {
+                path: c.key,
+                account: c.account,
+            })
+            .collect()
+    }
+
+    /// Every rule in force, in layer order.
+    pub fn rules(&self) -> Vec<ItemRule> {
+        self.inner
+            .item_rules()
+            .into_iter()
+            .map(|r| ItemRule {
+                id: r.id,
+                index: r.index as u32,
+                keywords: r.keywords,
+                tag_paths: r.tags,
+                remove_tags: r.remove_tags,
+                disables: r.disables,
+                category_path: r.category_key,
+                account: r.account,
+                priority: r.priority,
+                exact_only: r.exact_only,
+                layer: r.layer as u32,
+            })
+            .collect()
+    }
+
+    /// Why `description` classifies the way it does — the resolved account and
+    /// tags, plus every rule that fired, strongest first.
+    pub fn explain(&self, description: String) -> ItemExplanation {
+        let e = self.inner.explain(&description);
+        let label = |path: &String| ItemTag {
+            display: self.inner.tag_display(path),
+            path: path.clone(),
+        };
+        ItemExplanation {
+            description: e.description,
+            category_path: e.category_key,
+            account: e.account,
+            tags: e.tags.iter().map(label).collect(),
+            matches: e
+                .matches
+                .into_iter()
+                .map(|m| RuleMatchInfo {
+                    rule_id: m.rule_id,
+                    rule_index: m.rule_index as u32,
+                    matched_keyword: m.matched_keyword,
+                    is_exact: m.is_exact,
+                    priority: m.priority,
+                    keyword_length: m.keyword_length as u32,
+                    tag_paths: m.tags,
+                    category_path: m.category_key,
+                    is_category_winner: m.is_category_winner,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Errors surfaced to Swift as a typed exception.
@@ -368,7 +551,7 @@ impl OcrSession {
             currency,
             tax_account,
             ParseOptions {
-                item_classifier_override_tomls: vec![],
+                rule_documents: vec![],
                 known_merchants: vec![],
             },
         )
@@ -624,13 +807,19 @@ fn to_process_options(options: &ParseOptions) -> ProcessOptions {
         } else {
             Some(options.known_merchants.clone())
         },
+        // `None` means "use the bundled families". This was hardcoded when the
+        // field had no FFI counterpart, which silently made merchant-family
+        // overrides unreachable from Swift and Kotlin; it stays `None` only
+        // because nothing overrides them yet, and is now the single place to
+        // change when something does.
         merchant_families: None,
-        item_classifier_override_tomls: options.item_classifier_override_tomls.clone(),
+        item_classifier_override_tomls: options.rule_documents.clone(),
     }
 }
 
 /// Flatten the rich `ProcessedReceipt` into the FFI record.
 fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
+    let vocabulary = p.tag_vocabulary.clone();
     let confidence = p.confidence.clone().into();
     let detections = p
         .detections
@@ -662,8 +851,19 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
                 description: i.description,
                 price: i.price,
                 quantity: i.quantity,
-                category: i.category,
-                tags: i.tags,
+                account: i.account,
+                tags: i
+                    .tags
+                    .iter()
+                    .map(|path| ItemTag {
+                        display: vocabulary
+                            .iter()
+                            .find(|node| &node.path == path)
+                            .map(|node| node.display.clone())
+                            .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_string()),
+                        path: path.clone(),
+                    })
+                    .collect(),
             })
             .collect(),
         warnings: d.warnings.iter().map(|w| w.message.clone()).collect(),
@@ -731,8 +931,12 @@ fn receipt_result_to_parsed(r: &ReceiptResult) -> ParsedReceiptData {
                 description: i.description.clone(),
                 price: i.price.clone(),
                 quantity: i.quantity,
-                category: i.category.clone(),
-                tags: i.tags.clone(),
+                // The round-trip keeps the most specific tag path as the
+                // category: it is the one that claimed the account, and the
+                // shallower entries are its ancestors.
+                category: i.tags.last().map(|t| t.path.clone()),
+                account: i.account.clone(),
+                tags: i.tags.iter().map(|t| t.path.clone()).collect(),
             })
             .collect(),
         tax: r.tax.clone(),
@@ -803,7 +1007,7 @@ mod tests {
                 description: "Milk".into(),
                 price: "10.00".into(),
                 quantity: 1,
-                category: Some("grocery_dairy".into()),
+                account: Some("Expenses:Food:Grocery:Dairy".into()),
                 tags: vec![],
             }],
             warnings: vec![],
@@ -853,7 +1057,7 @@ mod tests {
             "Expenses:Tax:HST".into(),
             None,
             ParseOptions {
-                item_classifier_override_tomls: vec![],
+                rule_documents: vec![],
                 known_merchants: vec![],
             },
         );
@@ -879,7 +1083,7 @@ mod tests {
                 item_account_overrides: vec!["Expenses:Food:Grocery:Dairy".into()],
             },
             ParseOptions {
-                item_classifier_override_tomls: vec![],
+                rule_documents: vec![],
                 known_merchants: vec![],
             },
         )
@@ -894,7 +1098,10 @@ mod tests {
         assert_eq!(edited.tenders.len(), 1);
         assert!(!edited.confidence.needs_review);
         // Classifier key preserved despite account override in beancount.
-        assert_eq!(edited.items[0].category.as_deref(), Some("grocery_dairy"));
+        assert_eq!(
+            edited.items[0].account.as_deref(),
+            Some("Expenses:Food:Grocery:Dairy")
+        );
     }
 
     #[test]
@@ -916,7 +1123,7 @@ mod tests {
                 item_account_overrides: vec![],
             },
             ParseOptions {
-                item_classifier_override_tomls: vec![],
+                rule_documents: vec![],
                 known_merchants: vec![],
             },
         );
@@ -948,7 +1155,7 @@ mod tests {
             "Expenses:Tax:HST".into(),
             None,
             ParseOptions {
-                item_classifier_override_tomls: vec!["not {{ valid toml".into()],
+                rule_documents: vec!["not {{ valid toml".into()],
                 known_merchants: vec![],
             },
         );
@@ -998,5 +1205,90 @@ mod tests {
             t.spans.iter().any(|s| s.phase == Phase::Parse),
             "expected a Parse span in on-device timings"
         );
+    }
+
+    /// The rule corpus must be readable from the FFI boundary — this is what the
+    /// iOS browser is built on, and none of it crossed before.
+    #[test]
+    fn rule_book_exposes_vocabulary_categories_and_rules() {
+        let book = RuleBook::new(ParseOptions::default()).expect("bundled book loads");
+        let tags = book.tags();
+        assert!(tags
+            .iter()
+            .any(|t| t.path == "grocery/dairy" && t.display == "Dairy"));
+        // Authored display, not a capitalized segment — that is what produced
+        // "Energy_drink" on screen.
+        assert!(tags
+            .iter()
+            .any(|t| t.path == "grocery/drink/energy_drink" && t.display == "Energy Drink"));
+        assert!(book
+            .categories()
+            .iter()
+            .any(|c| c.path == "grocery/dairy" && c.account == "Expenses:Food:Grocery:Dairy"));
+        assert!(book
+            .rules()
+            .iter()
+            .any(|r| r.id.as_deref() == Some("legacy_0000")));
+    }
+
+    /// `explain` is the query tool: it must name the winning rule and the exact
+    /// keyword that fired.
+    #[test]
+    fn rule_book_explains_a_description() {
+        let book = RuleBook::new(ParseOptions::default()).expect("bundled book loads");
+        let explained = book.explain("KS ORG 2% MILK".to_string());
+        assert_eq!(
+            explained.account.as_deref(),
+            Some("Expenses:Food:Grocery:Dairy")
+        );
+        assert!(explained
+            .tags
+            .iter()
+            .any(|t| t.path == "grocery/dairy/milk"));
+        let winner = explained
+            .matches
+            .iter()
+            .find(|m| m.is_category_winner)
+            .expect("some rule won the category");
+        assert_eq!(winner.category_path.as_deref(), Some("grocery/dairy"));
+        assert!(!winner.matched_keyword.is_empty());
+    }
+
+    /// Constructing a book is also the import validator: the three ways a user
+    /// document can be wrong each surface as a typed error, not a panic.
+    #[test]
+    fn rule_book_rejects_bad_documents_with_typed_errors() {
+        for (doc, needle) in [
+            ("this is not { valid toml", "invalid"),
+            (
+                "[[rules]]\nid=\"x\"\nkeywords=[\"Z\"]\ntags=[\"grocery/diary\"]",
+                "grocery/diary",
+            ),
+            (
+                "[[rules]]\nid=\"x\"\nkeywords=[\"Z\"]\ntags=[\"grocery/staple\"]\ndisables=[\"nope_9999\"]",
+                "nope_9999",
+            ),
+        ] {
+            let err = RuleBook::new(ParseOptions {
+                rule_documents: vec![doc.to_string()],
+                known_merchants: vec![],
+            })
+            .err()
+            .expect("bad document must not load");
+            let msg = err.to_string();
+            assert!(msg.contains(needle), "expected {needle:?} in {msg:?}");
+        }
+    }
+
+    /// An item's tags arrive as labelled node paths, least specific first, so a
+    /// consumer renders the tree without reconstructing it.
+    #[test]
+    fn parsed_items_carry_labelled_tag_paths() {
+        let book = RuleBook::new(ParseOptions::default()).expect("bundled book loads");
+        let explained = book.explain("ROTISSERIE CHICKEN".to_string());
+        let paths: Vec<&str> = explained.tags.iter().map(|t| t.path.as_str()).collect();
+        assert_eq!(paths.first(), Some(&"grocery"), "least specific first");
+        assert!(paths.contains(&"grocery/meat/chicken"));
+        assert!(explained.tags.iter().all(|t| !t.display.is_empty()));
     }
 }

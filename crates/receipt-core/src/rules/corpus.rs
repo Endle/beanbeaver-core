@@ -600,7 +600,10 @@ priority = 5
             .find(|r| r.id.as_deref() == Some("user_kefir"))
             .expect("rule present");
         // Path expands to its segments, so the item still carries the ancestors.
-        assert_eq!(rule.tags, vec!["grocery", "dairy", "kefir"]);
+        assert_eq!(
+            rule.tags,
+            vec!["grocery", "grocery/dairy", "grocery/dairy/kefir"]
+        );
         assert_eq!(rule.category.as_deref(), Some("grocery/dairy/kefir"));
         assert!(layers
             .category_rules

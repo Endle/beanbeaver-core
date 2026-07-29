@@ -378,19 +378,19 @@ priority = 50
         .expect("override loads");
         let explained = book.explain("CHOCOLATE MILK");
         assert!(
-            !explained.tags.iter().any(|t| t == "snacks"),
+            !explained.tags.iter().any(|t| t == "grocery/snacks"),
             "snacks should be subtracted, got {:?}",
             explained.tags
         );
         // The shared ancestor is still justified by grocery/dairy.
         assert!(explained.tags.iter().any(|t| t == "grocery"));
-        assert!(explained.tags.iter().any(|t| t == "dairy"));
+        assert!(explained.tags.iter().any(|t| t == "grocery/dairy"));
         // Baseline: without the override, snacks is present.
         assert!(RuleBook::bundled()
             .explain("CHOCOLATE MILK")
             .tags
             .iter()
-            .any(|t| t == "snacks"));
+            .any(|t| t == "grocery/snacks"));
     }
 
     /// Subtracting a rule's account-claiming path also drops its claim — filing
@@ -411,7 +411,7 @@ priority = 50
             explained.account.as_deref(),
             Some("Expenses:Food:Grocery:Staple")
         );
-        assert!(!explained.tags.iter().any(|t| t == "dairy"));
+        assert!(!explained.tags.iter().any(|t| t == "grocery/dairy"));
     }
 
     /// `disables` voids a rule's match by id.
@@ -440,7 +440,7 @@ priority = 50
                 .any(|m| m.rule_id.as_deref() == Some("semantic_tag_0100")),
             "disabled rule should not appear among matches"
         );
-        assert!(!after.tags.iter().any(|t| t == "chicken"));
+        assert!(!after.tags.iter().any(|t| t == "grocery/meat/chicken"));
         // The meat rule is untouched, so the account still resolves.
         assert_eq!(after.account.as_deref(), Some("Expenses:Food:Grocery:Meat"));
     }

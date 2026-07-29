@@ -6,8 +6,13 @@
 #   [accounts]  where a tag lands in *your* ledger. Policy. Meant to be overridden.
 #
 # A tag is a PATH, not a bare name. `grocery/dairy` implies its ancestors, so a
-# rule declaring it yields the tags ["grocery", "dairy"] — least specific first,
-# which is the order consumers render (most specific = the deepest = last).
+# rule declaring it yields the tags ["grocery", "grocery/dairy"] — every ancestor
+# as a full path, least specific first, which is the order consumers render
+# (most specific = the deepest = last).
+#
+# Ancestors are full paths rather than bare segment names on purpose: a rule may
+# declare two unrelated paths (["alcohol", "gift_card"]), and bare segments could
+# not be told apart from one nested path.
 #
 # Because a tag is a path, the same leaf word can appear under two parents
 # (`household/supply` and `pet/supply`) with no ambiguity.

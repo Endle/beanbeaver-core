@@ -11,7 +11,6 @@ use std::borrow::Cow;
 
 use crate::merchant_match::{MerchantFamily, MerchantMatch, MerchantMatchStatus};
 use crate::ocr_transform::{transform, RawDetection};
-use crate::receipt_categories::resolve_account_target;
 use crate::receipt_formatter::{
     format_parsed_receipt, FormatterItemInput, FormatterReceiptInput, FormatterTenderInput,
     FormatterWarningInput,
@@ -70,6 +69,11 @@ pub struct ProcessedReceipt {
     /// coordinates, pre-transform), surfaced for debugging/E2E snapshot diffing.
     /// Empty on the reformat path (no OCR was run).
     pub detections: Vec<RawDetection>,
+    /// The tag vocabulary in force for this parse, including anything an
+    /// override document added. Carried on the result so a consumer can label
+    /// an item's tags without rebuilding the rule book — and so the labels
+    /// always match the rules that actually ran.
+    pub tag_vocabulary: Vec<crate::receipt_categories::TagNode>,
 }
 
 /// User corrections applied when regenerating beancount without re-running OCR.
@@ -291,7 +295,7 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 #[allow(clippy::too_many_arguments)]
 fn format_from_parsed(
     parsed: &ParsedReceiptData,
-    rule_layers: &ParserRuleLayers,
+    _rule_layers: &ParserRuleLayers,
     today: (i32, u32, u32),
     credit_card_account: &str,
     currency: &str,
@@ -320,12 +324,9 @@ fn format_from_parsed(
             if let Some(Some(account)) = corrections.and_then(|c| c.item_accounts.get(idx)) {
                 return account.clone();
             }
-            resolve_account_target(
-                item.category.as_deref(),
-                &rule_layers.category_rules.account_mapping,
-                Some(DEFAULT_ITEM_ACCOUNT),
-            )
-            .unwrap_or_else(|| DEFAULT_ITEM_ACCOUNT.to_string())
+            item.account
+                .clone()
+                .unwrap_or_else(|| DEFAULT_ITEM_ACCOUNT.to_string())
         })
         .collect();
 
@@ -477,6 +478,7 @@ pub fn process_receipt_with_options(
     )?;
 
     Ok(ProcessedReceipt {
+        tag_vocabulary: rule_book.layers().category_rules.tag_vocabulary.clone(),
         parsed,
         beancount,
         beanbeaver_id,
@@ -541,6 +543,7 @@ pub fn reformat_parsed_receipt(
     )?;
 
     Ok(ProcessedReceipt {
+        tag_vocabulary: rule_book.layers().category_rules.tag_vocabulary.clone(),
         parsed: parsed_out,
         beancount,
         beanbeaver_id,
@@ -594,8 +597,9 @@ mod tests {
                 description: "Milk".into(),
                 price: "10.00".into(),
                 quantity: 1,
-                category: Some("grocery_dairy".into()),
-                tags: vec!["grocery".into(), "dairy".into()],
+                category: Some("grocery/dairy".into()),
+                account: Some("Expenses:Food:Grocery:Dairy".into()),
+                tags: vec!["grocery".into(), "grocery/dairy".into()],
             }],
             tax: None,
             subtotal: Some("10.00".into()),
@@ -644,7 +648,7 @@ mod tests {
         // Classifier key preserved; account override only affects beancount.
         assert_eq!(
             out.parsed.items[0].category.as_deref(),
-            Some("grocery_dairy")
+            Some("grocery/dairy")
         );
         // User merchant edit is high-trust.
         assert_eq!(

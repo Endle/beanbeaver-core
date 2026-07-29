@@ -21,7 +21,12 @@ pub struct ParsedReceiptItem {
     pub description: String,
     pub price: String,
     pub quantity: i32,
+    /// The winning rule's declared tag path (`grocery/dairy`), or `None`.
     pub category: Option<String>,
+    /// The beancount account `category` resolves to, resolved at parse time so
+    /// consumers do not have to carry the account map around. `None` when the
+    /// path claims no account.
+    pub account: Option<String>,
     /// The beanbeaver-internal semantic classification for this line — a
     /// multi-tag view (e.g. `["grocery", "meat", "chicken"]`) that is upstream
     /// of, and richer than, the single `category` beancount account. Consumers
@@ -190,11 +195,18 @@ fn build_item(
         None => description,
     };
 
+    let account = receipt_categories::resolve_account_target(
+        category.as_deref(),
+        &rule_layers.category_rules.account_mapping,
+        None,
+    );
+
     ParsedReceiptItem {
         description,
         price,
         quantity,
         category,
+        account,
         tags,
     }
 }
@@ -378,13 +390,22 @@ mod tests {
         // A rotisserie chicken matches several rules — the meat rule
         // (grocery, meat), the semantic chicken tag, and the prepared-meal rule
         // — and their tags accumulate (deduped, first-seen order) onto one item.
-        // "prepared_meal" is one tag now: the old category key split it in two.
+        // Tags are node PATHS, least specific first, so the tree survives the
+        // trip to a consumer without being reconstructed from bare segments.
         assert_eq!(
             item_tags("ROTISSERIE CHICKEN", &layers),
-            vec!["grocery", "meat", "chicken", "prepared_meal"]
+            vec![
+                "grocery",
+                "grocery/meat",
+                "grocery/meat/chicken",
+                "grocery/prepared_meal"
+            ]
         );
         // Milk carries the dairy rule's tags plus its own semantic "milk" tag.
-        assert_eq!(item_tags("MILK", &layers), vec!["grocery", "dairy", "milk"]);
+        assert_eq!(
+            item_tags("MILK", &layers),
+            vec!["grocery", "grocery/dairy", "grocery/dairy/milk"]
+        );
         // An unrecognized line classifies to no tags rather than a guess.
         assert!(item_tags("ZZQW UNKNOWN ITEM", &layers).is_empty());
     }
