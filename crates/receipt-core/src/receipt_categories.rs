@@ -69,6 +69,12 @@ pub struct CategoryRule {
     /// union set `CategoryRuleLayers::exact_only_keywords`, not this field — it is
     /// kept per-rule so the rule can be displayed accurately.
     pub exact_only: bool,
+    /// Tag paths this rule *subtracts* when it matches. Applied after every
+    /// rule's additions and regardless of layer order, so the effect does not
+    /// depend on where the rule sits.
+    pub remove_tags: Vec<String>,
+    /// Rule ids whose match this rule voids entirely when it matches.
+    pub disables: Vec<String>,
     /// Index of the classifier config this rule came from: 0 is the bundled
     /// defaults, 1+ are override layers in the order they were supplied.
     pub layer: usize,
@@ -96,6 +102,10 @@ pub struct BuildRuleEntry {
     /// Priority as declared in the source, **before** the layer boost.
     pub priority: i32,
     pub exact_only: bool,
+    /// See [`CategoryRule::remove_tags`].
+    pub remove_tags: Vec<String>,
+    /// See [`CategoryRule::disables`].
+    pub disables: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -106,7 +116,14 @@ pub struct BuildClassifierConfig {
 
 #[derive(Clone, Debug)]
 pub struct RuleMatch {
+    /// Provenance id of the rule that matched, when it had one — what
+    /// `disables` refers to.
+    pub rule_id: Option<String>,
     pub category: Option<String>,
+    /// The tag paths this rule declares. Subtraction happens at path level:
+    /// removing `grocery/snacks` drops that path but leaves `grocery` standing
+    /// if another surviving path still implies it.
+    pub tag_paths: Vec<String>,
     pub tags: Vec<String>,
     pub matched_keyword: String,
     pub priority: i32,
@@ -384,7 +401,9 @@ pub fn find_all_matches(description: &str, rule_layers: &CategoryRuleLayers) -> 
         }
         if let Some(keyword) = best_keyword {
             matches.push(RuleMatch {
+                rule_id: rule.id.clone(),
                 category: rule.category.clone(),
+                tag_paths: rule.tag_paths.clone(),
                 tags: rule.tags.clone(),
                 matched_keyword: keyword.clone(),
                 priority: rule.priority,
@@ -477,18 +496,7 @@ pub fn build_rule_layers(
                 .iter()
                 .find(|path| account_mapping.contains_key(*path))
                 .cloned();
-            // Expand every declared path to its segments, deduped in first-seen
-            // order, so `["grocery/dairy"]` yields the same `["grocery","dairy"]`
-            // the corpus used to write out by hand.
-            let mut tags: Vec<String> = Vec::new();
-            let mut seen = HashSet::new();
-            for path in &rule.tag_paths {
-                for segment in path.split('/').map(str::trim).filter(|s| !s.is_empty()) {
-                    if seen.insert(segment.to_string()) {
-                        tags.push(segment.to_string());
-                    }
-                }
-            }
+            let tags = expand_tag_paths(&rule.tag_paths);
             if rule.exact_only {
                 for keyword in &rule.keywords {
                     exact_only_keywords.insert(keyword.clone());
@@ -496,6 +504,8 @@ pub fn build_rule_layers(
             }
             rules.push(CategoryRule {
                 id: rule.id,
+                remove_tags: rule.remove_tags,
+                disables: rule.disables,
                 keywords: rule.keywords,
                 tag_paths: rule.tag_paths,
                 category,
@@ -515,12 +525,104 @@ pub fn build_rule_layers(
     }
 }
 
+/// The matches that survive subtraction, plus the tag paths each still carries.
+///
+/// Two subtractive operators run here, both collected from *every* matching rule
+/// before anything is applied — so neither depends on layer order, which is what
+/// makes them explainable in a UI:
+///
+/// * `disables` voids a rule's match outright, by id. **Every** matching rule's
+///   `disables` apply simultaneously, including those of a rule that is itself
+///   disabled — so the disabled set is a pure function of which rules matched,
+///   computed in one pass. The alternative (only surviving rules may disable) is
+///   circular: what survives depends on what disables, and what disables depends
+///   on what survives. Resolving that needs either a fixpoint or an evaluation
+///   order, and both make the outcome harder to explain in a UI than "every rule
+///   that matched had its say".
+/// * `remove_tags` subtracts tag **paths**. Removing `grocery/snacks` drops that
+///   path but leaves `grocery` standing when another surviving path still
+///   implies it, which a flat tag-name subtraction could not express.
+///
+/// A match whose account-claiming path is removed stops claiming that account:
+/// filing an item under Snacks while refusing to tag it `snacks` would be
+/// incoherent.
+pub fn resolve_matches(description: &str, rule_layers: &CategoryRuleLayers) -> Vec<RuleMatch> {
+    let matches = find_all_matches(description, rule_layers);
+
+    let disabled: HashSet<&str> = matches
+        .iter()
+        .flat_map(|matched| {
+            rule_layers.rules[matched.rule_index]
+                .disables
+                .iter()
+                .map(String::as_str)
+        })
+        .collect();
+    let mut surviving: Vec<RuleMatch> = if disabled.is_empty() {
+        matches
+    } else {
+        matches
+            .into_iter()
+            .filter(|matched| {
+                // `map_or(true, ..)` rather than `is_none_or`: the latter is
+                // stable only since 1.82 and this workspace's MSRV is 1.80.
+                matched
+                    .rule_id
+                    .as_deref()
+                    .map_or(true, |id| !disabled.contains(id))
+            })
+            .collect()
+    };
+
+    let removed: HashSet<&str> = surviving
+        .iter()
+        .flat_map(|matched| {
+            rule_layers.rules[matched.rule_index]
+                .remove_tags
+                .iter()
+                .map(String::as_str)
+        })
+        .collect();
+    if !removed.is_empty() {
+        for matched in &mut surviving {
+            matched
+                .tag_paths
+                .retain(|path| !removed.contains(path.as_str()));
+            matched.tags = expand_tag_paths(&matched.tag_paths);
+            if matched
+                .category
+                .as_deref()
+                .is_some_and(|path| removed.contains(path))
+            {
+                matched.category = None;
+            }
+        }
+        surviving.retain(|matched| !matched.tag_paths.is_empty());
+    }
+
+    surviving
+}
+
+/// Expand tag paths to their segment names, deduped in first-seen order.
+pub fn expand_tag_paths(paths: &[String]) -> Vec<String> {
+    let mut tags = Vec::new();
+    let mut seen = HashSet::new();
+    for path in paths {
+        for segment in path.split('/').map(str::trim).filter(|s| !s.is_empty()) {
+            if seen.insert(segment.to_string()) {
+                tags.push(segment.to_string());
+            }
+        }
+    }
+    tags
+}
+
 pub fn classify_item_key(
     description: &str,
     rule_layers: &CategoryRuleLayers,
     default: Option<String>,
 ) -> Option<String> {
-    let matches = find_all_matches(description, rule_layers);
+    let matches = resolve_matches(description, rule_layers);
     let best = matches
         .into_iter()
         .filter(|matched| matched.category.is_some())
@@ -529,7 +631,7 @@ pub fn classify_item_key(
 }
 
 pub fn classify_item_tags(description: &str, rule_layers: &CategoryRuleLayers) -> Vec<String> {
-    let matches = find_all_matches(description, rule_layers);
+    let matches = resolve_matches(description, rule_layers);
     let mut tags = Vec::new();
     let mut seen = HashSet::new();
 
@@ -580,7 +682,7 @@ pub fn sorted_matches_for_debug(
     description: &str,
     rule_layers: &CategoryRuleLayers,
 ) -> Vec<RuleMatch> {
-    let mut matches = find_all_matches(description, rule_layers);
+    let mut matches = resolve_matches(description, rule_layers);
     matches.sort_by(|left, right| compare_match_rank(right, left));
     matches
 }
@@ -799,6 +901,7 @@ mod tests {
                 tag_paths: vec!["project/custom".to_string()],
                 priority: 0,
                 exact_only: false,
+                ..Default::default()
             }],
         };
         let mut accounts = default_category_accounts();
@@ -843,6 +946,7 @@ mod tests {
                 tag_paths: vec!["grocery/staple".to_string()],
                 priority: 20,
                 exact_only: true,
+                ..Default::default()
             }],
         };
         let accounts: HashMap<String, String> = [(

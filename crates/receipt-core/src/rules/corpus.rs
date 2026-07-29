@@ -190,6 +190,14 @@ struct RuleToml {
     /// path up in `[accounts]`.
     #[serde(default)]
     tags: StringOrList,
+    /// Tag paths to subtract when this rule matches. The override format was
+    /// purely additive before this, which is what made "stop tagging MILK as
+    /// dairy" inexpressible.
+    #[serde(default)]
+    remove_tags: StringOrList,
+    /// Rule ids whose match this rule voids.
+    #[serde(default)]
+    disables: StringOrList,
     #[serde(default)]
     priority: i32,
     #[serde(default)]
@@ -212,6 +220,8 @@ fn to_build_config(parsed: &DocumentToml) -> BuildClassifierConfig {
                 tag_paths: normalize_tags(rule.tags.clone().into_trimmed()),
                 priority: rule.priority,
                 exact_only: rule.exact_only,
+                remove_tags: normalize_tags(rule.remove_tags.clone().into_trimmed()),
+                disables: rule.disables.clone().into_trimmed(),
             })
             .collect(),
     }
@@ -231,7 +241,7 @@ fn validate_tag_paths(
     let mut unknown: Vec<String> = Vec::new();
     for config in configs {
         for rule in &config.rules {
-            for path in &rule.tag_paths {
+            for path in rule.tag_paths.iter().chain(rule.remove_tags.iter()) {
                 if !known.contains(path.as_str()) && !unknown.contains(path) {
                     unknown.push(path.clone());
                 }
@@ -244,6 +254,38 @@ fn validate_tag_paths(
     unknown.sort();
     Err(format!(
         "unknown tag path(s) not declared in the vocabulary: {}",
+        unknown.join(", ")
+    ))
+}
+
+/// Reject a `disables` naming a rule id that does not exist.
+///
+/// Same reasoning as the tag-path check: a typo that silently does nothing is
+/// the failure mode this format is trying to leave behind. It does make bundled
+/// rule ids a compatibility surface — they are frozen and additive, which the
+/// bundled corpus states in its header.
+fn validate_disable_ids(configs: &[BuildClassifierConfig]) -> Result<(), String> {
+    let known: std::collections::HashSet<&str> = configs
+        .iter()
+        .flat_map(|c| c.rules.iter())
+        .filter_map(|r| r.id.as_deref())
+        .collect();
+    let mut unknown: Vec<String> = Vec::new();
+    for config in configs {
+        for rule in &config.rules {
+            for id in &rule.disables {
+                if !known.contains(id.as_str()) && !unknown.contains(id) {
+                    unknown.push(id.clone());
+                }
+            }
+        }
+    }
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort();
+    Err(format!(
+        "`disables` names unknown rule id(s): {}",
         unknown.join(", ")
     ))
 }
@@ -320,6 +362,7 @@ pub fn parser_rule_layers_with_overrides(
     }
 
     validate_tag_paths(&configs, &vocabulary)?;
+    validate_disable_ids(&configs)?;
     Ok(finish_layers(build_rule_layers(
         accounts,
         configs,
