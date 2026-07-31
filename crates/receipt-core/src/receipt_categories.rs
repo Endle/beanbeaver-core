@@ -745,6 +745,11 @@ mod tests {
             ("SONICARE TOOTHBRUSH HEADS", "Expenses:PersonalCare:Tooth"),
             ("1474938 COLGATE PR", "Expenses:PersonalCare:Tooth"),
             ("1457015 GLIDE ADV", "Expenses:PersonalCare:Tooth"),
+            // Sensodyne brand name, no generic "TOOTHPASTE" token on the line
+            // (Costco 2026-07-29).
+            ("5592654 PRONAMEL", "Expenses:PersonalCare:Tooth"),
+            // gift card: denomination glued to the brand, matched mid-token
+            ("399 DOORDASH2X50", "Expenses:Food:Restaurant:GiftCard"),
             // dairy (incl. milk/chocolate tiebreak + single-char noise)
             ("Natrel - 2% Partly Skimme", "Expenses:Food:Grocery:Dairy"),
             ("Milk Chocolate 1%", "Expenses:Food:Grocery:Dairy"),
