@@ -256,7 +256,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0031"
-keywords = ["TOOTHPASTE", "TOOTHBRUSH", "MOUTHWASH", "DENTAL FLOSS", "FLOSS", "SONICARE", "COLGATE"]
+keywords = ["TOOTHPASTE", "TOOTHBRUSH", "MOUTHWASH", "DENTAL FLOSS", "FLOSS", "SONICARE", "COLGATE", "PRONAMEL"]
 tags = ["personal_care/tooth"]
 priority = 0
 exact_only = false
@@ -650,5 +650,16 @@ exact_only = false
 id = "legacy_0080"
 keywords = ["LHL"]
 tags = ["grocery/staple"]
+priority = 0
+exact_only = false
+
+[[rules]]
+id = "semantic_tag_0105"
+# Costco prints these as "399 DOORDASH2X50" — the denomination is glued to the
+# brand, so the keyword has to match mid-token, which the substring path does.
+# Unlike LCBO CARD (bare `gift_card`, deliberately account-less), this declares
+# the `restaurant/gift_card` path so the card lands in a real account.
+keywords = ["DOORDASH"]
+tags = ["restaurant/gift_card"]
 priority = 0
 exact_only = false
