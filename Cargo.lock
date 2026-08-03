@@ -267,7 +267,7 @@ dependencies = [
 
 [[package]]
 name = "bb-receipt-ffi"
-version = "0.7.5"
+version = "0.7.6"
 dependencies = [
  "image",
  "ocr-paddle",
@@ -1380,7 +1380,7 @@ dependencies = [
 
 [[package]]
 name = "ocr-paddle"
-version = "0.7.5"
+version = "0.7.6"
 dependencies = [
  "geo",
  "image",
@@ -1778,7 +1778,7 @@ dependencies = [
 
 [[package]]
 name = "receipt-core"
-version = "0.7.5"
+version = "0.7.6"
 dependencies = [
  "regex",
  "serde",
@@ -1788,7 +1788,7 @@ dependencies = [
 
 [[package]]
 name = "receipt-image"
-version = "0.7.5"
+version = "0.7.6"
 dependencies = [
  "image",
  "thiserror 2.0.18",
