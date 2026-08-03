@@ -17,9 +17,22 @@ struct RankedDateCandidate {
     date: SimpleDate,
 }
 
+/// Marks a line as date context, which is what lets `extract_date` consider the
+/// year-first (`26/08/02`) reading at all — see the `ymd2` gate in
+/// [`extract_date`], where a missing hint *discards* that candidate outright.
+///
+/// Matches the `DATE` prefix rather than whole words, because the suffix is
+/// where OCR damage lands and it carries no information. A No Frills receipt
+/// printing `DateTime: 26/08/02` came back as `Datelime`, and the lost word
+/// boundary after `DATE` cost the hint, the year-first reading, and finally the
+/// date itself: 2026-08-02 became 2002-08-26. Keying on the prefix survives any
+/// mangling of `TIME` — `DATETIME`, `DATELIME`, `DATEIIME` all hint alike.
+///
+/// `\bDATE` still requires a boundary *before* the prefix, so `UPDATE` does not
+/// match.
 fn re_date_context_hint() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)\b(DATE(?:TIME)?|TRANS(?:ACTION)?\s*DATE)\b").unwrap())
+    RE.get_or_init(|| Regex::new(r"(?i)\b(DATE\w*|TRANS(?:ACTION)?\s*DATE\w*)").unwrap())
 }
 
 fn re_separated_date() -> &'static Regex {
@@ -615,6 +628,32 @@ mod tests {
         let lines = vec!["02-Apr.-2026 2:27:39p.m.".to_string()];
         let parsed = extract_date(&lines, "", 2026).expect("date should parse");
         assert_eq!((parsed.year, parsed.month, parsed.day), (2026, 4, 2));
+    }
+
+    #[test]
+    fn date_hint_survives_ocr_damage_to_the_datetime_suffix() {
+        // No Frills prints "DateTime: 26/08/02"; PP-OCRv5 read it as "Datelime".
+        // The hint is what admits the year-first reading, so losing it to a
+        // single glyph moved the date 24 years: 2026-08-02 -> 2002-08-26.
+        for label in ["DateTime", "Datelime", "DATETIME", "Dateiime", "Date"] {
+            let lines = vec![format!("{label}: 26/08/02 15:48:10")];
+            let parsed = extract_date(&lines, "", 2026)
+                .unwrap_or_else(|| panic!("date should parse for label {label:?}"));
+            assert_eq!(
+                (parsed.year, parsed.month, parsed.day),
+                (2026, 8, 2),
+                "label {label:?} should read 26/08/02 as year-first"
+            );
+        }
+    }
+
+    #[test]
+    fn date_hint_does_not_fire_inside_a_longer_word() {
+        // `\bDATE` still needs a boundary before the prefix, so "UPDATE" is not
+        // date context and the year-first reading stays gated.
+        let lines = vec!["UPDATED: 26/08/02".to_string()];
+        let parsed = extract_date(&lines, "", 2026).expect("date should parse");
+        assert_ne!((parsed.year, parsed.month, parsed.day), (2026, 8, 2));
     }
 
     #[test]
