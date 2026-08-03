@@ -467,6 +467,58 @@ fn extract_total_raw(lines: &[String]) -> i64 {
     0
 }
 
+/// The most tax a Canadian grocery receipt can plausibly carry, as a fraction of
+/// its subtotal. The real ceiling is 15% (HST in the Atlantic provinces); the
+/// headroom absorbs receipts where part of the basket is zero-rated food and the
+/// printed subtotal excludes a deposit or fee.
+const TAX_PLAUSIBLE_MAX_FRAC: f64 = 0.25;
+
+/// Repair a tax amount that the summary block's label/amount pairing got wrong.
+///
+/// `SUBTOTAL + TAX = TOTAL` is an identity, so any two of the three determine the
+/// third. Both corpus cases are the same underlying defect — the summary block's
+/// right column drifting against its labels — surfacing as a tax that is
+/// *impossible* rather than merely off:
+///
+/// - Pharmasave prints `SUBTOTAL 10.79 / HST 1.40 / TOTAL 12.19`; the column
+///   drifted up a row, so `HST` claimed 10.79 and the tax equalled the subtotal.
+/// - Walmart's `HST` merged onto the TOTAL row as `HST TOTAL $58.94`, so the tax
+///   equalled the total.
+///
+/// Only those two impossibilities (and a tax exceeding
+/// [`TAX_PLAUSIBLE_MAX_FRAC`] of the subtotal) trigger a repair, and only when
+/// `total - subtotal` is itself a plausible tax. A tax that is merely
+/// *inconsistent* by a few cents is left alone: deposits, bottle fees and
+/// post-subtotal discounts all break the identity legitimately, and this must not
+/// start rewriting those.
+fn reconcile_tax(tax: Option<i64>, subtotal: Option<i64>, total: i64) -> Option<i64> {
+    // Both `None` arms return `tax` untouched rather than propagating: no
+    // subtotal means nothing to check against, which is a reason to leave the
+    // tax alone, never to discard it.
+    let (Some(tax), Some(subtotal)) = (tax, subtotal) else {
+        return tax;
+    };
+    if subtotal <= 0 || total <= subtotal {
+        return Some(tax);
+    }
+    let ceiling = (subtotal as f64 * TAX_PLAUSIBLE_MAX_FRAC) as i64;
+    let impossible = tax == total || tax == subtotal || tax > ceiling;
+    if !impossible {
+        return Some(tax);
+    }
+    let derived = total - subtotal;
+    if derived > 0 && derived <= ceiling {
+        Some(derived)
+    } else {
+        Some(tax)
+    }
+}
+
+/// [`extract_tax`], with the summary-block repair above applied.
+pub fn extract_tax_reconciled(lines: &[String], total: i64) -> Option<i64> {
+    reconcile_tax(extract_tax(lines), extract_subtotal(lines), total)
+}
+
 pub fn extract_tax(lines: &[String]) -> Option<i64> {
     for idx in (0..lines.len()).rev() {
         let line_upper = lines[idx].to_ascii_uppercase();
@@ -686,8 +738,47 @@ pub fn extract_subtotal(lines: &[String]) -> Option<i64> {
 mod tests {
     use super::{
         extract_date, extract_subtotal, extract_tax, extract_tenders, extract_total,
-        normalize_decimal_spacing,
+        normalize_decimal_spacing, reconcile_tax,
     };
+
+    #[test]
+    fn tax_equal_to_the_subtotal_is_rederived() {
+        // Pharmasave: the summary column drifted up a row, so HST claimed the
+        // subtotal's 10.79 and TOTAL claimed the tax's 1.40.
+        assert_eq!(reconcile_tax(Some(1079), Some(1079), 1219), Some(140));
+    }
+
+    #[test]
+    fn tax_equal_to_the_total_is_rederived() {
+        // Walmart: "HST" merged onto the TOTAL row as "HST TOTAL $58.94".
+        assert_eq!(reconcile_tax(Some(5894), Some(5380), 5894), Some(514));
+    }
+
+    #[test]
+    fn implausibly_large_tax_is_rederived() {
+        // Half the subtotal is not a Canadian tax rate.
+        assert_eq!(reconcile_tax(Some(5000), Some(10000), 11300), Some(1300));
+    }
+
+    #[test]
+    fn merely_inconsistent_tax_is_left_alone() {
+        // subtotal + tax != total by 10c — a deposit or bottle fee, not a
+        // mis-paired label. Rewriting these is exactly what this must not do.
+        assert_eq!(reconcile_tax(Some(130), Some(1000), 1140), Some(130));
+    }
+
+    #[test]
+    fn tax_is_left_alone_when_the_derived_value_is_implausible() {
+        // Contradictory tax, but total - subtotal is 60% of the subtotal, so the
+        // arithmetic offers nothing better to swap in.
+        assert_eq!(reconcile_tax(Some(1000), Some(1000), 1600), Some(1000));
+    }
+
+    #[test]
+    fn tax_is_left_alone_without_a_subtotal_to_check_against() {
+        assert_eq!(reconcile_tax(Some(5894), None, 5894), Some(5894));
+        assert_eq!(reconcile_tax(None, Some(5380), 5894), None);
+    }
 
     #[test]
     fn comma_read_as_decimal_point_still_yields_a_total() {

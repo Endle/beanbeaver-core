@@ -245,7 +245,7 @@ pub fn parse_receipt(
     let date = parsed_date.map(|value| (value.year, value.month, value.day));
     let date_is_placeholder = date.is_none();
     let total_cents = receipt_fields::extract_total(&lines);
-    let tax_cents = receipt_fields::extract_tax(&lines);
+    let tax_cents = receipt_fields::extract_tax_reconciled(&lines, total_cents);
     let subtotal_cents = receipt_fields::extract_subtotal(&lines);
 
     let mut summary_amounts = HashSet::new();
