@@ -598,7 +598,25 @@ fn looks_like_quantity_expression(text: &str) -> bool {
         || re_parenthetical_offer_prefix().is_match(&normalized)
 }
 
+/// True when a line looks like the store's address / branch header.
+///
+/// The pattern alternates over bare tokens — `RD`, `ST`, `DR`, `ON` — so it
+/// fires on any item whose description happens to contain one: `ON THE GO
+/// BOTTLE`, `TNS RD HT BF BRR`, `5 ON CITRUS`, `YIN ON SWEETENED SOYA DRINK`.
+/// Widening the token list is not the answer; `ON` and `DR` are ordinary
+/// English (`DR PEPPER`), and no spelling of the alternation fixes that.
+///
+/// What separates the two cases is not the words but the **price**: the store
+/// address is printed in the header/footer and never carries one, while an item
+/// row that owns a trailing price is an item by construction. So the address
+/// veto only applies to unpriced lines — see [`is_valid_item_line`], the sole
+/// caller. Priced lines still face every other guard there (summary, section
+/// header, metadata, alpha-ratio), which is what keeps `Tota1$ On Promotion
+/// Item(*)16.93` out.
 fn footer_address_like(text: &str) -> bool {
+    if line_has_trailing_price(text) {
+        return false;
+    }
     re_footer_address_patterns().is_match(&text.to_ascii_uppercase())
 }
 
@@ -1495,7 +1513,43 @@ mod tests {
     // some (e.g. 0.318) land near a math constant (1/π) purely by coincidence.
     #![allow(clippy::approx_constant)]
 
-    use super::{extract_spatial_items, is_price_word, BboxInput, LineInput, PageInput, WordInput};
+    use super::{
+        extract_spatial_items, footer_address_like, is_price_word, BboxInput, LineInput, PageInput,
+        WordInput,
+    };
+
+    #[test]
+    fn address_veto_spares_item_rows_that_own_a_price() {
+        // The pattern alternates over bare tokens, so ordinary items trip it:
+        // No Frills' "ON THE GO BOTTLE" (ON) and "TNS RD HT BF BRR" (RD), plus
+        // T&T's "YIN ON SWEETENED SOYA DRINK". A priced row is an item by
+        // construction, so the veto must not apply to it.
+        for priced in [
+            "03760401787 ON THE GO BOTTLE HMRJ 5.00",
+            "07960651131 TNS RD HT BF BRR MRJ 1.69",
+            "YIN ON SWEETENED SOYA DRINK 4.47",
+            "DR PEPPER 2.99",
+        ] {
+            assert!(
+                !footer_address_like(priced),
+                "priced item row must survive the address veto: {priced:?}"
+            );
+        }
+
+        // Unpriced header/footer address lines are still vetoed — that is the
+        // whole reason the check exists.
+        for address in [
+            "7075 MARKHAM RD, MARKHAM, ON, L3S 3J9",
+            "5762 HWY 7 E, MARKHAM",
+            "Scarborough, ON",
+            "1 Yorktech Dr",
+        ] {
+            assert!(
+                footer_address_like(address),
+                "unpriced address line must still be vetoed: {address:?}"
+            );
+        }
+    }
 
     #[test]
     fn parses_tt_price_with_gst_pst_tax_flags() {
