@@ -14,8 +14,7 @@ use std::sync::OnceLock;
 pub const MIN_CONFIDENCE: f64 = 0.7;
 pub const MIN_TEXT_LENGTH: usize = 2;
 
-// Detection-level deskew via RANSAC over same-row item<->price slopes.
-// See docs/detection_deskew_plan.md for derivation.
+// Detection-level deskew over same-row item<->price slopes.
 pub const DESKEW_MIN_CONFIDENCE: f64 = 0.95;
 pub const DESKEW_MIN_ITEM_WIDTH: f64 = 0.08; // x image_width
 pub const DESKEW_MIN_PRICE_WIDTH: f64 = 0.03;
@@ -24,12 +23,58 @@ pub const DESKEW_ITEM_X_MAX_FRAC: f64 = 0.40;
 pub const DESKEW_PRICE_X_MIN_FRAC: f64 = 0.60;
 pub const DESKEW_Y_WINDOW_PX: f64 = 200.0;
 pub const DESKEW_ANGLE_CAP_DEG: f64 = 5.0;
-pub const DESKEW_MIN_ANGLE_DEG: f64 = 0.3;
+/// Below this the shear is not worth the disturbance it causes.
+///
+/// Not a "too small to bother" nicety — a floor on risk/reward. The drift this
+/// pass exists to remove is on the order of a whole row pitch; at 1.3 deg over a
+/// typical item-to-price span it is barely a third of one, far too little to
+/// re-seat a misgrouped row but quite enough to jostle borderline ones. Measured:
+/// a Costco receipt estimated at 1.34 deg lost a line item when sheared, while
+/// the receipts this pass actually rescues sit at 2.5-4 deg.
+pub const DESKEW_MIN_ANGLE_DEG: f64 = 1.5;
 pub const DESKEW_INLIER_TOL_DEG: f64 = 0.2;
 pub const DESKEW_MIN_INLIERS: usize = 5;
-pub const DESKEW_MIN_CONSENSUS: f64 = 0.60;
-pub const DESKEW_RANSAC_ITERS: usize = 50;
-pub const DESKEW_RANSAC_SEED: u64 = 0;
+
+/// Fraction of the *item rows that could pair at all* whose slope must agree
+/// with the winning angle.
+///
+/// This is deliberately not a fraction of the raw candidate pairs. Candidates
+/// are the item x price cross-product inside [`DESKEW_Y_WINDOW_PX`], and that
+/// window spans several rows on a real receipt (~30px pitch vs a 200px window),
+/// so only ~1 pair in 10 can ever be same-row. Measured over the 124-fixture
+/// corpus, a pair-fraction gate of 0.60 was unreachable on *every* receipt —
+/// the deskew pass had never once fired in production. Counting distinct item
+/// rows instead makes the denominator the thing we actually care about.
+///
+/// 0.25 rather than something higher because the band is genuinely narrow: two
+/// scans of the *same physical receipt* minutes apart measured 0.316 and 0.273,
+/// one deskewing correctly and the other declining and reverting to a shifted
+/// summary block. Consensus, row tightening and the runner-up margin were all
+/// checked as ways to separate good from bad in the 0.25-0.32 band and none of
+/// them does; what keeps the band safe is [`DESKEW_MIN_ANGLE_DEG`], which
+/// excludes the sub-row corrections that have nothing to gain.
+pub const DESKEW_MIN_ROW_CONSENSUS: f64 = 0.25;
+
+/// The estimated shear must also tighten rows by this fraction, measured over
+/// *all* detections, before it is applied.
+///
+/// The pair estimator alone cannot break one-row aliasing: an angle off by
+/// exactly one row pitch re-labels which price belongs to which item and scores
+/// nearly as well. Row tightness is an independent signal — aliasing smears
+/// rows, a true deskew compacts them — so it corroborates, never searches.
+///
+/// Calibrated, not derived. With the estimator ungated, 11 corpus receipts
+/// cleared every other check. Ranked by this score the outcomes separate:
+/// everything at or below 0.018 either regressed (a subtotal/tax swap at 0.000,
+/// a date read as 2030 at 0.000, a subtotal lost to 0.00 at 0.012, a dropped
+/// T&T line item at 0.018) and everything at or above 0.029 improved or was
+/// inert. A shear that makes rows no tighter is one the pair evidence
+/// hallucinated.
+///
+/// Treat this as a fitted threshold, not a law — it rests on ~11 receipts. The
+/// safe direction is up: declining only falls back to the un-deskewed geometry
+/// that shipped before, while accepting a bad angle actively corrupts rows.
+pub const DESKEW_MIN_ROW_TIGHTENING: f64 = 0.025;
 
 /// Numeric view of a detection. Field names mirror the Python detection dict.
 #[derive(Clone, Debug, Default)]
@@ -135,11 +180,20 @@ fn bbox_x_extent(bbox: &[(f64, f64)]) -> (f64, f64, f64) {
     (x_min, x_max, sum / bbox.len() as f64)
 }
 
-/// Cross-product item/price candidate angles, filtered by column/width/proximity.
+/// One item<->price pairing: its implied tilt angle and which item row it came
+/// from. The owning row is what the consensus gate counts, so a single item
+/// pairing with six prices cannot vote six times.
+#[derive(Clone, Copy)]
+struct PairCandidate {
+    angle_deg: f64,
+    item_index: usize,
+}
+
+/// Cross-product item/price candidates, filtered by column/width/proximity.
 ///
-/// Mispairings are expected to fall out as RANSAC outliers rather than being
-/// filtered upfront. Only the implied tilt angle of each pair is retained.
-fn build_pair_candidate_angles(detections: &[Detection], image_width: f64) -> Vec<f64> {
+/// Mispairings are expected to fall out when the angle is chosen rather than
+/// being filtered upfront.
+fn build_pair_candidates(detections: &[Detection], image_width: f64) -> Vec<PairCandidate> {
     let item_x_max_cap = image_width * DESKEW_ITEM_X_MAX_FRAC;
     let price_x_min_floor = image_width * DESKEW_PRICE_X_MIN_FRAC;
     let min_item_width = image_width * DESKEW_MIN_ITEM_WIDTH;
@@ -172,8 +226,8 @@ fn build_pair_candidate_angles(detections: &[Detection], image_width: f64) -> Ve
         }
     }
 
-    let mut candidates: Vec<f64> = Vec::new();
-    for &(icx, icy) in &items {
+    let mut candidates: Vec<PairCandidate> = Vec::new();
+    for (item_index, &(icx, icy)) in items.iter().enumerate() {
         for &(pcx, pcy) in &prices {
             let dx = pcx - icx;
             if dx < min_x_distance {
@@ -182,86 +236,151 @@ fn build_pair_candidate_angles(detections: &[Detection], image_width: f64) -> Ve
             if (pcy - icy).abs() > DESKEW_Y_WINDOW_PX {
                 continue;
             }
-            candidates.push((pcy - icy).atan2(dx).to_degrees());
+            candidates.push(PairCandidate {
+                angle_deg: (pcy - icy).atan2(dx).to_degrees(),
+                item_index,
+            });
         }
     }
     candidates
 }
 
-/// Deterministic splitmix64 PRNG used for reproducible RANSAC sampling.
-struct SplitMix64 {
-    state: u64,
+/// Distinct item rows represented in a candidate set.
+fn distinct_rows(candidates: &[PairCandidate]) -> usize {
+    let mut rows: Vec<usize> = candidates.iter().map(|c| c.item_index).collect();
+    rows.sort_unstable();
+    rows.dedup();
+    rows.len()
 }
 
-impl SplitMix64 {
-    fn new(seed: u64) -> Self {
-        Self { state: seed }
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    fn below(&mut self, bound: usize) -> usize {
-        (self.next_u64() % bound as u64) as usize
-    }
-
-    /// Three distinct indices in `[0, n)`; caller guarantees `n >= 3`.
-    fn sample3(&mut self, n: usize) -> [usize; 3] {
-        let a = self.below(n);
-        let mut b = self.below(n);
-        while b == a {
-            b = self.below(n);
-        }
-        let mut c = self.below(n);
-        while c == a || c == b {
-            c = self.below(n);
-        }
-        [a, b, c]
-    }
-}
-
-fn median3(a: f64, b: f64, c: f64) -> f64 {
-    a.max(b).min(a.max(c)).max(b.min(c))
-}
-
-/// RANSAC over candidate angles: returns (best_angle_deg, inlier_count).
+/// Best-supported tilt angle over the candidate pairs.
 ///
-/// Deterministic via `DESKEW_RANSAC_SEED` so a given input always yields the
-/// same output. Unlike the prior Python implementation it uses a splitmix64
-/// PRNG instead of CPython's Mersenne Twister; consensus over inliers converges
-/// to the same tilt within the pipeline's tolerance.
-fn ransac_consensus(candidates: &[f64]) -> (f64, usize) {
+/// Every candidate angle inside the cap is tried as a cluster centre and scored
+/// by how many *distinct item rows* fall within [`DESKEW_INLIER_TOL_DEG`] of it;
+/// the winner's inlier angles are averaged. Returns
+/// `(angle_deg, inlier_pairs, inlier_rows, runner_up_rows)`, where the runner-up
+/// is the best cluster more than a degree away — the one-row-aliasing decoy.
+///
+/// This replaced a 50-iteration seeded RANSAC. On a dense receipt only ~1 pair
+/// in 10 is genuinely same-row, so three-sample trials found the true cluster
+/// only by luck; on the receipt that prompted this it locked onto a 7-pair
+/// cluster at -0.12 deg and missed the real 10-pair cluster at -3.47 deg. The
+/// candidate pool is ~100 angles, so scanning it exhaustively is both cheap and
+/// deterministic — no seed, no iteration budget, no luck.
+fn best_supported_angle(candidates: &[PairCandidate]) -> (f64, usize, usize, usize) {
     if candidates.len() < 3 {
-        return (0.0, 0);
+        return (0.0, 0, 0, 0);
     }
-    let mut rng = SplitMix64::new(DESKEW_RANSAC_SEED);
-    let mut best_angle = 0.0;
-    let mut best_inliers = 0usize;
-    for _ in 0..DESKEW_RANSAC_ITERS {
-        let [i, j, k] = rng.sample3(candidates.len());
-        let trial = median3(candidates[i], candidates[j], candidates[k]);
-        if trial.abs() > DESKEW_ANGLE_CAP_DEG {
+    let cluster_at = |trial: f64| -> (f64, usize, usize) {
+        let inliers: Vec<PairCandidate> = candidates
+            .iter()
+            .copied()
+            .filter(|c| (c.angle_deg - trial).abs() <= DESKEW_INLIER_TOL_DEG)
+            .collect();
+        if inliers.is_empty() {
+            return (0.0, 0, 0);
+        }
+        let mean = inliers.iter().map(|c| c.angle_deg).sum::<f64>() / inliers.len() as f64;
+        (mean, inliers.len(), distinct_rows(&inliers))
+    };
+
+    let mut best = (0.0f64, 0usize, 0usize);
+    for candidate in candidates {
+        if candidate.angle_deg.abs() > DESKEW_ANGLE_CAP_DEG {
             continue;
         }
-        let mut sum = 0.0;
-        let mut count = 0usize;
-        for &angle in candidates {
-            if (angle - trial).abs() <= DESKEW_INLIER_TOL_DEG {
-                sum += angle;
-                count += 1;
-            }
-        }
-        if count > best_inliers {
-            best_inliers = count;
-            best_angle = sum / count as f64;
+        let scored = cluster_at(candidate.angle_deg);
+        // Rows first, pairs as the tie-break: two angles explaining the same
+        // number of rows are separated by how much evidence backs them.
+        if (scored.2, scored.1) > (best.2, best.1) {
+            best = scored;
         }
     }
-    (best_angle, best_inliers)
+
+    let mut runner_up_rows = 0usize;
+    for candidate in candidates {
+        if candidate.angle_deg.abs() > DESKEW_ANGLE_CAP_DEG
+            || (candidate.angle_deg - best.0).abs() <= 1.0
+        {
+            continue;
+        }
+        runner_up_rows = runner_up_rows.max(cluster_at(candidate.angle_deg).2);
+    }
+
+    (best.0, best.1, best.2, runner_up_rows)
+}
+
+/// Cost of the row partition induced by shearing all detections by `angle_deg`:
+/// total within-row vertical spread, plus one `link` per row.
+///
+/// Rows are single-linkage clusters of sheared `center_y`. The per-row term is
+/// what makes the measure fragmentation-proof: splitting a row into two
+/// singletons drops its spread to zero but buys another `link`, so it only pays
+/// off when the row was genuinely more than `link` tall — i.e. when it was not
+/// one row to begin with. Without that term an extreme angle shatters every row
+/// into singletons and scores a perfect zero, which is precisely the failure
+/// that retired the pixel-level projection-profile deskew.
+///
+/// This is the corroborating signal, never the search: it is evaluated at the
+/// estimated angle and at zero, and nowhere else.
+fn row_partition_cost(
+    detections: &[Detection],
+    angle_deg: f64,
+    image_width: f64,
+    link: f64,
+) -> f64 {
+    let tan_angle = angle_deg.to_radians().tan();
+    let x_ref = image_width / 2.0;
+    let mut ys: Vec<f64> = detections
+        .iter()
+        .map(|det| {
+            let count = det.bbox.len().max(1) as f64;
+            let x_center = det.bbox.iter().map(|&(x, _)| x).sum::<f64>() / count;
+            det.center_y - (x_center - x_ref) * tan_angle
+        })
+        .collect();
+    ys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+
+    let mut total = 0.0;
+    let mut rows = 0usize;
+    let mut start = 0usize;
+    for index in 1..=ys.len() {
+        if index == ys.len() || ys[index] - ys[index - 1] > link {
+            total += ys[index - 1] - ys[start];
+            rows += 1;
+            start = index;
+        }
+    }
+    total + rows as f64 * link
+}
+
+/// Median text height, the receipt's natural vertical scale.
+///
+/// Taken from the quad's short side rather than `y_max - y_min`, because the
+/// axis-aligned extent of a *tilted* box grows with its width: a 600px-wide
+/// footer line at 3.5 deg reads ~37px taller than the glyphs actually are. On
+/// the receipt that prompted this change that inflated the row-link distance to
+/// 43px against a 30px row pitch — larger than the rows it was meant to
+/// separate. The short side is invariant under exactly the rotation being
+/// measured.
+fn median_text_height(detections: &[Detection]) -> f64 {
+    let mut heights: Vec<f64> = detections
+        .iter()
+        .map(|det| {
+            if det.bbox.len() < 4 {
+                return det.y_max - det.y_min;
+            }
+            let side =
+                |a: (f64, f64), b: (f64, f64)| ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+            side(det.bbox[0], det.bbox[1]).min(side(det.bbox[1], det.bbox[2]))
+        })
+        .filter(|height| *height > 0.0)
+        .collect();
+    if heights.is_empty() {
+        return 0.0;
+    }
+    heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    heights[heights.len() / 2]
 }
 
 /// New `(center_y, y_min, y_max)` per detection after vertical shear correction.
@@ -286,21 +405,42 @@ pub struct DeskewOutcome {
     pub gate_reason: Option<&'static str>,
     pub candidate_count: usize,
     pub inlier_count: usize,
+    /// Distinct item rows agreeing with `angle_deg`, over the item rows that
+    /// produced any candidate at all. Not a fraction of candidate *pairs* — see
+    /// [`DESKEW_MIN_ROW_CONSENSUS`].
     pub consensus_ratio: f64,
+    /// How much `angle_deg` tightens rows relative to no shear, as a fraction
+    /// of the unsheared spread. See [`DESKEW_MIN_ROW_TIGHTENING`].
+    pub row_tightening: f64,
     pub new_y: Option<Vec<(f64, f64, f64)>>,
 }
 
 /// Vertical shear correction driven by same-row item<->price slopes.
 ///
 /// Bias is "miss safely": a wrong correction can push borderline rows out of
-/// the matcher's y-band, so the pass only fires when consensus is strong, the
-/// angle is in band, and large enough to matter.
+/// the matcher's y-band, so the pass only fires when the angle is in band,
+/// large enough to matter, agreed on by enough item rows, clearly better than
+/// the one-row-aliased runner-up, and corroborated by rows actually tightening.
 pub fn deskew(detections: &[Detection], image_width: f64) -> DeskewOutcome {
-    let candidates = build_pair_candidate_angles(detections, image_width);
+    let candidates = build_pair_candidates(detections, image_width);
     let candidate_count = candidates.len();
-    let (angle, inliers) = ransac_consensus(&candidates);
-    let consensus_ratio = if candidate_count > 0 {
-        inliers as f64 / candidate_count as f64
+    let (angle, inliers, inlier_rows, runner_up_rows) = best_supported_angle(&candidates);
+    let pairable_rows = distinct_rows(&candidates);
+    let consensus_ratio = if pairable_rows > 0 {
+        inlier_rows as f64 / pairable_rows as f64
+    } else {
+        0.0
+    };
+
+    let link = median_text_height(detections) * 0.5;
+    let cost_unsheared = if link > 0.0 {
+        row_partition_cost(detections, 0.0, image_width, link)
+    } else {
+        0.0
+    };
+    let row_tightening = if cost_unsheared > 0.0 {
+        let sheared = row_partition_cost(detections, angle, image_width, link);
+        ((cost_unsheared - sheared) / cost_unsheared).max(0.0)
     } else {
         0.0
     };
@@ -311,10 +451,16 @@ pub fn deskew(detections: &[Detection], image_width: f64) -> DeskewOutcome {
         Some("too_few_inliers")
     } else if angle.abs() > DESKEW_ANGLE_CAP_DEG {
         Some("angle_too_large")
-    } else if consensus_ratio < DESKEW_MIN_CONSENSUS {
+    } else if consensus_ratio < DESKEW_MIN_ROW_CONSENSUS {
         Some("weak_consensus")
+    } else if inlier_rows <= runner_up_rows {
+        // A one-row-aliased angle explains a different but equally large set of
+        // rows. Ties are not evidence; decline rather than guess.
+        Some("ambiguous_angle")
     } else if angle.abs() < DESKEW_MIN_ANGLE_DEG {
         Some("angle_too_small")
+    } else if row_tightening < DESKEW_MIN_ROW_TIGHTENING {
+        Some("rows_not_tightened")
     } else {
         None
     };
@@ -327,6 +473,7 @@ pub fn deskew(detections: &[Detection], image_width: f64) -> DeskewOutcome {
             candidate_count,
             inlier_count: inliers,
             consensus_ratio,
+            row_tightening,
             new_y: None,
         };
     }
@@ -339,6 +486,7 @@ pub fn deskew(detections: &[Detection], image_width: f64) -> DeskewOutcome {
         candidate_count,
         inlier_count: inliers,
         consensus_ratio,
+        row_tightening,
         new_y: Some(new_y),
     }
 }
@@ -479,6 +627,135 @@ mod tests {
         }
         let outcome = deskew(&tilted, 1000.0);
         assert_eq!(outcome.gate_reason, Some("no_candidates"));
+    }
+
+    /// A dense receipt: many rows inside `DESKEW_Y_WINDOW_PX`, so most
+    /// item x price pairs are cross-row noise. This is the regime the pass used
+    /// to be blind in — every real receipt looks like this, and the pair-count
+    /// consensus gate was mathematically unreachable on all of them.
+    fn dense_rows(n: usize, pitch: f64) -> Vec<Detection> {
+        let mut rows = Vec::new();
+        for i in 0..n {
+            let cy = 400.0 + i as f64 * pitch;
+            rows.push(det(&format!("0512300{i:04}"), 200.0, cy, 200.0));
+            rows.push(det(
+                &format!("{:.2}", (i + 1) as f64 * 1.99),
+                850.0,
+                cy,
+                80.0,
+            ));
+        }
+        rows
+    }
+
+    #[test]
+    fn deskew_fires_on_a_dense_receipt_where_pairs_are_mostly_cross_row() {
+        let true_angle = -2.5;
+        let tilted: Vec<Detection> = dense_rows(14, 30.0)
+            .iter()
+            .map(|d| tilt(d, true_angle, 1000.0))
+            .collect();
+        let outcome = deskew(&tilted, 1000.0);
+
+        // Most pairs are cross-row: a 200px window over a 30px pitch admits ~6
+        // rows either side, so the pair fraction stays far below the 0.60 the
+        // old gate demanded.
+        let pair_fraction = outcome.inlier_count as f64 / outcome.candidate_count as f64;
+        assert!(
+            pair_fraction < 0.60,
+            "pair fraction {pair_fraction} — fixture is not dense enough to be the regression it guards"
+        );
+        assert!(outcome.applied, "gate said {:?}", outcome.gate_reason);
+        assert!((outcome.angle_deg - true_angle).abs() < 0.05);
+    }
+
+    #[test]
+    fn deskew_consensus_counts_rows_not_pair_votes() {
+        // One item row paired against many prices must not out-vote the rest of
+        // the receipt just by appearing in more pairs.
+        let candidates: Vec<PairCandidate> = (0..9)
+            .map(|_| PairCandidate {
+                angle_deg: 2.0,
+                item_index: 0,
+            })
+            .chain((1..4).map(|row| PairCandidate {
+                angle_deg: -1.0,
+                item_index: row,
+            }))
+            .collect();
+        let (angle, pairs, rows, _) = best_supported_angle(&candidates);
+        assert_eq!(rows, 3, "three distinct rows agree on -1.0");
+        assert_eq!(pairs, 3);
+        assert!((angle + 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn deskew_declines_when_the_aliased_runner_up_ties() {
+        // Two angles a full row apart, each explaining the same number of rows:
+        // that is one-row aliasing, not evidence.
+        let candidates: Vec<PairCandidate> = (0..5)
+            .map(|row| PairCandidate {
+                angle_deg: 2.0,
+                item_index: row,
+            })
+            .chain((5..10).map(|row| PairCandidate {
+                angle_deg: -2.0,
+                item_index: row,
+            }))
+            .collect();
+        let (_, _, rows, runner_up) = best_supported_angle(&candidates);
+        assert_eq!(rows, runner_up, "the decoy must tie the winner");
+    }
+
+    #[test]
+    fn row_partition_cost_penalizes_shattering_rows() {
+        // The guard that keeps this from becoming the projection-profile trap:
+        // an absurd angle scatters every detection into its own row, which must
+        // cost more than the honest partition, not less.
+        let dets = dense_rows(10, 30.0);
+        let link = median_text_height(&dets) * 0.5;
+        let honest = row_partition_cost(&dets, 0.0, 1000.0, link);
+        let shattered = row_partition_cost(&dets, 45.0, 1000.0, link);
+        assert!(
+            shattered > honest,
+            "shattered {shattered} should cost more than honest {honest}"
+        );
+    }
+
+    #[test]
+    fn median_text_height_is_not_inflated_by_tilt() {
+        // y_max - y_min grows with width once a box is rotated; the quad's short
+        // side does not. A wide line must not drag the row-link scale up.
+        let mut wide = det("A VERY WIDE FOOTER LINE", 500.0, 1000.0, 600.0);
+        let half_h = (wide.y_max - wide.y_min) / 2.0;
+        let angle: f64 = 4.0_f64.to_radians();
+        let (sin, cos) = angle.sin_cos();
+        wide.bbox = wide
+            .bbox
+            .iter()
+            .map(|&(x, y)| {
+                let (dx, dy) = (x - 500.0, y - 1000.0);
+                (500.0 + dx * cos - dy * sin, 1000.0 + dx * sin + dy * cos)
+            })
+            .collect();
+        wide.y_min = wide.bbox.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+        wide.y_max = wide
+            .bbox
+            .iter()
+            .map(|p| p.1)
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        let axis_aligned_extent = wide.y_max - wide.y_min;
+        let measured = median_text_height(std::slice::from_ref(&wide));
+        assert!(
+            axis_aligned_extent > 2.0 * half_h * 1.5,
+            "fixture should be badly inflated, got {axis_aligned_extent}"
+        );
+        assert!(
+            (measured - 2.0 * half_h).abs() < 1.0,
+            "expected the true glyph height {}, got {measured}",
+            2.0 * half_h
+        );
     }
 
     #[test]

@@ -47,6 +47,16 @@ fn normalize(mut dets: Vec<Detection>, image_width: f64) -> Vec<Detection> {
     let outcome = deskew(&dets, image_width);
     if let Some(new_y) = outcome.new_y {
         for (det, (center_y, y_min, y_max)) in dets.iter_mut().zip(new_y) {
+            // The corner points have to move with the summary fields. Line
+            // grouping reads y_min/y_max/center_y, but the spatial path builds
+            // its BboxInput top/bottom straight off `bbox`, so leaving the
+            // corners behind hands the two paths different geometry for the
+            // same detection. Re-derive the shift from center_y rather than
+            // recomputing the shear, so the two can never drift apart.
+            let delta = det.center_y - center_y;
+            for point in &mut det.bbox {
+                point.1 -= delta;
+            }
             det.center_y = center_y;
             det.y_min = y_min;
             det.y_max = y_max;
