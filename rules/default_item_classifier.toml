@@ -16,7 +16,7 @@ id = "legacy_0000"
 # exact match, beating the snacks rule's fuzzy "CHOCOLATE" hit on the
 # is_exact tiebreaker. Order matters: do not move "MILK CHOCOLATE" below
 # "CHOCOLATE MILK".
-keywords = ["EGG", "EGGS", "MILK CHOCOLATE", "STRAWBERRY MILK", "CHOCOLATE MILK", "CHOC MILK", "CHOC MLK", "MILK", "CHEESE", "YOGURT", "YOGOURT", "BUTTER", "CREAM", "SOUR CREAM", "COTTAGE", "MARGARINE", "CHEDDAR", "MOZZARELLA", "PARMESAN", "SWEETENED SOYA", "NATREL", "TRUTASTE", "NEILSON"]
+keywords = ["EGG", "EGGS", "MILK CHOCOLATE", "STRAWBERRY MILK", "CHOCOLATE MILK", "CHOC MILK", "CHOC MLK", "MILK", "CHEESE", "YOGURT", "YOGOURT", "YOG", "BUTTER", "CREAM", "SOUR CREAM", "COTTAGE", "MARGARINE", "CHEDDAR", "MOZZARELLA", "PARMESAN", "SWEETENED SOYA", "NATREL", "TRUTASTE", "NEILSON"]
 tags = ["grocery/dairy"]
 priority = 0
 exact_only = false
