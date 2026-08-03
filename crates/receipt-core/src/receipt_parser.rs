@@ -381,6 +381,50 @@ pub fn parse_receipt(
                 after_item_index: None,
             });
         }
+
+        // Undershoot is the other half, and it used to say nothing at all: the
+        // formatter quietly closes the gap with an `Expenses:FIXME` remainder,
+        // so a receipt could be *entirely* mis-paired and still report clean.
+        // A No Frills scan lost one item and gave the remaining three their
+        // neighbours' prices, and the only trace was a 3.78 plug nobody saw.
+        //
+        // Warning on every undershoot is noise — 23 of 122 receipts, most of
+        // them a few cents. What makes it a signal is asking the question
+        // against the printed SUBTOTAL instead of the total: fees, deposits,
+        // rounding and tax defects all live *between* subtotal and total, so
+        // measuring there is what mixes them into the item-block question.
+        //
+        // Measured over the corpus, the two deltas triangulate:
+        //
+        //   items != subtotal, posted != total -> the item block is wrong (16)
+        //   items != subtotal, posted == total -> the SUBTOTAL was misread (2)
+        //   items == subtotal, posted != total -> items fine, tax/fees (9)
+        //
+        // Only the first is a missing or spurious line, and requiring both to
+        // disagree is what removes the entire sub-dollar noise band — every
+        // 9c/10c/15c/20c case in the corpus lands in the third bucket.
+        if let Some(subtotal_cents) = subtotal_cents {
+            let items_cents = posted_cents - tax_cents.unwrap_or(0);
+            let item_block_delta = items_cents - subtotal_cents;
+            if item_block_delta != 0 && posted_cents != total_cents {
+                let (verb, amount) = if item_block_delta < 0 {
+                    ("short of", -item_block_delta)
+                } else {
+                    ("more than", item_block_delta)
+                };
+                warnings.push(ParsedReceiptWarning {
+                    message: format!(
+                        "items total {}, {} the receipt's subtotal of {} by {} — a line was probably {}",
+                        cents_to_fixed(items_cents),
+                        verb,
+                        cents_to_fixed(subtotal_cents),
+                        cents_to_fixed(amount),
+                        if item_block_delta < 0 { "missed" } else { "counted twice" },
+                    ),
+                    after_item_index: None,
+                });
+            }
+        }
     }
 
     let tenders = receipt_fields::extract_tenders(&lines, total_cents)
@@ -486,6 +530,50 @@ mod tests {
                 && balance[0].message.contains(&cents_to_fixed(posted - 2_625)),
             "message should name the posted total, the receipt total and the gap: {}",
             balance[0].message
+        );
+    }
+
+    #[test]
+    fn warns_when_items_disagree_with_the_printed_subtotal() {
+        // The signal case: items fall short of the printed subtotal *and* the
+        // postings miss the total, so a line was genuinely lost.
+        let parsed = parse_text(
+            "NOFRILLS\n\
+             MILK 4.00\n\
+             BREAD 3.00\n\
+             SUBTOTAL 10.00\n\
+             HST 1.30\n\
+             TOTAL 11.30\n",
+        );
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("short of the receipt's subtotal")),
+            "warnings were {:?}",
+            parsed.warnings
+        );
+    }
+
+    #[test]
+    fn does_not_warn_when_only_fees_sit_between_subtotal_and_total() {
+        // items == subtotal exactly, but posted != total because of a deposit
+        // between them. This is the whole sub-dollar noise band the corpus is
+        // full of, and it must stay silent.
+        let parsed = parse_text(
+            "NOFRILLS\n\
+             MILK 4.00\n\
+             BREAD 3.00\n\
+             SUBTOTAL 7.00\n\
+             TOTAL 7.10\n",
+        );
+        assert!(
+            !parsed
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("subtotal")),
+            "warnings were {:?}",
+            parsed.warnings
         );
     }
 
