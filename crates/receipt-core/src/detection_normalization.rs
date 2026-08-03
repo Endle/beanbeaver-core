@@ -23,7 +23,15 @@ pub const DESKEW_ITEM_X_MAX_FRAC: f64 = 0.40;
 pub const DESKEW_PRICE_X_MIN_FRAC: f64 = 0.60;
 pub const DESKEW_Y_WINDOW_PX: f64 = 200.0;
 pub const DESKEW_ANGLE_CAP_DEG: f64 = 5.0;
-pub const DESKEW_MIN_ANGLE_DEG: f64 = 0.3;
+/// Below this the shear is not worth the disturbance it causes.
+///
+/// Not a "too small to bother" nicety — a floor on risk/reward. The drift this
+/// pass exists to remove is on the order of a whole row pitch; at 1.3 deg over a
+/// typical item-to-price span it is barely a third of one, far too little to
+/// re-seat a misgrouped row but quite enough to jostle borderline ones. Measured:
+/// a Costco receipt estimated at 1.34 deg lost a line item when sheared, while
+/// the receipts this pass actually rescues sit at 2.5-4 deg.
+pub const DESKEW_MIN_ANGLE_DEG: f64 = 1.5;
 pub const DESKEW_INLIER_TOL_DEG: f64 = 0.2;
 pub const DESKEW_MIN_INLIERS: usize = 5;
 
@@ -37,7 +45,15 @@ pub const DESKEW_MIN_INLIERS: usize = 5;
 /// corpus, a pair-fraction gate of 0.60 was unreachable on *every* receipt —
 /// the deskew pass had never once fired in production. Counting distinct item
 /// rows instead makes the denominator the thing we actually care about.
-pub const DESKEW_MIN_ROW_CONSENSUS: f64 = 0.30;
+///
+/// 0.25 rather than something higher because the band is genuinely narrow: two
+/// scans of the *same physical receipt* minutes apart measured 0.316 and 0.273,
+/// one deskewing correctly and the other declining and reverting to a shifted
+/// summary block. Consensus, row tightening and the runner-up margin were all
+/// checked as ways to separate good from bad in the 0.25-0.32 band and none of
+/// them does; what keeps the band safe is [`DESKEW_MIN_ANGLE_DEG`], which
+/// excludes the sub-row corrections that have nothing to gain.
+pub const DESKEW_MIN_ROW_CONSENSUS: f64 = 0.25;
 
 /// The estimated shear must also tighten rows by this fraction, measured over
 /// *all* detections, before it is applied.

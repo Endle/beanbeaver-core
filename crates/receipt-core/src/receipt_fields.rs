@@ -275,6 +275,16 @@ fn extract_total_raw(lines: &[String]) -> i64 {
             if next_upper.contains("DISCOUNT") {
                 continue;
             }
+            // The same label can split the other way once line grouping shifts:
+            // Costco's "TOTAL DISCOUNT(S) $9.00" can regroup as "DISCOUNT(S)"
+            // then "TOTAL $ 9.00", leaving a TOTAL row holding the discount.
+            // Only a *bare* discount label means the qualifier was split off —
+            // a real discount row carries its own amount, and suppressing the
+            // total after one of those would be wrong.
+            if prev_upper.contains("DISCOUNT") && extract_price_from_line(&lines[idx - 1]).is_none()
+            {
+                continue;
+            }
             if prev_upper.contains("TOTAL NUMBER OF ITEMS SOLD") {
                 continue;
             }
@@ -633,6 +643,32 @@ mod tests {
         ];
 
         assert_eq!(extract_total(&lines), 11_295);
+    }
+
+    #[test]
+    fn total_row_holding_a_split_off_discount_label_is_not_the_grand_total() {
+        // Costco 2026-03-07_costco_466_68: once line grouping shifts, the
+        // "TOTAL DISCOUNT(S) $9.00" row can split, stranding a bare
+        // "DISCOUNT(S)" above a "TOTAL $ 9.00" that is really the discount.
+        let lines = vec![
+            "AMOUNT: 441.68".to_string(),
+            "466.68".to_string(),
+            "NUMBER OF".to_string(),
+            "TOTAL ITEMS SOLD".to_string(),
+            "DISCOUNT(S)".to_string(),
+            "TOTAL $ 9.00".to_string(),
+        ];
+
+        assert_ne!(extract_total(&lines), 900);
+    }
+
+    #[test]
+    fn discount_row_carrying_its_own_amount_still_allows_a_real_total() {
+        // The guard above must stay narrow: a discount line that has its own
+        // number is an ordinary row, and the total after it is genuine.
+        let lines = vec!["DISCOUNT 5.00".to_string(), "TOTAL 95.00".to_string()];
+
+        assert_eq!(extract_total(&lines), 9_500);
     }
 
     #[test]
