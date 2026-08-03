@@ -718,6 +718,16 @@ mod tests {
     #[test]
     fn public_classifier_categorizes_real_receipt_items() {
         let cases: &[(&str, &str)] = &[
+            // staple — corn starch is sold beside the flour, but the produce
+            // rule's bare "CORN" claimed it until "CORN STARCH" outgrew it on
+            // the keyword-length tiebreak.
+            ("WN CORN STARCH", "Expenses:Food:Grocery:Staple"),
+            ("Cornstarch 454g", "Expenses:Food:Grocery:Staple"),
+            // dairy — Neilson TruTaste milk matched no rule at all and fell
+            // through to FIXME. TRUTASTE carries the match because the brand
+            // token is what OCR mangles ("NLSN" -> "WLSN"/"HLSN"), not this.
+            ("NLSN TRUTASTE 2%", "Expenses:Food:Grocery:Dairy"),
+            ("WLSN TRUTASTE 28", "Expenses:Food:Grocery:Dairy"),
             // seasoning
             (
                 "SAPORITO FOODS CORN OIL 2.84L",
