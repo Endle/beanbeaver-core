@@ -723,6 +723,13 @@ mod tests {
             // the keyword-length tiebreak.
             ("WN CORN STARCH", "Expenses:Food:Grocery:Staple"),
             ("Cornstarch 454g", "Expenses:Food:Grocery:Staple"),
+            // fruit — receipts print the vowel-dropped abbreviation, which the
+            // full "WATERMELON" keyword never matches, so the drinks rule's
+            // bare "WATER" claimed it.
+            ("WATERMLN SGRBABY MRJ", "Expenses:Food:Grocery:Fruit"),
+            ("WTRMLN SEEDLESS", "Expenses:Food:Grocery:Fruit"),
+            // ...without dragging actual water out of the drinks rule.
+            ("SPRING WATER 24PK", "Expenses:Food:Grocery:Drink"),
             // dairy — Neilson TruTaste milk matched no rule at all and fell
             // through to FIXME. TRUTASTE carries the match because the brand
             // token is what OCR mangles ("NLSN" -> "WLSN"/"HLSN"), not this.

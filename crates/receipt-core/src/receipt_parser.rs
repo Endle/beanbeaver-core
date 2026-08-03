@@ -262,9 +262,61 @@ pub fn parse_receipt(
     let spatial_layout = receipt_parse_helpers::has_useful_bbox_data(pages_for_helper)
         && receipt_parse_helpers::is_spatial_layout_receipt(full_text);
 
-    let (items, warnings): (Vec<ParsedReceiptItem>, Vec<ParsedReceiptWarning>) = if spatial_layout {
-        let spatial_outcome = receipt_spatial::extract_spatial_items(pages_for_spatial.to_vec());
-        if spatial_outcome.items.is_empty() {
+    let (items, mut warnings): (Vec<ParsedReceiptItem>, Vec<ParsedReceiptWarning>) =
+        if spatial_layout {
+            let spatial_outcome =
+                receipt_spatial::extract_spatial_items(pages_for_spatial.to_vec());
+            if spatial_outcome.items.is_empty() {
+                let (items, warnings) = receipt_text::extract_text_items(&lines, &summary_amounts);
+                (
+                    items
+                        .into_iter()
+                        .map(|item| {
+                            build_item(
+                                item.description.clone(),
+                                cents_to_fixed(item.price_cents),
+                                item.quantity,
+                                &item.category_source,
+                                rule_layers,
+                                vocab,
+                            )
+                        })
+                        .collect(),
+                    warnings
+                        .into_iter()
+                        .map(|warning| ParsedReceiptWarning {
+                            message: warning.message,
+                            after_item_index: warning.after_item_index,
+                        })
+                        .collect(),
+                )
+            } else {
+                (
+                    spatial_outcome
+                        .items
+                        .into_iter()
+                        .map(|item| {
+                            build_item(
+                                item.description.clone(),
+                                scaled_to_fixed(item.price_scaled, 10_000),
+                                1,
+                                &item.description,
+                                rule_layers,
+                                vocab,
+                            )
+                        })
+                        .collect(),
+                    spatial_outcome
+                        .warnings
+                        .into_iter()
+                        .map(|warning| ParsedReceiptWarning {
+                            message: warning.message,
+                            after_item_index: warning.after_item_index,
+                        })
+                        .collect(),
+                )
+            }
+        } else {
             let (items, warnings) = receipt_text::extract_text_items(&lines, &summary_amounts);
             (
                 items
@@ -288,57 +340,7 @@ pub fn parse_receipt(
                     })
                     .collect(),
             )
-        } else {
-            (
-                spatial_outcome
-                    .items
-                    .into_iter()
-                    .map(|item| {
-                        build_item(
-                            item.description.clone(),
-                            scaled_to_fixed(item.price_scaled, 10_000),
-                            1,
-                            &item.description,
-                            rule_layers,
-                            vocab,
-                        )
-                    })
-                    .collect(),
-                spatial_outcome
-                    .warnings
-                    .into_iter()
-                    .map(|warning| ParsedReceiptWarning {
-                        message: warning.message,
-                        after_item_index: warning.after_item_index,
-                    })
-                    .collect(),
-            )
-        }
-    } else {
-        let (items, warnings) = receipt_text::extract_text_items(&lines, &summary_amounts);
-        (
-            items
-                .into_iter()
-                .map(|item| {
-                    build_item(
-                        item.description.clone(),
-                        cents_to_fixed(item.price_cents),
-                        item.quantity,
-                        &item.category_source,
-                        rule_layers,
-                        vocab,
-                    )
-                })
-                .collect(),
-            warnings
-                .into_iter()
-                .map(|warning| ParsedReceiptWarning {
-                    message: warning.message,
-                    after_item_index: warning.after_item_index,
-                })
-                .collect(),
-        )
-    };
+        };
 
     // Sign-correct unsigned line-item discounts (e.g. FreshCo "INSTANT
     // SAVINGS $5.00"), covering both the spatial and text paths at their
@@ -352,6 +354,34 @@ pub fn parse_receipt(
             item
         })
         .collect();
+
+    // Postings that overshoot the receipt total cannot balance, and until now
+    // nothing said so. `receipt_formatter` closes an *undershoot* with an
+    // `Expenses:FIXME` remainder — the ordinary "we missed an item" case, 26 of
+    // 125 corpus receipts — but has no answer for the other direction and
+    // silently emits a transaction beancount will reject. Overshoot is always a
+    // defect: an item is duplicated, or a summary amount was parsed as an item.
+    // It is also rare and specific — 6 of 125 receipts, every one genuinely
+    // wrong — so warning on it is a signal, not noise.
+    if total_cents > 0 {
+        let posted_cents = items
+            .iter()
+            .map(|item| crate::receipt_formatter::decimal_to_cents(&item.price))
+            .sum::<i64>()
+            + tax_cents.unwrap_or(0);
+        if posted_cents > total_cents {
+            warnings.push(ParsedReceiptWarning {
+                message: format!(
+                    "items{} total {} but the receipt total is {} — {} too much, so this transaction will not balance",
+                    if tax_cents.is_some() { " and tax" } else { "" },
+                    cents_to_fixed(posted_cents),
+                    cents_to_fixed(total_cents),
+                    cents_to_fixed(posted_cents - total_cents),
+                ),
+                after_item_index: None,
+            });
+        }
+    }
 
     let tenders = receipt_fields::extract_tenders(&lines, total_cents)
         .into_iter()
@@ -381,7 +411,7 @@ pub fn parse_receipt(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_unsigned_discount_line, item_tags};
+    use super::{cents_to_fixed, is_unsigned_discount_line, item_tags};
     use crate::rules::default_parser_rule_layers;
 
     #[test]
@@ -408,6 +438,77 @@ mod tests {
         );
         // An unrecognized line classifies to no tags rather than a guess.
         assert!(item_tags("ZZQW UNKNOWN ITEM", &layers).is_empty());
+    }
+
+    /// Parse plain text through the real pipeline: no bbox data, so the text
+    /// path runs, which is all these balance assertions need.
+    fn parse_text(text: &str) -> super::ParsedReceiptData {
+        let layers = default_parser_rule_layers();
+        super::parse_receipt(text, &[], &[], &layers, "receipt.jpg", &[], &[], 2026)
+    }
+
+    #[test]
+    fn warns_when_postings_overshoot_the_receipt_total() {
+        // The No Frills scan that prompted this: line grouping gave the subtotal
+        // its own item row, so the postings came to double the total and the
+        // emitted transaction could never balance — silently, until now.
+        let parsed = parse_text(
+            "NOFRILLS\n\
+             22-DAIRY MRJ 2.29\n\
+             2% NATURAL YOGUR\n\
+             27-PRODUCE WATERMLN SGRBABY MRJ 23.96\n\
+             (4)4331 26.25\n\
+             SUBTOTAL 26.25\n\
+             TOTAL 26.25\n",
+        );
+
+        assert_eq!(parsed.total, "26.25");
+        let balance: Vec<_> = parsed
+            .warnings
+            .iter()
+            .filter(|w| w.message.contains("will not balance"))
+            .collect();
+        assert_eq!(balance.len(), 1, "warnings were {:?}", parsed.warnings);
+
+        // Assert the message against the parse it describes rather than against
+        // numbers copied from one scan: the text path reaches a different item
+        // set than the spatial one, and a warning that misreports the amounts
+        // would be worse than no warning at all.
+        let posted: i64 = parsed
+            .items
+            .iter()
+            .map(|item| crate::receipt_formatter::decimal_to_cents(&item.price))
+            .sum();
+        assert!(posted > 2_625, "fixture should overshoot, posted {posted}");
+        assert!(
+            balance[0].message.contains(&cents_to_fixed(posted))
+                && balance[0].message.contains("26.25")
+                && balance[0].message.contains(&cents_to_fixed(posted - 2_625)),
+            "message should name the posted total, the receipt total and the gap: {}",
+            balance[0].message
+        );
+    }
+
+    #[test]
+    fn does_not_warn_when_postings_merely_undershoot() {
+        // The ordinary "we missed an item" case — 26 of 125 corpus receipts.
+        // `receipt_formatter` closes it with an `Expenses:FIXME` remainder, so
+        // the transaction balances and there is nothing to report.
+        let parsed = parse_text(
+            "NOFRILLS\n\
+             MILK 2.29\n\
+             TOTAL 26.25\n",
+        );
+
+        assert_eq!(parsed.total, "26.25");
+        assert!(
+            !parsed
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("will not balance")),
+            "warnings were {:?}",
+            parsed.warnings
+        );
     }
 
     #[test]

@@ -111,7 +111,10 @@ pub struct EnrichedMatchInput {
     pub match_details: String,
 }
 
-fn decimal_to_cents(value: &str) -> i64 {
+/// Shared with `receipt_parser`'s balance check on purpose: that warning exists
+/// to predict whether the postings this module emits will balance, so the two
+/// must read a price string exactly the same way.
+pub(crate) fn decimal_to_cents(value: &str) -> i64 {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return 0;
