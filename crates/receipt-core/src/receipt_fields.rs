@@ -203,10 +203,64 @@ fn prices_in_line(line: &str) -> Vec<i64> {
         .collect()
 }
 
-/// Public total extractor: the raw label-scan pick, then a guarded
-/// reconciliation against the payment block (see `reconcile_total_with_charge`).
+/// Public total extractor: the raw label-scan pick, a currency-symbol repair,
+/// then a guarded reconciliation against the payment block (see
+/// `reconcile_total_with_charge`).
 pub fn extract_total(lines: &[String]) -> i64 {
-    reconcile_total_with_charge(lines, extract_total_raw(lines))
+    let raw = repair_leading_currency_digit(lines, extract_total_raw(lines));
+    reconcile_total_with_charge(lines, raw)
+}
+
+/// A `$` read as a `5`: Costco's "TOTAL $173.15" comes back as one detection
+/// reading `5173.15`, thirty times the real amount.
+///
+/// `5173.15` is a perfectly good number, so the shape alone proves nothing —
+/// this fires only when the receipt's own arithmetic contradicts it and the
+/// repaired reading is the one that adds up. Both corroborators are exact-match,
+/// not tolerances: `SUBTOTAL + TAX`, or an amount the payment block prints.
+///
+/// Only a leading `5` is stripped, and only when the remaining amount is still
+/// non-empty. This does not generalise to other glyphs on purpose: `$` and `5`
+/// are the confusable pair that occurs here, and every extra digit admitted
+/// widens the space of numbers this could silently rewrite.
+///
+/// Surfaced by the deskew sweep. Before it, the Costco fixture's TOTAL label was
+/// grouped with a *different* `173.15` elsewhere on the receipt and read
+/// correctly by luck; once the summary block was aligned, TOTAL claimed the
+/// amount actually printed beside it and the misread became visible.
+fn repair_leading_currency_digit(lines: &[String], candidate: i64) -> i64 {
+    if candidate <= 0 {
+        return candidate;
+    }
+    let dollars = (candidate / 100).to_string();
+    if !dollars.starts_with('5') || dollars.len() < 2 {
+        return candidate;
+    }
+    let Ok(stripped_dollars) = dollars[1..].parse::<i64>() else {
+        return candidate;
+    };
+    let repaired = stripped_dollars * 100 + candidate % 100;
+    if repaired <= 0 {
+        return candidate;
+    }
+
+    let sums_to_repaired = match (extract_subtotal(lines), extract_tax(lines)) {
+        (Some(subtotal), Some(tax)) => subtotal + tax == repaired,
+        _ => false,
+    };
+    let charged_repaired = lines.iter().enumerate().any(|(idx, line)| {
+        let upper = line.to_ascii_uppercase();
+        let is_payment = upper.contains("AMOUNT:")
+            || upper.contains("CREDIT TN")
+            || matches!(classify_tender_line(&upper), Some("card"));
+        is_payment && tender_amount_for_line(lines, idx) == Some(repaired)
+    });
+
+    if sums_to_repaired || charged_repaired {
+        repaired
+    } else {
+        candidate
+    }
 }
 
 /// When the on-device box-position artifact mis-pairs the TOTAL label with a

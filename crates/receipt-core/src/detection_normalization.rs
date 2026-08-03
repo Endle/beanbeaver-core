@@ -76,6 +76,88 @@ pub const DESKEW_MIN_ROW_CONSENSUS: f64 = 0.25;
 /// that shipped before, while accepting a bad angle actively corrupts rows.
 pub const DESKEW_MIN_ROW_TIGHTENING: f64 = 0.025;
 
+// --- Pairing-free fallback estimator -----------------------------------------
+//
+// The pair estimator above measures the tilt from same-row item<->price slopes.
+// That presupposes each price is already recognisable as belonging to its item's
+// row — which is exactly the assumption a large skew destroys, and it needs
+// [`DESKEW_MIN_INLIERS`] rows to say anything at all. A short receipt simply
+// cannot clear that bar: a 4-item No Frills receipt tilted 3.8 deg produced 3
+// inliers, declined as `too_few_inliers`, and every price on it was claimed by
+// the row below its own.
+//
+// So when the pair estimator declines, fall back to searching [`row_partition_cost`]
+// directly. It needs no pairing at all — it asks only "which shear makes these
+// detections fall into the tightest rows?" — and it works on any receipt with
+// enough text to form rows.
+//
+// The reason this is safe to *search*, when the module docs say row cost
+// "corroborates, never searches", is the `+ rows * link` fragmentation term: an
+// extreme angle that shatters every row into singletons buys one `link` per
+// singleton and scores badly. Without that term this would rediscover the
+// failure that retired the pixel-level projection-profile deskew.
+
+/// Coarse sweep step. Finer than the 0.2 deg pair-inlier tolerance, so the
+/// coarse pass cannot land in a different cluster than the refinement.
+const DESKEW_SWEEP_STEP_DEG: f64 = 0.05;
+/// Refinement step around the coarse minimum.
+const DESKEW_SWEEP_REFINE_STEP_DEG: f64 = 0.01;
+/// How far from the winner a sample must be to count as an independent minimum
+/// for the margin check. One degree matches the pair estimator's runner-up rule.
+const DESKEW_SWEEP_ALIAS_SEPARATION_DEG: f64 = 1.0;
+
+/// Detections needed before the sweep will render an opinion. Row tightness is a
+/// population statistic; on a handful of boxes it is noise.
+pub const DESKEW_SWEEP_MIN_DETECTIONS: usize = 25;
+
+/// Row tightening the sweep angle must achieve — stricter than
+/// [`DESKEW_MIN_ROW_TIGHTENING`], because the sweep is proposing an angle rather
+/// than corroborating one.
+pub const DESKEW_SWEEP_MIN_ROW_TIGHTENING: f64 = 0.08;
+
+/// How much better the winning angle must be than the best angle at least
+/// [`DESKEW_SWEEP_ALIAS_SEPARATION_DEG`] away, as a fraction of the unsheared
+/// cost. This is the anti-aliasing guard: a one-row-aliased angle re-labels
+/// which price belongs to which item and scores nearly as well, so a shallow
+/// winner is not evidence of anything.
+pub const DESKEW_SWEEP_MIN_MARGIN: f64 = 0.02;
+
+/// Distinct item rows whose item<->price slope must agree with the sweep angle
+/// before the shear is applied.
+///
+/// **The sweep proposes; the pairs dispose.** Row tightness answers "does this
+/// shear make the page tidier?", which is not the same question as "does it put
+/// each price on its item's row" — and only the second one matters for grouping.
+/// A FreshCo receipt tilted 0.9 deg (measured on four label<->price pairs) had
+/// its cost minimised at 1.63 deg; applying that over-sheared by a quarter of a
+/// row and handed every label the price below it.
+///
+/// So the sweep is not trusted to be *right*, only to be a good place to look:
+/// the pair evidence still has the final say, but now it merely has to confirm
+/// an angle rather than discover one. That is a far weaker demand — three rows
+/// instead of [`DESKEW_MIN_INLIERS`] — which is what lets a short receipt clear
+/// it. The 4-item No Frills receipt that motivated this has exactly four
+/// item<->price pairs, all agreeing within 0.4 deg, and could never have reached
+/// five.
+pub const DESKEW_SWEEP_MIN_CORROBORATING_ROWS: usize = 3;
+
+/// Agreement band for corroboration. Wider than [`DESKEW_INLIER_TOL_DEG`]
+/// because the two estimators measure different things — a whole-page cost
+/// minimum and a single row's slope — so demanding they agree to the same
+/// tolerance a cluster of pairs agrees among themselves would be spurious
+/// precision.
+pub const DESKEW_SWEEP_CORROBORATION_TOL_DEG: f64 = 0.5;
+
+/// How far prices must already be from their labels, in median text heights,
+/// before the sweep is allowed to shear anything.
+///
+/// The precondition the other gates all miss: a receipt whose prices already sit
+/// beside their items cannot be helped by a shear, only harmed. FreshCo's
+/// 2026-06-17 receipt is the case in point — its labels are within a quarter of
+/// a row of their prices, so it was never broken, and the 1.63 deg the sweep
+/// liked was enough to walk every price up one row.
+pub const DESKEW_SWEEP_MIN_MISALIGNMENT: f64 = 0.5;
+
 /// Numeric view of a detection. Field names mirror the Python detection dict.
 #[derive(Clone, Debug, Default)]
 pub struct Detection {
@@ -189,19 +271,22 @@ struct PairCandidate {
     item_index: usize,
 }
 
-/// Cross-product item/price candidates, filtered by column/width/proximity.
-///
-/// Mispairings are expected to fall out when the angle is chosen rather than
-/// being filtered upfront.
-fn build_pair_candidates(detections: &[Detection], image_width: f64) -> Vec<PairCandidate> {
+/// A detection reduced to the only two numbers the deskew needs from it:
+/// `(x_center, center_y)`.
+type ColumnPoint = (f64, f64);
+
+/// The left-column labels and right-column prices the deskew reasons over.
+fn item_price_columns(
+    detections: &[Detection],
+    image_width: f64,
+) -> (Vec<ColumnPoint>, Vec<ColumnPoint>) {
     let item_x_max_cap = image_width * DESKEW_ITEM_X_MAX_FRAC;
     let price_x_min_floor = image_width * DESKEW_PRICE_X_MIN_FRAC;
     let min_item_width = image_width * DESKEW_MIN_ITEM_WIDTH;
     let min_price_width = image_width * DESKEW_MIN_PRICE_WIDTH;
-    let min_x_distance = image_width * DESKEW_MIN_X_DISTANCE;
 
-    let mut items: Vec<(f64, f64)> = Vec::new(); // (x_center, center_y)
-    let mut prices: Vec<(f64, f64)> = Vec::new(); // (x_center, center_y)
+    let mut items: Vec<ColumnPoint> = Vec::new();
+    let mut prices: Vec<ColumnPoint> = Vec::new();
 
     for det in detections {
         if det.confidence < DESKEW_MIN_CONFIDENCE {
@@ -225,6 +310,53 @@ fn build_pair_candidates(detections: &[Detection], image_width: f64) -> Vec<Pair
             prices.push((x_center, cy));
         }
     }
+    (items, prices)
+}
+
+/// How far each label sits from the nearest price that could be its own, in
+/// units of `scale`, taken as the median over labels.
+///
+/// This is the question the whole pass exists to answer: *are prices currently
+/// landing on their item's row or not?* A receipt whose labels already sit
+/// beside their prices has nothing to gain from a shear and everything to lose,
+/// because any correction can only push an aligned pair apart. Measured at zero
+/// shear, so it describes the input rather than the proposed fix.
+///
+/// Returns `None` when there is not enough of a left/right column structure to
+/// judge — treated as "no evidence of a problem", i.e. decline.
+fn misalignment_ratio(detections: &[Detection], image_width: f64, scale: f64) -> Option<f64> {
+    if scale <= 0.0 {
+        return None;
+    }
+    let (items, prices) = item_price_columns(detections, image_width);
+    let min_x_distance = image_width * DESKEW_MIN_X_DISTANCE;
+
+    let mut gaps: Vec<f64> = Vec::new();
+    for &(icx, icy) in &items {
+        let nearest = prices
+            .iter()
+            .filter(|(pcx, _)| pcx - icx >= min_x_distance)
+            .map(|(_, pcy)| (pcy - icy).abs())
+            .filter(|dy| *dy <= DESKEW_Y_WINDOW_PX)
+            .fold(f64::INFINITY, f64::min);
+        if nearest.is_finite() {
+            gaps.push(nearest);
+        }
+    }
+    if gaps.len() < DESKEW_SWEEP_MIN_CORROBORATING_ROWS {
+        return None;
+    }
+    gaps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    Some(gaps[gaps.len() / 2] / scale)
+}
+
+/// Cross-product item/price candidates, filtered by column/width/proximity.
+///
+/// Mispairings are expected to fall out when the angle is chosen rather than
+/// being filtered upfront.
+fn build_pair_candidates(detections: &[Detection], image_width: f64) -> Vec<PairCandidate> {
+    let min_x_distance = image_width * DESKEW_MIN_X_DISTANCE;
+    let (items, prices) = item_price_columns(detections, image_width);
 
     let mut candidates: Vec<PairCandidate> = Vec::new();
     for (item_index, &(icx, icy)) in items.iter().enumerate() {
@@ -383,6 +515,66 @@ fn median_text_height(detections: &[Detection]) -> f64 {
     heights[heights.len() / 2]
 }
 
+/// Outcome of the pairing-free sweep: the cost-minimising angle, its cost, and
+/// the best cost found at least [`DESKEW_SWEEP_ALIAS_SEPARATION_DEG`] away.
+struct SweepResult {
+    angle_deg: f64,
+    cost: f64,
+    far_cost: f64,
+}
+
+/// Shear angle minimising [`row_partition_cost`], found by exhaustive sweep.
+///
+/// Coarse pass over the whole legal band, then a refinement around the winner.
+/// Exhaustive rather than iterative for the same reason [`best_supported_angle`]
+/// is: the search space is one bounded dimension, so scanning it is cheap,
+/// deterministic, and cannot get stuck in a local minimum.
+fn sweep_best_angle(detections: &[Detection], image_width: f64, link: f64) -> Option<SweepResult> {
+    if detections.len() < DESKEW_SWEEP_MIN_DETECTIONS || link <= 0.0 {
+        return None;
+    }
+
+    let steps = (2.0 * DESKEW_ANGLE_CAP_DEG / DESKEW_SWEEP_STEP_DEG).round() as i64;
+    let mut samples: Vec<(f64, f64)> = Vec::with_capacity(steps as usize + 1);
+    let mut best = (0.0f64, f64::INFINITY);
+    for step in 0..=steps {
+        let angle = -DESKEW_ANGLE_CAP_DEG + step as f64 * DESKEW_SWEEP_STEP_DEG;
+        let cost = row_partition_cost(detections, angle, image_width, link);
+        samples.push((angle, cost));
+        if cost < best.1 {
+            best = (angle, cost);
+        }
+    }
+    if !best.1.is_finite() {
+        return None;
+    }
+
+    let refine_steps = (2.0 * DESKEW_SWEEP_STEP_DEG / DESKEW_SWEEP_REFINE_STEP_DEG).round() as i64;
+    let mut refined = best;
+    for step in 0..=refine_steps {
+        let angle = best.0 - DESKEW_SWEEP_STEP_DEG + step as f64 * DESKEW_SWEEP_REFINE_STEP_DEG;
+        if angle.abs() > DESKEW_ANGLE_CAP_DEG {
+            continue;
+        }
+        let cost = row_partition_cost(detections, angle, image_width, link);
+        if cost < refined.1 {
+            refined = (angle, cost);
+        }
+    }
+
+    let far_cost = samples
+        .iter()
+        .filter(|(angle, _)| (angle - refined.0).abs() >= DESKEW_SWEEP_ALIAS_SEPARATION_DEG)
+        .map(|&(_, cost)| cost)
+        .fold(f64::INFINITY, f64::min);
+
+    Some(SweepResult {
+        angle_deg: refined.0,
+        cost: refined.1,
+        far_cost,
+    })
+}
+
 /// New `(center_y, y_min, y_max)` per detection after vertical shear correction.
 fn apply_shear(detections: &[Detection], angle_deg: f64, image_width: f64) -> Vec<(f64, f64, f64)> {
     let tan_angle = angle_deg.to_radians().tan();
@@ -398,11 +590,25 @@ fn apply_shear(detections: &[Detection], angle_deg: f64, image_width: f64) -> Ve
         .collect()
 }
 
+/// Which estimator produced the angle in a [`DeskewOutcome`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeskewEstimator {
+    /// Same-row item<->price slope consensus. Tried first, and the only
+    /// estimator that can fire on a receipt it can measure.
+    PairConsensus,
+    /// Direct minimisation of [`row_partition_cost`] over the angle band. Used
+    /// only where pair consensus declined — see [`DESKEW_SWEEP_MIN_ROW_TIGHTENING`].
+    RowSweep,
+}
+
 /// Result of the deskew pass. `new_y` is `Some` only when the shear is applied.
 pub struct DeskewOutcome {
     pub angle_deg: f64,
     pub applied: bool,
     pub gate_reason: Option<&'static str>,
+    /// Which estimator `angle_deg` came from. On a decline this names the
+    /// estimator whose gate rejected it — the sweep if it was reached at all.
+    pub estimator: DeskewEstimator,
     pub candidate_count: usize,
     pub inlier_count: usize,
     /// Distinct item rows agreeing with `angle_deg`, over the item rows that
@@ -412,15 +618,32 @@ pub struct DeskewOutcome {
     /// How much `angle_deg` tightens rows relative to no shear, as a fraction
     /// of the unsheared spread. See [`DESKEW_MIN_ROW_TIGHTENING`].
     pub row_tightening: f64,
+    /// Sweep only: how much the winning angle beats the best angle at least
+    /// [`DESKEW_SWEEP_ALIAS_SEPARATION_DEG`] away, as a fraction of the
+    /// unsheared cost. Zero when the sweep was not reached.
+    pub sweep_margin: f64,
+    /// Sweep only: distinct item rows whose own slope agrees with the swept
+    /// angle. See [`DESKEW_SWEEP_MIN_CORROBORATING_ROWS`].
+    pub sweep_corroborating_rows: usize,
+    /// Sweep only: median label-to-nearest-price gap in median text heights,
+    /// measured at zero shear. See [`DESKEW_SWEEP_MIN_MISALIGNMENT`].
+    pub sweep_misalignment: f64,
     pub new_y: Option<Vec<(f64, f64, f64)>>,
 }
 
-/// Vertical shear correction driven by same-row item<->price slopes.
+/// Vertical shear correction, from same-row item<->price slopes where the
+/// receipt supports that measurement and from a direct row-tightness sweep
+/// where it does not.
 ///
 /// Bias is "miss safely": a wrong correction can push borderline rows out of
-/// the matcher's y-band, so the pass only fires when the angle is in band,
-/// large enough to matter, agreed on by enough item rows, clearly better than
-/// the one-row-aliased runner-up, and corroborated by rows actually tightening.
+/// the matcher's y-band, so each estimator only fires when the angle is in band,
+/// large enough to matter, and corroborated — pair consensus by enough agreeing
+/// item rows and a beaten runner-up, the sweep by a decisive cost minimum.
+///
+/// The sweep is strictly a fallback: it is consulted only where pair consensus
+/// declined, so every receipt the pair estimator already handled keeps exactly
+/// the geometry it had. The blast radius of the fallback is the set of receipts
+/// that were previously left un-deskewed.
 pub fn deskew(detections: &[Detection], image_width: f64) -> DeskewOutcome {
     let candidates = build_pair_candidates(detections, image_width);
     let candidate_count = candidates.len();
@@ -465,17 +688,28 @@ pub fn deskew(detections: &[Detection], image_width: f64) -> DeskewOutcome {
         None
     };
 
-    if gate_reason.is_some() {
-        return DeskewOutcome {
-            angle_deg: angle,
-            applied: false,
-            gate_reason,
-            candidate_count,
-            inlier_count: inliers,
-            consensus_ratio,
-            row_tightening,
-            new_y: None,
-        };
+    if let Some(reason) = gate_reason {
+        return sweep_fallback(
+            detections,
+            image_width,
+            link,
+            cost_unsheared,
+            &candidates,
+            DeskewOutcome {
+                angle_deg: angle,
+                applied: false,
+                gate_reason: Some(reason),
+                estimator: DeskewEstimator::PairConsensus,
+                candidate_count,
+                inlier_count: inliers,
+                consensus_ratio,
+                row_tightening,
+                sweep_margin: 0.0,
+                sweep_corroborating_rows: 0,
+                sweep_misalignment: 0.0,
+                new_y: None,
+            },
+        );
     }
 
     let new_y = apply_shear(detections, angle, image_width);
@@ -483,11 +717,92 @@ pub fn deskew(detections: &[Detection], image_width: f64) -> DeskewOutcome {
         angle_deg: angle,
         applied: true,
         gate_reason: None,
+        estimator: DeskewEstimator::PairConsensus,
         candidate_count,
         inlier_count: inliers,
         consensus_ratio,
         row_tightening,
+        sweep_margin: 0.0,
+        sweep_corroborating_rows: 0,
+        sweep_misalignment: 0.0,
         new_y: Some(new_y),
+    }
+}
+
+/// Second opinion for receipts the pair estimator could not measure.
+///
+/// `declined` is the outcome pair consensus produced; it is returned unchanged
+/// if the sweep has nothing better to offer, so a decline here is never worse
+/// than a decline before this fallback existed.
+fn sweep_fallback(
+    detections: &[Detection],
+    image_width: f64,
+    link: f64,
+    cost_unsheared: f64,
+    candidates: &[PairCandidate],
+    declined: DeskewOutcome,
+) -> DeskewOutcome {
+    if cost_unsheared <= 0.0 {
+        return declined;
+    }
+    let Some(sweep) = sweep_best_angle(detections, image_width, link) else {
+        return declined;
+    };
+
+    let tightening = ((cost_unsheared - sweep.cost) / cost_unsheared).max(0.0);
+    let margin = if sweep.far_cost.is_finite() {
+        ((sweep.far_cost - sweep.cost) / cost_unsheared).max(0.0)
+    } else {
+        // No sample far enough away to compare against: the band is too narrow
+        // for the alias check to mean anything, so treat it as unproven.
+        0.0
+    };
+    let corroborating: Vec<PairCandidate> = candidates
+        .iter()
+        .copied()
+        .filter(|c| (c.angle_deg - sweep.angle_deg).abs() <= DESKEW_SWEEP_CORROBORATION_TOL_DEG)
+        .collect();
+    let corroborating_rows = distinct_rows(&corroborating);
+    let misalignment = misalignment_ratio(detections, image_width, link * 2.0).unwrap_or(0.0);
+
+    let reason = if sweep.angle_deg.abs() < DESKEW_MIN_ANGLE_DEG {
+        Some("sweep_angle_too_small")
+    } else if tightening < DESKEW_SWEEP_MIN_ROW_TIGHTENING {
+        Some("sweep_rows_not_tightened")
+    } else if margin < DESKEW_SWEEP_MIN_MARGIN {
+        Some("sweep_ambiguous_angle")
+    } else if corroborating_rows < DESKEW_SWEEP_MIN_CORROBORATING_ROWS {
+        Some("sweep_uncorroborated")
+    } else if misalignment < DESKEW_SWEEP_MIN_MISALIGNMENT {
+        Some("sweep_rows_already_aligned")
+    } else {
+        None
+    };
+
+    if let Some(reason) = reason {
+        return DeskewOutcome {
+            angle_deg: sweep.angle_deg,
+            gate_reason: Some(reason),
+            estimator: DeskewEstimator::RowSweep,
+            row_tightening: tightening,
+            sweep_margin: margin,
+            sweep_corroborating_rows: corroborating_rows,
+            sweep_misalignment: misalignment,
+            ..declined
+        };
+    }
+
+    DeskewOutcome {
+        angle_deg: sweep.angle_deg,
+        applied: true,
+        gate_reason: None,
+        estimator: DeskewEstimator::RowSweep,
+        row_tightening: tightening,
+        sweep_margin: margin,
+        sweep_corroborating_rows: corroborating_rows,
+        sweep_misalignment: misalignment,
+        new_y: Some(apply_shear(detections, sweep.angle_deg, image_width)),
+        ..declined
     }
 }
 
@@ -667,6 +982,135 @@ mod tests {
         );
         assert!(outcome.applied, "gate said {:?}", outcome.gate_reason);
         assert!((outcome.angle_deg - true_angle).abs() < 0.05);
+    }
+
+    /// A receipt too short for the pair estimator: only `items` item rows, so at
+    /// most `items` same-row pairs — below `DESKEW_MIN_INLIERS`. Padded with
+    /// left-column-only text (headers, footers) so the sweep has a population to
+    /// measure row tightness over, exactly like a real receipt's preamble.
+    fn short_receipt(items: usize, pitch: f64) -> Vec<Detection> {
+        // Deliberately irregular: section gaps and ragged x positions. A
+        // perfectly periodic page aliases exactly one row off and the margin
+        // gate rightly refuses to choose, which is a property of graph paper
+        // rather than of receipts.
+        let mut rows = Vec::new();
+        let mut cy = 200.0;
+        for i in 0..6 {
+            rows.push(det(
+                &format!("HEADER LINE {i}"),
+                180.0 + (i % 3) as f64 * 40.0,
+                cy,
+                240.0 + (i % 2) as f64 * 90.0,
+            ));
+            if i % 2 == 0 {
+                rows.push(det(&format!("H{i}"), 800.0, cy, 70.0));
+            }
+            cy += pitch;
+        }
+        cy += pitch * 0.6;
+        for i in 0..items {
+            rows.push(det(&format!("0512300{i:04}"), 200.0, cy, 200.0));
+            rows.push(det(
+                &format!("{:.2}", (i + 1) as f64 * 3.11),
+                850.0,
+                cy,
+                80.0,
+            ));
+            cy += pitch;
+            // The quantity sub-line each of these receipts carries.
+            rows.push(det(
+                &format!("2 @ ${:.2}", (i + 1) as f64 * 1.55),
+                230.0,
+                cy,
+                150.0,
+            ));
+            cy += pitch * 1.4;
+        }
+        cy += pitch * 0.7;
+        for i in 0..20 {
+            rows.push(det(
+                &format!("FOOTER TEXT {i}"),
+                220.0 + (i % 4) as f64 * 35.0,
+                cy,
+                300.0 + (i % 3) as f64 * 70.0,
+            ));
+            // Real footers carry a right-hand column too (tender amounts, card
+            // digits, points). Without it almost every row is a single token and
+            // no shear can measurably tighten the page.
+            rows.push(det(&format!("F{i:02}"), 810.0, cy, 75.0));
+            cy += pitch * if i % 5 == 0 { 1.3 } else { 1.0 };
+        }
+        rows
+    }
+
+    #[test]
+    fn sweep_recovers_a_tilt_the_pair_estimator_is_too_short_to_find() {
+        // The No Frills case: four item rows at 3.8 deg. Pair consensus needs
+        // five and declines; the sweep measures the whole page instead.
+        let true_angle = 3.8;
+        let tilted: Vec<Detection> = short_receipt(4, 32.0)
+            .iter()
+            .map(|d| tilt(d, true_angle, 950.0))
+            .collect();
+        let outcome = deskew(&tilted, 950.0);
+
+        assert!(
+            outcome.inlier_count < DESKEW_MIN_INLIERS,
+            "fixture must starve the pair estimator, got {} inliers",
+            outcome.inlier_count
+        );
+        assert!(outcome.applied, "gate said {:?}", outcome.gate_reason);
+        assert_eq!(outcome.estimator, DeskewEstimator::RowSweep);
+        assert!(
+            (outcome.angle_deg - true_angle).abs() < 0.2,
+            "recovered {:.3} for a true {true_angle}",
+            outcome.angle_deg
+        );
+    }
+
+    #[test]
+    fn sweep_declines_a_receipt_whose_prices_already_sit_on_their_rows() {
+        // The FreshCo regression: an untilted short receipt has nothing to gain,
+        // so whatever angle minimises row cost must not be applied.
+        let straight = short_receipt(4, 32.0);
+        let outcome = deskew(&straight, 950.0);
+        assert!(
+            !outcome.applied,
+            "sheared an aligned receipt by {:.3}",
+            outcome.angle_deg
+        );
+    }
+
+    #[test]
+    fn sweep_declines_when_no_item_row_agrees_with_it() {
+        // Corroboration is what stops the sweep acting on its own opinion. Strip
+        // the right column and the same tilted page has nothing to confirm it.
+        let true_angle = 3.8;
+        let tilted: Vec<Detection> = short_receipt(4, 32.0)
+            .iter()
+            .filter(|d| !d.text.contains('.'))
+            .map(|d| tilt(d, true_angle, 950.0))
+            .collect();
+        let outcome = deskew(&tilted, 950.0);
+        assert!(
+            !outcome.applied,
+            "fired with {} corroborating rows",
+            outcome.sweep_corroborating_rows
+        );
+    }
+
+    #[test]
+    fn pair_consensus_still_wins_where_it_can_measure() {
+        // The sweep is a fallback only: a receipt the pair estimator can handle
+        // must keep exactly the angle and provenance it had before.
+        let true_angle = -2.5;
+        let tilted: Vec<Detection> = dense_rows(14, 30.0)
+            .iter()
+            .map(|d| tilt(d, true_angle, 1000.0))
+            .collect();
+        let outcome = deskew(&tilted, 1000.0);
+        assert!(outcome.applied);
+        assert_eq!(outcome.estimator, DeskewEstimator::PairConsensus);
     }
 
     #[test]
