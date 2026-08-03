@@ -65,7 +65,9 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0007"
-keywords = ["FRESH BABY SHANGHAI"]
+# Winter melon is a gourd, not a fruit; it has to outrank the "MELON" keyword
+# in the fruit rule, which the longer literal match does.
+keywords = ["FRESH BABY SHANGHAI", "WINTER MELON"]
 tags = ["grocery/vegetable"]
 priority = 0
 exact_only = false

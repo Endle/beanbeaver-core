@@ -1,6 +1,23 @@
 use regex::Regex;
 use std::sync::OnceLock;
 
+/// The weight unit as OCR actually renders it. `lb` loses its `l` to `1`/`I`
+/// and its `b` to `6`/`k` in any combination ("1b", "Ik", "16"), so the class is
+/// spelled as the cross-product rather than an enumerated list of spellings.
+/// `16` is only reachable after a leading `<digits>` and a following `@` rate,
+/// which is what keeps it from swallowing plain numbers.
+///
+/// Lives here because three modules ask "is this a weight row?" —
+/// [`parse_quantity_modifier`] below, `receipt_spatial`'s pairing gate, and
+/// `receipt_text`'s extractor. They had three copies of the alternation, and a
+/// receipt only has to hit the one that was not updated to lose an item.
+pub(crate) const WEIGHT_UNIT_CLASS: &str = r"(?:[lI1][bk6]|k[g9])";
+
+/// Speckle OCR emits between the unit and the `@` — Foody Mart's "1b'@" and
+/// "16-@" both come from the same printed "lb @". Anything in this class is
+/// noise, never meaning.
+pub(crate) const WEIGHT_UNIT_AT_SEP: &str = r"[\s'`,.\-]*";
+
 const GENERIC_PRICED_ITEM_LABELS: &[&str] = &["MEAT", "BAKERY"];
 const SECTION_HEADERS: &[&str] = &[
     "MEAT", "SEAFOOD", "PRODUCE", "DELI", "GROCERY", "BAKERY", "FROZEN", "FOOD",
@@ -78,7 +95,12 @@ fn re_count_at_price() -> &'static Regex {
 
 fn re_weight_at_price() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)^(\d+\.?\d*)\s*(?:lb|lk|kg|k[g9]|1b|1k)\s*@").unwrap())
+    RE.get_or_init(|| {
+        Regex::new(&format!(
+            r"(?i)^(\d+\.?\d*)\s*{WEIGHT_UNIT_CLASS}{WEIGHT_UNIT_AT_SEP}@"
+        ))
+        .unwrap()
+    })
 }
 
 fn re_multi_for_price() -> &'static Regex {
