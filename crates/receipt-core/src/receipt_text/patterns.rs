@@ -3,6 +3,8 @@
 use regex::Regex;
 use std::sync::OnceLock;
 
+use crate::receipt_common::{WEIGHT_UNIT_AT_SEP, WEIGHT_UNIT_CLASS};
+
 // Canadian grocery receipts mark items with one or more trailing single-letter
 // tax flags right after the price: H (HST), G (GST), P (PST), T (TAX),
 // C (combined / container deposit eligible), F (food / non-taxable),
@@ -221,8 +223,10 @@ pub(crate) fn re_weight_at_price() -> &'static Regex {
     // is computable: "3.37 lb @ $2.98/lb" costs 10.04, so a trailing 7.45 on
     // that row can be recognized as another item's drifted price.
     RE.get_or_init(|| {
-        Regex::new(r"(?i)^(\d+\.?\d*)\s*(?:lb|lk|kg|k[g9]|1b|1k)\s*@(?:\s*\$?(\d+\.\d{2}))?")
-            .unwrap()
+        Regex::new(&format!(
+            r"(?i)^(\d+\.?\d*)\s*{WEIGHT_UNIT_CLASS}{WEIGHT_UNIT_AT_SEP}@(?:\s*\$?(\d+\.\d{{2}}))?"
+        ))
+        .unwrap()
     })
 }
 
@@ -231,7 +235,10 @@ pub(crate) fn re_weight_rate_no_at() -> &'static Regex {
     // OCR-dropped `@` variant: "1.86 lb  $2.49/lb". The `/unit` tail is
     // required so a bare "weight + total" line can't masquerade as a rate.
     RE.get_or_init(|| {
-        Regex::new(r"(?i)^(\d+\.?\d*)\s*(?:lb|lk|kg|k[g9]|1b|1k)\s+\$?(\d+\.\d{2})\s*/").unwrap()
+        Regex::new(&format!(
+            r"(?i)^(\d+\.?\d*)\s*{WEIGHT_UNIT_CLASS}\s+\$?(\d+\.\d{{2}})\s*/"
+        ))
+        .unwrap()
     })
 }
 

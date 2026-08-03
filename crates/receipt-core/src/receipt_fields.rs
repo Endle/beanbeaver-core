@@ -130,6 +130,24 @@ fn normalize_decimal_spacing(text: &str) -> String {
                 continue;
             }
         }
+        // OCR sometimes reads a price's decimal point as a comma ("0,99").
+        // Only treat a comma as a decimal point when it sits directly between
+        // a digit and exactly two fraction digits, so thousands separators
+        // ("1,000") and prose ("Anytown, ON") are left untouched.
+        if bytes[i] == b','
+            && i > 0
+            && bytes[i - 1].is_ascii_digit()
+            && i + 2 < bytes.len()
+            && bytes[i + 1].is_ascii_digit()
+            && bytes[i + 2].is_ascii_digit()
+            && (i + 3 == bytes.len() || !bytes[i + 3].is_ascii_digit())
+        {
+            out.push('.');
+            out.push(bytes[i + 1] as char);
+            out.push(bytes[i + 2] as char);
+            i += 3;
+            continue;
+        }
         out.push(bytes[i] as char);
         i += 1;
     }
@@ -612,7 +630,37 @@ pub fn extract_subtotal(lines: &[String]) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_date, extract_subtotal, extract_tax, extract_tenders, extract_total};
+    use super::{
+        extract_date, extract_subtotal, extract_tax, extract_tenders, extract_total,
+        normalize_decimal_spacing,
+    };
+
+    #[test]
+    fn comma_read_as_decimal_point_still_yields_a_total() {
+        // Foody Mart 2026-07-29 printed both amounts identically, but OCR read
+        // only the grand-total row's point as a comma: "Sub Total 110.05" /
+        // "Total after Tax 110,05". The total row parsed to nothing, so the
+        // credit-card posting was written as 0.00.
+        let lines = vec![
+            "Sub Total 110.05".to_string(),
+            "Total after Tax 110,05".to_string(),
+        ];
+        assert_eq!(extract_total(&lines), 11005);
+    }
+
+    #[test]
+    fn thousands_separator_is_not_rewritten_as_a_decimal_point() {
+        // The guard that makes the comma rule safe, asserted against *this*
+        // module's copy of `normalize_decimal_spacing` — it is the copy that
+        // drifted, so testing the shared behavior elsewhere would not have
+        // caught it. Whether the extractor then reads the leading "1," is a
+        // separate, pre-existing limitation: it takes the "299.99" tail.
+        assert_eq!(
+            normalize_decimal_spacing("TOTAL 1,299.99"),
+            "TOTAL 1,299.99"
+        );
+        assert_eq!(normalize_decimal_spacing("Anytown, ON"), "Anytown, ON");
+    }
 
     #[test]
     fn date_parses_day_first_hyphenated_month_name() {

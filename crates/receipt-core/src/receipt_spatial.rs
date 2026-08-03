@@ -1,6 +1,8 @@
 use regex::Regex;
 use std::sync::OnceLock;
 
+use crate::receipt_common::{WEIGHT_UNIT_AT_SEP, WEIGHT_UNIT_CLASS};
+
 const SCALE: i64 = 10_000;
 const MIN_CONFIDENCE: f64 = 0.5;
 const PRICE_X_THRESHOLD: f64 = 0.65;
@@ -156,7 +158,12 @@ fn re_count_at_price() -> &'static Regex {
 
 fn re_weight_at_price() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^\d+\.?\d*\s*(?:lb|lk|kg|k[g9]|1b|1k)\s*@").unwrap())
+    RE.get_or_init(|| {
+        Regex::new(&format!(
+            r"^\d+\.?\d*\s*{WEIGHT_UNIT_CLASS}{WEIGHT_UNIT_AT_SEP}@"
+        ))
+        .unwrap()
+    })
 }
 
 fn re_multi_for_price() -> &'static Regex {

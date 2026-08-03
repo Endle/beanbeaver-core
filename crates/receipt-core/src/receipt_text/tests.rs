@@ -822,3 +822,41 @@ fn column_header_total_is_not_the_grand_total_and_tender_backstops_the_cap() {
         "{observed:?}"
     );
 }
+
+#[test]
+fn ocr_noise_between_weight_unit_and_at_still_prices_item_above() {
+    // Foody Mart 2026-07-29: the produce rows' "lb @" came through as
+    // "1b'@" (speckle before the @) and "16-@" (b read as 6, plus a dash).
+    // Neither matched the weight-rate pattern, so each row stopped being a
+    // quantity expression and became its own item — stealing the price and
+    // dropping the real description printed on the line above.
+    let lines = vec![
+        "Napa Round".to_string(),
+        "3.74 1b'@ $0.98/1b 3.67".to_string(),
+        "Winter Melon".to_string(),
+        "2.32 16-@ $1.59/16 3.69".to_string(),
+        "Sub Total 7.36".to_string(),
+    ];
+    let summary_amounts = HashSet::from([736]);
+
+    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let observed: Vec<(String, i64)> = items
+        .into_iter()
+        .map(|item| (item.description, item.price_cents))
+        .collect();
+
+    assert!(
+        observed.iter().any(|(d, p)| d == "Napa Round" && *p == 367),
+        "{observed:?}"
+    );
+    assert!(
+        observed
+            .iter()
+            .any(|(d, p)| d == "Winter Melon" && *p == 369),
+        "{observed:?}"
+    );
+    assert!(
+        !observed.iter().any(|(d, _)| d.starts_with("3.74")),
+        "weight row leaked as an item: {observed:?}"
+    );
+}
