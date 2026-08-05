@@ -670,3 +670,26 @@ keywords = ["DOORDASH"]
 tags = ["restaurant/gift_card"]
 priority = 0
 exact_only = false
+
+[[rules]]
+id = "no_name_med_wht_ovwrp_eggs"
+# Loblaw's house-brand eggs print as "NN MED WHT OVWRP MRJ" — no name, Medium,
+# WHiTe, OVerWRaP (the carton style). The product word never appears, so no
+# amount of vocabulary for "egg" can reach this line; the whole phrase IS the
+# name. Loblaw does print a friendly "NO NAME EGGS" line on some receipt
+# layouts, which is how the other corpus cases classify — but not on all of
+# them, and this rule is for the ones where it is absent.
+#
+# Both spellings are listed because OCR reads the V as a U about as often as it
+# gets it right (corpus: OVWRP twice, OUWRP three times, across No Frills and
+# Real Canadian Superstore). The "NN" prefix is deliberately left out: one scan
+# read it as "IN", and the phrase is already specific without it.
+#
+# Negative priority, per the `boxer_apparel` precedent: this is a
+# last-resort identification of one specific product, so anything more specific
+# — including a real "EGGS" keyword if the friendly line is present — wins
+# first. Verified against the corpus: these keywords match nothing else.
+keywords = ["MED WHT OVWRP", "MED WHT OUWRP"]
+tags = ["grocery/dairy"]
+priority = -80
+exact_only = false
