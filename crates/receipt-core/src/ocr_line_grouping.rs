@@ -231,6 +231,131 @@ fn is_reduction_label(text: &str) -> bool {
         .is_match(text)
 }
 
+/// How far a following row may be and still be offered a yielded amount.
+///
+/// Two rows, which is one intervening sub-line. The amount is being handed
+/// across a row boundary, not searched for: a longer reach starts crossing whole
+/// items, and the receipts this exists for print the annotation directly above
+/// the row that should have had the amount.
+const INDENT_YIELD_LOOKAHEAD: usize = 2;
+
+/// Detections closer than half a character cell share a print-grid column.
+const INDENT_COLUMN_LINK: f64 = 0.5;
+
+/// The long and short sides of a detection's quad — its width and height, both
+/// invariant under the tilt that inflates an axis-aligned extent.
+fn quad_extents(det: &Detection) -> (f64, f64) {
+    if det.bbox.len() < 4 {
+        return (0.0, det.y_max - det.y_min);
+    }
+    let side = |a: (f64, f64), b: (f64, f64)| ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+    let (a, b) = (
+        side(det.bbox[0], det.bbox[1]),
+        side(det.bbox[1], det.bbox[2]),
+    );
+    (a.max(b), a.min(b))
+}
+
+/// Per-character advance of the receipt's body font, in pixels.
+///
+/// Receipt printers are monospace, so box width over character count recovers
+/// the print grid's cell size. Restricted to rows of at least six characters (a
+/// two-character token is mostly box padding) and to the modal height band (a
+/// double-width SUBTOTAL or a display banner prints on a different grid).
+///
+/// This is the yardstick indentation has to be measured in, and a fraction of
+/// image width is not it. Over the 123-receipt corpus a cell is 0.0146-0.0255 of
+/// image width, median 0.0209 — so the 0.05-of-width bar an earlier attempt used
+/// was about 2.4 cells wide, and a one-space indent could never have cleared it.
+fn glyph_pitch(dets: &[Detection]) -> Option<f64> {
+    let mut heights: Vec<f64> = dets
+        .iter()
+        .map(|det| quad_extents(det).1)
+        .filter(|height| *height > 0.0)
+        .collect();
+    if heights.is_empty() {
+        return None;
+    }
+    heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    let median_height = heights[heights.len() / 2];
+
+    let mut pitches: Vec<f64> = Vec::new();
+    for det in dets {
+        let chars = det.text.trim().chars().count();
+        let (width, height) = quad_extents(det);
+        if chars < 6 || height <= 0.0 || width <= 0.0 {
+            continue;
+        }
+        if height < median_height * 0.75 || height > median_height * 1.25 {
+            continue;
+        }
+        pitches.push(width / chars as f64);
+    }
+    if pitches.len() < 5 {
+        return None;
+    }
+    pitches.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    Some(pitches[pitches.len() / 2])
+}
+
+/// The receipt's print grid: which column each LEFT row starts in, and the
+/// column its rows normally pair from.
+struct IndentGrid {
+    /// Column index per position in the LEFT list, counted from the left margin.
+    level: Vec<usize>,
+    /// The column the most amount-claiming rows stand in.
+    modal: usize,
+}
+
+/// Cluster LEFT rows' left edges into print-grid columns by single linkage at
+/// [`INDENT_COLUMN_LINK`].
+///
+/// Chaining is the safe failure. A genuinely ragged left column — Costco prints
+/// SKU rows, `PC` activation stubs and `***TOTAL` at three unrelated x — collapses
+/// into one level, and a receipt with one level has every row on the modal
+/// column, which switches the yield off entirely.
+fn indent_levels(dets: &[Detection], left: &[usize], pitch: f64) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..left.len()).collect();
+    order.sort_by(|&a, &b| {
+        dets[left[a]]
+            .min_x
+            .partial_cmp(&dets[left[b]].min_x)
+            .unwrap_or(Ordering::Equal)
+    });
+    let mut level = vec![0usize; left.len()];
+    let mut current = 0usize;
+    for window in 0..order.len() {
+        if window > 0 {
+            let gap = dets[left[order[window]]].min_x - dets[left[order[window - 1]]].min_x;
+            if gap > INDENT_COLUMN_LINK * pitch {
+                current += 1;
+            }
+        }
+        level[order[window]] = current;
+    }
+    level
+}
+
+/// The grid, built from a first pass's pairings. `None` when the receipt has no
+/// measurable pitch or nothing claimed an amount, both of which disable the yield.
+fn indent_grid(dets: &[Detection], left: &[usize], claims: &[Option<usize>]) -> Option<IndentGrid> {
+    let pitch = glyph_pitch(dets)?;
+    let level = indent_levels(dets, left, pitch);
+    let mut counts: Vec<usize> = vec![0; level.iter().copied().max().map_or(0, |max| max + 1)];
+    for (position, claim) in claims.iter().enumerate() {
+        if claim.is_some() {
+            counts[level[position]] += 1;
+        }
+    }
+    let best = *counts.iter().max()?;
+    if best == 0 {
+        return None;
+    }
+    // Ties go to the shallowest column so the choice is deterministic.
+    let modal = counts.iter().position(|&count| count == best)?;
+    Some(IndentGrid { level, modal })
+}
+
 fn line_y_span(dets: &[Detection], line: &[usize]) -> (f64, f64) {
     let mut min_y = f64::INFINITY;
     let mut max_y = f64::NEG_INFINITY;
@@ -318,43 +443,28 @@ fn score_less(a: (u8, f64, f64), b: (u8, f64, f64)) -> bool {
     }
 }
 
-/// Group detections into lines using item-first matching. Each returned line is
-/// a list of source indices: within a line sorted left-to-right by `min_x`, and
-/// lines ordered top-to-bottom by average `center_y`.
-pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<Vec<usize>> {
-    if dets.is_empty() {
-        return Vec::new();
-    }
-
-    // Partition into LEFT / MIDDLE / RIGHT, preserving detection order so the
-    // subsequent stable center_y sorts match the Python list semantics.
-    let mut left: Vec<usize> = Vec::new();
-    let mut middle: Vec<usize> = Vec::new();
-    let mut right: Vec<usize> = Vec::new();
-    for (index, det) in dets.iter().enumerate() {
-        let x_norm = det.min_x / image_width;
-        if x_norm > 0.7 {
-            right.push(index);
-        } else if belongs_in_left_column(&det.text, x_norm) {
-            left.push(index);
-        } else {
-            middle.push(index);
-        }
-    }
-
-    sort_by_center_y(dets, &mut left);
-    sort_by_center_y(dets, &mut right);
-
+/// Pair LEFT labels to RIGHT amounts, returning the RIGHT slot each LEFT
+/// position claimed.
+///
+/// Each LEFT row claims the first unassigned RIGHT amount that overlaps it *and
+/// that its label may legally hold* (see [`AmountClaim`]). This sequential
+/// first-fit keeps the two columns monotonically aligned, which is the strongest
+/// signal on receipts (overlap-quality ranking was tried and mis-pairs receipts
+/// whose amounts lean a half-row down); the type check is what keeps a sub-line
+/// from consuming the slot its item needs.
+///
+/// With a `grid`, a row standing off the receipt's main price column also yields
+/// a contested amount to a following row that stands on it — see
+/// [`yields_to_price_column`].
+fn pair_columns(
+    dets: &[Detection],
+    left: &[usize],
+    right: &[usize],
+    grid: Option<&IndentGrid>,
+) -> Vec<Option<usize>> {
     let mut assigned_prices = vec![false; right.len()];
-    let mut lines: Vec<Vec<usize>> = Vec::new();
+    let mut claims: Vec<Option<usize>> = vec![None; left.len()];
 
-    // Each LEFT item claims the first unassigned RIGHT price that overlaps it
-    // *and that its label may legally hold* (see `AmountClaim`). This sequential
-    // first-fit keeps the two columns monotonically aligned, which is the
-    // strongest signal on receipts (overlap-quality ranking was tried and
-    // mis-pairs receipts whose amounts lean a half-row down); the type check is
-    // what keeps a sub-line from consuming the slot its item needs.
-    //
     // Whether the last row that was *allowed* to take an amount actually took
     // one — the context a quantity breakdown needs (see below). Rows typed
     // `Never` are skipped rather than recorded, so a breakdown separated from
@@ -372,7 +482,6 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
             claim = AmountClaim::Never;
         }
         if claim == AmountClaim::Never {
-            lines.push(vec![left_index]);
             continue;
         }
         let mut matched: Option<usize> = None;
@@ -401,11 +510,117 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
                     continue;
                 }
             }
+            if grid
+                .is_some_and(|grid| yields_to_price_column(dets, left, right_index, position, grid))
+            {
+                continue;
+            }
             matched = Some(slot);
             break;
         }
         last_eligible_claimed = matched.is_some();
-        match matched {
+        if let Some(slot) = matched {
+            assigned_prices[slot] = true;
+            claims[position] = Some(slot);
+        }
+    }
+    claims
+}
+
+/// Whether the row at `position` should hand `right_index` to a following row.
+///
+/// Indentation says a row stands *off* the column its neighbours pair from, and
+/// that much is measurable: receipts print on a character grid, and clustering
+/// left edges at half a cell recovers it. What indentation does **not** say is
+/// what an off-column row means, because the corpus disagrees chain by chain.
+/// Food Basics sets savings notices one cell in and they never carry a price;
+/// Foody Mart prints the item name *below* its quantity line, so its deepest
+/// column carries the amount 65 times out of 69; Costco's `PC` activation stubs
+/// and `***TOTAL` sit *shallower* than its items, inverting the ladder
+/// altogether; Bestco Fresh indents every item one cell past its department
+/// headers, so "deeper than the row above" describes every item on the receipt.
+///
+/// So an off-column row is never refused outright. Measured over the
+/// 123-receipt corpus, vetoing them strips 449 of the 1843 rows that currently
+/// claim an amount — a quarter of the receipt's money.
+///
+/// Being off-column is not on its own a reason to give an amount up either.
+/// Requiring only that *some* following row on the price column overlaps the
+/// amount cost more than it earned (net −2 on the corpus's items-sum/subtotal
+/// count): Loblaw prints beer as `COORS LIGHT…` over a bare UPC row that
+/// carries the price, and the UPC row is off-column but squarely on its
+/// amount's row, so it handed 13.99 away to a worse-aligned neighbour. The
+/// column only breaks the tie — the successor must also be the *better*
+/// vertical fit, which is the same bar the quantity-breakdown guard uses.
+fn yields_to_price_column(
+    dets: &[Detection],
+    left: &[usize],
+    right_index: usize,
+    position: usize,
+    grid: &IndentGrid,
+) -> bool {
+    // Deeper than the price column, not merely off it. An annotation is indented
+    // *in* under the item it belongs to; a row starting to the *left* of the item
+    // column is a banner spanning the page, and those own their amounts. Costco
+    // 2026-03-18 is the case that separates the two: its `xxxBottom of
+    // _Basketxxx` marker starts at x=39 against an item column at x=170, and it
+    // legitimately holds the 17.99 belonging to the row it has overlapped.
+    if grid.level[position] <= grid.modal {
+        return false;
+    }
+    let mine = line_overlap_ratio(dets, right_index, &[left[position]]);
+    left.iter()
+        .enumerate()
+        .skip(position + 1)
+        .take(INDENT_YIELD_LOOKAHEAD)
+        .any(|(next_position, &next_index)| {
+            grid.level[next_position] == grid.modal
+                && boxes_overlap_y(&dets[next_index], &dets[right_index], 0.3)
+                && line_overlap_ratio(dets, right_index, &[next_index]) > mine
+        })
+}
+
+/// Group detections into lines using item-first matching. Each returned line is
+/// a list of source indices: within a line sorted left-to-right by `min_x`, and
+/// lines ordered top-to-bottom by average `center_y`.
+pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<Vec<usize>> {
+    if dets.is_empty() {
+        return Vec::new();
+    }
+
+    // Partition into LEFT / MIDDLE / RIGHT, preserving detection order so the
+    // subsequent stable center_y sorts match the Python list semantics.
+    let mut left: Vec<usize> = Vec::new();
+    let mut middle: Vec<usize> = Vec::new();
+    let mut right: Vec<usize> = Vec::new();
+    for (index, det) in dets.iter().enumerate() {
+        let x_norm = det.min_x / image_width;
+        if x_norm > 0.7 {
+            right.push(index);
+        } else if belongs_in_left_column(&det.text, x_norm) {
+            left.push(index);
+        } else {
+            middle.push(index);
+        }
+    }
+
+    sort_by_center_y(dets, &mut left);
+    sort_by_center_y(dets, &mut right);
+
+    // Pair once to find out which rows claim anything, use that to locate the
+    // receipt's main price column, then pair again with the yield enabled. The
+    // grid cannot be measured before the first pass because the column is
+    // *defined* as the one the claims come from.
+    let baseline = pair_columns(dets, &left, &right, None);
+    let claims = match indent_grid(dets, &left, &baseline) {
+        Some(grid) => pair_columns(dets, &left, &right, Some(&grid)),
+        None => baseline,
+    };
+
+    let mut assigned_prices = vec![false; right.len()];
+    let mut lines: Vec<Vec<usize>> = Vec::new();
+    for (position, &left_index) in left.iter().enumerate() {
+        match claims[position] {
             Some(slot) => {
                 lines.push(vec![left_index, right[slot]]);
                 assigned_prices[slot] = true;
@@ -525,6 +740,160 @@ mod tests {
             min_x,
             bbox: Vec::new(),
         }
+    }
+
+    /// Like `det_span` but with a real quad, which the glyph-pitch estimate
+    /// needs — a detection with no bbox has no measurable width.
+    fn det_box(text: &str, x_min: f64, x_max: f64, y_min: f64, y_max: f64) -> Detection {
+        Detection {
+            confidence: 0.99,
+            text: text.to_string(),
+            center_y: (y_min + y_max) / 2.0,
+            y_min,
+            y_max,
+            min_x: x_min,
+            bbox: vec![
+                (x_min, y_min),
+                (x_max, y_min),
+                (x_max, y_max),
+                (x_min, y_max),
+            ],
+        }
+    }
+
+    fn render(dets: &[Detection], lines: &[Vec<usize>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|&i| dets[i].text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect()
+    }
+
+    /// Food Basics 2026-07-31, real de-padded geometry, image width 1392.
+    ///
+    /// The chain prints `Saving <amount>` one grid cell in from its item column.
+    /// The right column leans up ~14px, so `Saving 2.01` overlapped SUBTOTAL's
+    /// 6.96 first and took it: the receipt reported a 6.96 line item and a
+    /// SUBTOTAL with no amount. Nothing in the label is recognisable — the
+    /// vocabulary here is `INSTANT SAVINGS`/`YOU SAVED`, not a singular
+    /// "Saving" — so only the column separates them.
+    fn food_basics_item_block() -> Vec<Detection> {
+        vec![
+            det_box("(10)CORN BICOLOR LOC", 210.0, 766.0, 573.0, 647.0),
+            det_box("1.98", 1203.0, 1330.0, 610.0, 679.0),
+            det_box("10 @ 10/$1.98", 261.0, 627.0, 638.0, 699.0),
+            det_box("Saving 4.72", 232.0, 546.0, 692.0, 757.0),
+            det_box("PRODUCE", 153.0, 354.0, 755.0, 807.0),
+            det_box("4.98", 1198.0, 1325.0, 780.0, 851.0),
+            det_box("YELLOW PLUM", 206.0, 519.0, 804.0, 863.0),
+            det_box("Saving 2.01", 230.0, 548.0, 858.0, 918.0),
+            det_box("6.96", 1086.0, 1311.0, 894.0, 961.0),
+            det_box("SUBTOTAL", 152.0, 585.0, 912.0, 970.0),
+            det_box("6.96", 1090.0, 1309.0, 954.0, 1010.0),
+            det_box("TOTAL", 155.0, 421.0, 968.0, 1026.0),
+            det_box("6.96", 1195.0, 1321.0, 1059.0, 1121.0),
+            det_box("CREDIT CR", 261.0, 519.0, 1078.0, 1131.0),
+        ]
+    }
+
+    #[test]
+    fn off_column_row_yields_the_summary_amount() {
+        let dets = food_basics_item_block();
+        let rendered = render(&dets, &group_detections_into_lines(&dets, 1392.0));
+        assert!(
+            rendered.contains(&"SUBTOTAL 6.96".to_string()),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.contains(&"Saving 2.01".to_string()),
+            "the savings row must end up with no amount: {rendered:?}"
+        );
+        // The rows that were already right must stay right.
+        assert!(
+            rendered.contains(&"(10)CORN BICOLOR LOC 1.98".to_string()),
+            "{rendered:?}"
+        );
+        assert!(rendered.contains(&"TOTAL 6.96".to_string()), "{rendered:?}");
+        assert!(
+            rendered.contains(&"CREDIT CR 6.96".to_string()),
+            "the deepest column still claims when nothing follows it: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn a_row_shallower_than_the_price_column_keeps_its_amount() {
+        // Costco 2026-03-18_costco_78_54, real geometry, image width 946: the
+        // `Bottom of Basket` banner starts at x=39 against an item column at
+        // x=170 and squarely overlaps the 17.99 belonging to the row it covers.
+        // It is off-column but *shallower*, so it is a banner, not an
+        // annotation — yielding here handed COKE ZERO an amount that is not its
+        // own and shifted every following row.
+        let dets = vec![
+            det_box(
+                "xxxxxxxxxxxBottom of _Basketxxxxxxxxxxx",
+                39.0,
+                881.0,
+                480.0,
+                573.0,
+            ),
+            det_box("232952 COKE ZERO", 170.0, 524.0, 536.0, 612.0),
+            det_box("17.99", 694.0, 813.0, 542.0, 582.0),
+            det_box("6.69", 710.0, 810.0, 585.0, 626.0),
+            det_box("232893 2% FINE-FILT", 170.0, 540.0, 600.0, 668.0),
+            det_box("6.69", 712.0, 813.0, 626.0, 675.0),
+        ];
+        let rendered = render(&dets, &group_detections_into_lines(&dets, 946.0));
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("Bottom of") && line.contains("17.99")),
+            "the banner must keep the amount it overlaps: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("COKE ZERO") && line.contains("6.69")),
+            "{rendered:?}"
+        );
+    }
+
+    #[test]
+    fn glyph_pitch_recovers_the_print_grid() {
+        let dets = food_basics_item_block();
+        let pitch = glyph_pitch(&dets).expect("a monospace receipt has a pitch");
+        // ~28px at image width 1392 — 2.1% of width, the corpus median.
+        assert!(
+            (pitch - 28.7).abs() < 1.5,
+            "expected ~28.7px per character cell, got {pitch}"
+        );
+    }
+
+    #[test]
+    fn a_ragged_left_column_collapses_to_one_level_and_disables_the_yield() {
+        // Costco's left column is genuinely ragged (SKU rows, `PC` stubs and
+        // `***TOTAL` at three unrelated x), so single linkage must chain them
+        // rather than invent a ladder — one level means every row is on the
+        // modal column and nothing can yield.
+        let dets = vec![
+            det_box("399 DOORDASH2X50", 131.0, 380.0, 844.0, 890.0),
+            det_box("PC 339919953764897", 125.0, 400.0, 865.0, 915.0),
+            det_box("810 LCBO CARD", 130.0, 360.0, 902.0, 945.0),
+            det_box("SUBTOTAL 1", 128.0, 330.0, 958.0, 1000.0),
+            det_box("TAXABLE 2", 121.0, 320.0, 992.0, 1030.0),
+            det_box("***TOTAL", 134.0, 340.0, 1013.0, 1054.0),
+        ];
+        let pitch = glyph_pitch(&dets).expect("pitch");
+        let left: Vec<usize> = (0..dets.len()).collect();
+        let levels = indent_levels(&dets, &left, pitch);
+        assert_eq!(
+            levels.iter().copied().max(),
+            Some(0),
+            "left edges within half a cell must chain into one column: {levels:?}"
+        );
     }
 
     #[test]

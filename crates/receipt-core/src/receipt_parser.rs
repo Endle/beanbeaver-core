@@ -228,6 +228,30 @@ pub fn parse_receipt(
         .map(str::to_string)
         .collect::<Vec<_>>();
 
+    // Rows standing in a print-grid column that never carries a price annotate
+    // the item above them rather than being one (see
+    // `receipt_spatial::annotation_line_flags`). The verdict is geometric, so
+    // it has to be taken here: the text path below sees only strings, and the
+    // chains this catches — Food Basics' `Saving 4.72` — word their annotations
+    // in a vocabulary no keyword list has met yet.
+    //
+    // `full_text` is the grouped lines joined with newlines and each group's own
+    // text never contains one, so `full_text.lines()` is 1:1 with the spatial
+    // pages' lines and the flags index straight into it. Callers that build the
+    // two independently (tests, and any consumer passing no geometry at all) are
+    // not 1:1, and there the flags index nothing — so require the counts to
+    // agree before trusting them rather than silently marking the wrong row.
+    let annotation_flags = receipt_spatial::annotation_line_flags(pages_for_spatial);
+    let aligned = annotation_flags.len() == full_text.lines().count();
+    let item_lines: Vec<String> = full_text
+        .lines()
+        .enumerate()
+        .filter(|(index, _)| !aligned || !annotation_flags[*index])
+        .map(|(_, line)| line.trim())
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+
     let merchant_match = receipt_parse_helpers::extract_merchant_match(
         &lines,
         full_text,
@@ -267,7 +291,8 @@ pub fn parse_receipt(
             let spatial_outcome =
                 receipt_spatial::extract_spatial_items(pages_for_spatial.to_vec());
             if spatial_outcome.items.is_empty() {
-                let (items, warnings) = receipt_text::extract_text_items(&lines, &summary_amounts);
+                let (items, warnings) =
+                    receipt_text::extract_text_items(&item_lines, &summary_amounts);
                 (
                     items
                         .into_iter()
@@ -317,7 +342,7 @@ pub fn parse_receipt(
                 )
             }
         } else {
-            let (items, warnings) = receipt_text::extract_text_items(&lines, &summary_amounts);
+            let (items, warnings) = receipt_text::extract_text_items(&item_lines, &summary_amounts);
             (
                 items
                     .into_iter()
