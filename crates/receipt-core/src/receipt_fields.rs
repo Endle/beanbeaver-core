@@ -317,12 +317,29 @@ fn reconcile_total_with_charge(lines: &[String], candidate: i64) -> i64 {
     }
 }
 
+/// A savings summary is never the grand total, however the chain words it.
+///
+/// This was two literal phrases in [`extract_total_raw`]'s exclusion list,
+/// `TOTAL SAVINGS` and `TOTAL SAVED`, which only match when the words are
+/// adjacent. Food Basics prints `Total of your savings 6.73` as the last
+/// TOTAL-bearing line on the receipt, and the scan runs *upward* — so it was
+/// the first candidate found, and a $6.96 receipt reported a $6.73 total.
+///
+/// Allowing a short gap covers the wording variants without loosening what the
+/// rule means. Checked against every TOTAL-bearing line in the corpus: this
+/// excludes `Total Savings` and `Your Total Savings` — both already excluded
+/// by the literals it replaces — and no real grand total, including the ones
+/// that merely mention the word (`AMOUNT OF THE TOTAL SHOWN ABOVE`,
+/// `Total after Tax`, `TOTAL PURCHASE`).
+fn re_total_savings_label() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)TOTAL\b.{0,15}?\bSAV(?:E|ED|ING|INGS)\b").unwrap())
+}
+
 fn extract_total_raw(lines: &[String]) -> i64 {
-    const EXCLUDED_PHRASES: [&str; 6] = [
+    const EXCLUDED_PHRASES: [&str; 4] = [
         "TOTAL DISCOUNT",
         "TOTAL DISCOUNT(S)",
-        "TOTAL SAVINGS",
-        "TOTAL SAVED",
         "TOTAL NUMBER OF ITEMS",
         "TOTAL ITEMS",
     ];
@@ -331,6 +348,9 @@ fn extract_total_raw(lines: &[String]) -> i64 {
         let idx = lines.len() - 1 - reversed_index;
         let line_upper = lines[idx].to_ascii_uppercase();
         if line_upper.contains("TOTAL NUMBER") {
+            continue;
+        }
+        if re_total_savings_label().is_match(&line_upper) {
             continue;
         }
         if EXCLUDED_PHRASES
@@ -892,6 +912,38 @@ mod tests {
         ];
 
         assert_ne!(extract_total(&lines), 900);
+    }
+
+    #[test]
+    fn a_savings_summary_is_not_the_grand_total_however_it_is_worded() {
+        // Food Basics 2026-07-31: the savings block is the last thing on the
+        // receipt above the payment slip, and the scan runs upward, so
+        // "Total of your savings" was reached before the real "TOTAL 6.96".
+        // The words are not adjacent, so the old `TOTAL SAVINGS` literal missed
+        // it and a $6.96 receipt reported $6.73.
+        let lines = vec![
+            "SUBTOTAL 6.96".to_string(),
+            "TOTAL 6.96".to_string(),
+            "CREDIT CR 6.96".to_string(),
+            "Total number of items sold = 11".to_string(),
+            "****** Your savings today ******".to_string(),
+            "Promotional discounts 6.73".to_string(),
+            "Total of your savings 6.73".to_string(),
+        ];
+
+        assert_eq!(extract_total(&lines), 696);
+    }
+
+    #[test]
+    fn the_savings_guard_does_not_swallow_a_real_total() {
+        // It must stay a *savings* rule: an ordinary grand total that happens
+        // to sit under a savings line is still the total.
+        let lines = vec![
+            "Your Total Savings 6.73".to_string(),
+            "TOTAL 95.00".to_string(),
+        ];
+
+        assert_eq!(extract_total(&lines), 9_500);
     }
 
     #[test]
