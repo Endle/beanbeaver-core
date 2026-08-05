@@ -735,6 +735,13 @@ mod tests {
             // token is what OCR mangles ("NLSN" -> "WLSN"/"HLSN"), not this.
             ("NLSN TRUTASTE 2%", "Expenses:Food:Grocery:Dairy"),
             ("WLSN TRUTASTE 28", "Expenses:Food:Grocery:Dairy"),
+            // dairy — Loblaw's house-brand eggs print as "NN MED WHT OVWRP":
+            // no name, Medium, WHiTe, OVerWRaP. The word "egg" is nowhere on
+            // the line, so the phrase itself has to carry the match. OCR reads
+            // the V as a U about as often as not, and truncates the tail.
+            ("NN MED WHT OVWRP MRJ", "Expenses:Food:Grocery:Dairy"),
+            ("NN MED WHT OUWRP MRJ", "Expenses:Food:Grocery:Dairy"),
+            ("IN MED WHT O OUWRP", "Expenses:Food:Grocery:Dairy"),
             // seasoning
             (
                 "SAPORITO FOODS CORN OIL 2.84L",
