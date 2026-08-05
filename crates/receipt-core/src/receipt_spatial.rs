@@ -57,8 +57,15 @@ pub struct SpatialExtractionOutcome {
 #[derive(Clone, Debug)]
 struct ParsedLine {
     line_y: f64,
+    /// Left edge of the row's leftmost description word, as a fraction of image
+    /// width. The receipt's print-grid column, before it is clustered into one.
+    left_x: f64,
     full_text: String,
     left_text: String,
+    /// Set by [`mark_annotation_columns`]: this row stands in a grid column that
+    /// carries no price anywhere on the receipt, so it annotates the item above
+    /// rather than being one.
+    is_annotation: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -717,7 +724,180 @@ fn is_valid_onsale_target(line: &ParsedLine) -> bool {
     !stripped.is_empty() && alpha_ratio(&stripped) >= 0.5
 }
 
+/// Detections closer than half a character cell share a print-grid column.
+const ANNOTATION_COLUMN_LINK: f64 = 0.5;
+
+/// Per-character advance of the body font, as a fraction of image width.
+///
+/// Same measurement as `ocr_line_grouping::glyph_pitch` and for the same reason —
+/// a character cell is the only stable unit for indentation — but taken from the
+/// normalized bboxes this stage works in. Rows shorter than six characters are
+/// mostly box padding; the modal height band keeps a double-width SUBTOTAL or a
+/// display banner off the estimate.
+fn glyph_pitch_normalized(pages: &[PageInput]) -> Option<f64> {
+    let mut heights: Vec<f64> = pages
+        .iter()
+        .flat_map(|page| page.lines.iter())
+        .flat_map(|line| line.words.iter())
+        .map(|word| word.bbox.bottom - word.bbox.top)
+        .filter(|height| *height > 0.0)
+        .collect();
+    if heights.is_empty() {
+        return None;
+    }
+    heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_height = heights[heights.len() / 2];
+
+    let mut pitches: Vec<f64> = Vec::new();
+    for word in pages
+        .iter()
+        .flat_map(|page| page.lines.iter())
+        .flat_map(|line| line.words.iter())
+    {
+        let chars = word.text.trim().chars().count();
+        let width = word.bbox.right - word.bbox.left;
+        let height = word.bbox.bottom - word.bbox.top;
+        if chars < 6 || width <= 0.0 || height <= 0.0 {
+            continue;
+        }
+        if height < median_height * 0.75 || height > median_height * 1.25 {
+            continue;
+        }
+        pitches.push(width / chars as f64);
+    }
+    if pitches.len() < 5 {
+        return None;
+    }
+    pitches.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Some(pitches[pitches.len() / 2])
+}
+
+/// Deny itemhood to rows standing in a print-grid column that never carries a
+/// price.
+///
+/// A receipt's annotation columns — Food Basics' `Saving 4.72` one cell in from
+/// its items — are recognisable without knowing a single chain's vocabulary,
+/// because they have three properties together: the column holds no priced row
+/// anywhere on the receipt, it is deeper than the shallowest column that does,
+/// and its rows carry their own amount inline. The last one is what separates an
+/// annotation from a row whose price the grouper simply lost; it is a numeric
+/// shape, not a keyword, so it stays merchant-blind.
+///
+/// Order matters. This must run on the pairing the *yield* produced
+/// (`ocr_line_grouping::yields_to_price_column`), never on the raw one: a
+/// savings row that has wrongly claimed a summary amount makes its own column
+/// look priced and shields itself from this test. On the Food Basics receipt
+/// that is exactly what happened — `Saving 2.01` held SUBTOTAL's 6.96, so the
+/// annotation column was invisible until the yield took it back.
+///
+/// Measured over the 123-receipt corpus this denies 14 rows, none of which any
+/// fixture asserts as an item; they are quantity breakdowns (`2 @ $5.99`) and
+/// summary asides (`AMOUNT: $25.00`, `Eligible amount for point calculation`).
+/// Both parser paths need this verdict, so it is computed from the geometry
+/// alone and returned per line of the flattened page sequence — the spatial
+/// extractor consumes it below, and `receipt_parser` withholds the same lines
+/// from the text path, which has no coordinates of its own to decide with.
+pub fn annotation_line_flags(pages: &[PageInput]) -> Vec<bool> {
+    let rows: Vec<AnnotationRow> = pages
+        .iter()
+        .flat_map(|page| page.lines.iter())
+        .map(annotation_row)
+        .collect();
+    let mut flags = vec![false; rows.len()];
+    let Some(pitch) = glyph_pitch_normalized(pages) else {
+        return flags;
+    };
+    if pitch <= 0.0 || rows.is_empty() {
+        return flags;
+    }
+
+    let mut order: Vec<usize> = (0..rows.len())
+        .filter(|&index| rows[index].left_x.is_finite())
+        .collect();
+    order.sort_by(|&a, &b| {
+        rows[a]
+            .left_x
+            .partial_cmp(&rows[b].left_x)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    if order.is_empty() {
+        return flags;
+    }
+
+    // Cluster left edges into columns by single linkage at half a cell. As in
+    // the grouper, chaining is the safe failure: a ragged left column collapses
+    // to one level, no column is deeper than the shallowest priced one, and
+    // nothing is marked.
+    let mut level = vec![usize::MAX; rows.len()];
+    let mut current = 0usize;
+    for (rank, &index) in order.iter().enumerate() {
+        if rank > 0
+            && rows[index].left_x - rows[order[rank - 1]].left_x > ANNOTATION_COLUMN_LINK * pitch
+        {
+            current += 1;
+        }
+        level[index] = current;
+    }
+
+    let mut priced_columns: Vec<bool> = vec![false; current + 1];
+    for (index, row) in rows.iter().enumerate() {
+        if row.has_price && level[index] != usize::MAX {
+            priced_columns[level[index]] = true;
+        }
+    }
+    let Some(shallowest_priced) = priced_columns.iter().position(|priced| *priced) else {
+        return flags;
+    };
+
+    for (index, row) in rows.iter().enumerate() {
+        let column = level[index];
+        if column == usize::MAX || column <= shallowest_priced || priced_columns[column] {
+            continue;
+        }
+        if row.left_text.is_empty() || !re_trailing_price().is_match(&row.left_text) {
+            continue;
+        }
+        flags[index] = true;
+    }
+    flags
+}
+
+struct AnnotationRow {
+    left_x: f64,
+    left_text: String,
+    has_price: bool,
+}
+
+fn annotation_row(line: &LineInput) -> AnnotationRow {
+    let mut left_x = f64::INFINITY;
+    let mut left_words: Vec<&str> = Vec::new();
+    let mut has_price = false;
+    for word in &line.words {
+        let x = x_center(word);
+        if x < PRICE_X_THRESHOLD {
+            let text = word.text.as_str();
+            if text.len() <= 1 || re_digits_dots_only().is_match(text) {
+                continue;
+            }
+            left_words.push(text);
+            left_x = left_x.min(word.bbox.left);
+        } else if word.confidence >= MIN_CONFIDENCE
+            && is_price_word(&word.text).is_some_and(|scaled| scaled != 0)
+        {
+            has_price = true;
+        }
+    }
+    AnnotationRow {
+        left_x,
+        left_text: left_words.join(" "),
+        has_price,
+    }
+}
+
 fn is_valid_item_line(line: &ParsedLine, total_line_y: Option<f64>) -> bool {
+    if line.is_annotation {
+        return false;
+    }
     let left_text_for_ratio = strip_leading_receipt_codes(&line.left_text);
     if left_text_for_ratio.is_empty() || line.left_text.is_empty() {
         return false;
@@ -866,6 +1046,7 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
             let line_has_price = line_has_trailing_price(&full_text);
             let mut left_words = Vec::new();
             let mut left_y = None;
+            let mut left_x = f64::INFINITY;
             for word in &line.words {
                 let x = x_center(word);
                 // PRICE_X_THRESHOLD is the description/price boundary;
@@ -880,6 +1061,7 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
                         continue;
                     }
                     left_words.push(text.to_string());
+                    left_x = left_x.min(word.bbox.left);
                     if left_y.is_none() {
                         left_y = Some(y_center(word));
                     }
@@ -889,8 +1071,10 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
             let line_index = all_lines.len();
             all_lines.push(ParsedLine {
                 line_y,
+                left_x,
                 full_text: full_text.clone(),
                 left_text: left_words.join(" "),
+                is_annotation: false,
             });
             for word in &line.words {
                 if word.confidence < MIN_CONFIDENCE {
@@ -911,6 +1095,10 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
                 }
             }
         }
+    }
+
+    for (line, is_annotation) in all_lines.iter_mut().zip(annotation_line_flags(&pages)) {
+        line.is_annotation = is_annotation;
     }
 
     let total_line_y = all_lines
