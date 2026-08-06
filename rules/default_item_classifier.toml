@@ -693,3 +693,41 @@ keywords = ["MED WHT OVWRP", "MED WHT OUWRP"]
 tags = ["grocery/dairy"]
 priority = -80
 exact_only = false
+
+[[rules]]
+id = "semantic_tag_0106"
+# Line-item discounts. A discount is not a product, so it matches no product
+# rule — which used to leave it tagless and therefore indistinguishable from
+# "we have no rule for this item", the one thing that made every receipt
+# carrying one look permanently unparsed. Tagging it says what it actually is.
+#
+# The spellings are per-chain and printed literally:
+#   Costco   "2087683 TPD/969786"     (TPD = the discount, then the item's code)
+#   FreshCo  "INSTANT SAVINGS -$6.00"
+#   FreshCo  "YOU SAVED $2.00"        (annotation, usually unpriced)
+#
+# "TPD/" keeps its slash: bare "TPD" is three characters and would fuzzy-match
+# item codes and short product words across the corpus. The slash is always
+# printed, and it is what makes the keyword specific.
+#
+# Priority -90 — *below* every product rule, which is the opposite of what it
+# looks like it should be, and the corpus is why. Tags accumulate from every
+# matching rule; only the ACCOUNT is decided by priority. So losing the priority
+# race is exactly what's wanted here:
+#
+#   "2080493 TPD/TISSUE  5.50-"  -> tags [household, household/supply, discount]
+#                                   account Expenses:Home:HouseholdSupply
+#   "2087683 TPD/969786  4.00-"  -> tags [discount]
+#                                   account Expenses:Discount
+#
+# A discount that names what it discounts nets against that category, which is
+# what the ledger wants and what the private corpus already asserted (raising
+# this above the product rules moved TPD/TISSUE off HouseholdSupply — one
+# divergence, and the fixture was right). A discount that names only an item
+# code has nothing to net against and files to Expenses:Discount instead of the
+# Expenses:FIXME it used to get. Either way it now carries the `discount` tag,
+# which is the part that stops it reading as "no rule matched this".
+keywords = ["TPD/", "INSTANT SAVINGS", "YOU SAVED"]
+tags = ["discount"]
+priority = -90
+exact_only = false

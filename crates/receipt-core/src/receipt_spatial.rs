@@ -1,7 +1,7 @@
 use regex::Regex;
 use std::sync::OnceLock;
 
-use crate::receipt_common::{WEIGHT_UNIT_AT_SEP, WEIGHT_UNIT_CLASS};
+use crate::receipt_common::{ReceiptWarningKind, WEIGHT_UNIT_AT_SEP, WEIGHT_UNIT_CLASS};
 
 const SCALE: i64 = 10_000;
 const MIN_CONFIDENCE: f64 = 0.5;
@@ -44,6 +44,7 @@ pub struct SpatialExtractedItem {
 
 #[derive(Clone, Debug)]
 pub struct SpatialParserWarning {
+    pub kind: ReceiptWarningKind,
     pub message: String,
     pub after_item_index: Option<usize>,
 }
@@ -1689,6 +1690,7 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
                 message.push_str(&format!(" (context: \"{}\")", context_text));
             }
             warnings.push(SpatialParserWarning {
+                kind: ReceiptWarningKind::PossibleMissedItem,
                 message,
                 after_item_index: if items.is_empty() {
                     None

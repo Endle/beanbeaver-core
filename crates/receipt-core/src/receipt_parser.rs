@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use crate::receipt_categories;
+use crate::receipt_common::ReceiptWarningKind;
 use crate::receipt_fields;
 use crate::receipt_parse_helpers;
 use crate::receipt_spatial;
@@ -37,6 +38,7 @@ pub struct ParsedReceiptItem {
 
 #[derive(Clone, Debug)]
 pub struct ParsedReceiptWarning {
+    pub kind: ReceiptWarningKind,
     pub message: String,
     pub after_item_index: Option<usize>,
 }
@@ -310,6 +312,7 @@ pub fn parse_receipt(
                     warnings
                         .into_iter()
                         .map(|warning| ParsedReceiptWarning {
+                            kind: warning.kind,
                             message: warning.message,
                             after_item_index: warning.after_item_index,
                         })
@@ -335,6 +338,7 @@ pub fn parse_receipt(
                         .warnings
                         .into_iter()
                         .map(|warning| ParsedReceiptWarning {
+                            kind: warning.kind,
                             message: warning.message,
                             after_item_index: warning.after_item_index,
                         })
@@ -360,6 +364,7 @@ pub fn parse_receipt(
                 warnings
                     .into_iter()
                     .map(|warning| ParsedReceiptWarning {
+                        kind: warning.kind,
                         message: warning.message,
                         after_item_index: warning.after_item_index,
                     })
@@ -396,6 +401,7 @@ pub fn parse_receipt(
             + tax_cents.unwrap_or(0);
         if posted_cents > total_cents {
             warnings.push(ParsedReceiptWarning {
+                kind: ReceiptWarningKind::TotalMismatch,
                 message: format!(
                     "items{} total {} but the receipt total is {} — {} too much, so this transaction will not balance",
                     if tax_cents.is_some() { " and tax" } else { "" },
@@ -438,6 +444,7 @@ pub fn parse_receipt(
                     ("more than", item_block_delta)
                 };
                 warnings.push(ParsedReceiptWarning {
+                    kind: ReceiptWarningKind::SubtotalMismatch,
                     message: format!(
                         "items total {}, {} the receipt's subtotal of {} by {} — a line was probably {}",
                         cents_to_fixed(items_cents),
@@ -449,6 +456,22 @@ pub fn parse_receipt(
                     after_item_index: None,
                 });
             }
+        }
+    }
+
+    // "This line matched no classifier rule" is a finding like any other, and
+    // the parser is the only layer that knows it first-hand. It used to be
+    // re-derived by each client from `tags.is_empty()`, which is how a
+    // perfectly-parsed discount line ended up indistinguishable from a product
+    // nobody has written a rule for. Reported last so the arithmetic warnings —
+    // which are about the receipt as a whole — keep their existing position.
+    for (index, item) in items.iter().enumerate() {
+        if item.tags.is_empty() {
+            warnings.push(ParsedReceiptWarning {
+                kind: ReceiptWarningKind::UncategorizedItem,
+                message: format!("no classifier rule matched \"{}\"", item.description),
+                after_item_index: Some(index),
+            });
         }
     }
 
@@ -481,6 +504,7 @@ pub fn parse_receipt(
 #[cfg(test)]
 mod tests {
     use super::{cents_to_fixed, is_unsigned_discount_line, item_tags};
+    use crate::receipt_common::ReceiptWarningKind;
     use crate::rules::default_parser_rule_layers;
 
     #[test]
@@ -535,7 +559,7 @@ mod tests {
         let balance: Vec<_> = parsed
             .warnings
             .iter()
-            .filter(|w| w.message.contains("will not balance"))
+            .filter(|w| w.kind == ReceiptWarningKind::TotalMismatch)
             .collect();
         assert_eq!(balance.len(), 1, "warnings were {:?}", parsed.warnings);
 
@@ -574,7 +598,8 @@ mod tests {
             parsed
                 .warnings
                 .iter()
-                .any(|w| w.message.contains("short of the receipt's subtotal")),
+                .any(|w| w.kind == ReceiptWarningKind::SubtotalMismatch
+                    && w.message.contains("short of the receipt's subtotal")),
             "warnings were {:?}",
             parsed.warnings
         );
@@ -596,7 +621,7 @@ mod tests {
             !parsed
                 .warnings
                 .iter()
-                .any(|w| w.message.contains("subtotal")),
+                .any(|w| w.kind == ReceiptWarningKind::SubtotalMismatch),
             "warnings were {:?}",
             parsed.warnings
         );
@@ -618,7 +643,7 @@ mod tests {
             !parsed
                 .warnings
                 .iter()
-                .any(|w| w.message.contains("will not balance")),
+                .any(|w| w.kind == ReceiptWarningKind::TotalMismatch),
             "warnings were {:?}",
             parsed.warnings
         );
@@ -639,5 +664,95 @@ mod tests {
         // Ordinary products are untouched.
         assert!(!is_unsigned_discount_line("Tom Diced"));
         assert!(!is_unsigned_discount_line("Soft Drink Orange"));
+    }
+
+    #[test]
+    fn discount_lines_classify_as_discounts_not_as_nothing() {
+        let layers = default_parser_rule_layers();
+        // Costco: the discount code, then the code of the item it reduces.
+        assert_eq!(item_tags("2087683 TPD/969786", &layers), vec!["discount"]);
+        // FreshCo's two spellings.
+        assert_eq!(item_tags("INSTANT SAVINGS", &layers), vec!["discount"]);
+        assert_eq!(item_tags("YOU SAVED", &layers), vec!["discount"]);
+        // A discount that names what it discounts nets against that category —
+        // the rule sits *below* the product rules on purpose, so the product
+        // wins the account while the line still picks up the `discount` tag.
+        let both = item_tags("INSTANT SAVINGS ON MILK", &layers);
+        assert!(both.contains(&"discount".to_string()), "tags were {both:?}");
+        assert!(
+            both.contains(&"grocery/dairy".to_string()),
+            "tags were {both:?}"
+        );
+        assert_eq!(
+            super::categorize_description("INSTANT SAVINGS ON MILK", &layers).as_deref(),
+            Some("Expenses:Food:Grocery:Dairy")
+        );
+        // With nothing to net against, it files to its own account rather than
+        // to the Expenses:FIXME it used to get.
+        assert_eq!(
+            super::categorize_description("2087683 TPD/969786", &layers).as_deref(),
+            Some("Expenses:Discount")
+        );
+        // And the keyword is specific: a bare product line near those words is
+        // still a product.
+        assert!(!item_tags("MILK", &layers).contains(&"discount".to_string()));
+    }
+
+    #[test]
+    fn uncategorized_items_are_reported_as_a_finding_with_their_index() {
+        let parsed = parse_text(
+            "NOFRILLS\n\
+             MILK 4.00\n\
+             ZZQW UNKNOWN ITEM 3.00\n\
+             SUBTOTAL 7.00\n\
+             TOTAL 7.00\n",
+        );
+        let uncategorized: Vec<_> = parsed
+            .warnings
+            .iter()
+            .filter(|w| w.kind == ReceiptWarningKind::UncategorizedItem)
+            .collect();
+        assert_eq!(
+            uncategorized.len(),
+            1,
+            "only the unknown line should be uncategorized: {:?}",
+            parsed.warnings
+        );
+        let index = uncategorized[0]
+            .after_item_index
+            .expect("an uncategorized item names the item it is about");
+        assert!(
+            parsed.items[index].description.contains("UNKNOWN"),
+            "warning points at {:?}",
+            parsed.items[index]
+        );
+    }
+
+    #[test]
+    fn a_parsed_discount_line_is_not_a_finding() {
+        // The Costco receipt that prompted this: the discount reconciles
+        // exactly, so nothing about this parse deserves the user's attention —
+        // and before discounts were classified, this receipt reported an
+        // uncategorized item forever.
+        let parsed = parse_text(
+            "COSTCO\n\
+             969786 PANDA COOKIE 15.99\n\
+             2087683 TPD/969786 4.00-\n\
+             SUBTOTAL 11.99\n\
+             TOTAL 11.99\n",
+        );
+        assert!(
+            parsed.warnings.is_empty(),
+            "a clean discount receipt should report nothing: {:?}",
+            parsed.warnings
+        );
+        let discount = parsed
+            .items
+            .iter()
+            .find(|i| i.description.contains("TPD/"))
+            .expect("the discount line is an item");
+        assert_eq!(discount.price, "-4.00");
+        assert_eq!(discount.tags, vec!["discount"]);
+        assert_eq!(discount.account.as_deref(), Some("Expenses:Discount"));
     }
 }

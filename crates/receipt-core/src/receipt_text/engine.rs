@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 
 use super::patterns::*;
 use super::types::*;
+use crate::receipt_common::ReceiptWarningKind;
 
 pub(crate) fn normalize_decimal_spacing(text: &str) -> String {
     let bytes = text.as_bytes();
@@ -548,8 +549,14 @@ fn is_weak_inline_description(text: &str) -> bool {
     re_weak_parenthetical().is_match(stripped) || re_weak_measure().is_match(stripped)
 }
 
-fn maybe_push_warning(warnings: &mut Vec<TextParserWarning>, items_len: usize, message: String) {
+fn maybe_push_warning(
+    warnings: &mut Vec<TextParserWarning>,
+    items_len: usize,
+    kind: ReceiptWarningKind,
+    message: String,
+) {
     warnings.push(TextParserWarning {
+        kind,
         message,
         after_item_index: if items_len > 0 {
             Some(items_len - 1)
@@ -992,6 +999,7 @@ pub fn extract_text_items(
                 if !tail_token.is_empty() && tail_token.chars().any(|ch| ch.is_ascii_alphabetic()) {
                     let context = truncated_context(line);
                     deferred.push(DeferredTextOutcome::Warning(
+                        ReceiptWarningKind::PossibleMissedItem,
                         format!(
                             "maybe missed item near malformed multi-buy total \"{tail_token}\" (context: \"{context}\")"
                         ),
@@ -1553,7 +1561,10 @@ pub fn extract_text_items(
                     if !context.is_empty() {
                         message.push_str(&format!(" (context: \"{context}\")"));
                     }
-                    deferred.push(DeferredTextOutcome::Warning(message));
+                    deferred.push(DeferredTextOutcome::Warning(
+                        ReceiptWarningKind::PossibleMissedItem,
+                        message,
+                    ));
                 }
             }
         } else if let Some(candidate) = build_malformed_price_candidate(line) {
@@ -1561,9 +1572,10 @@ pub fn extract_text_items(
         } else if let Some(captures) = re_malformed_ocr_price().captures(line) {
             let token = captures.get(1).map(|m| m.as_str()).unwrap_or("");
             let context = truncated_context(line);
-            deferred.push(DeferredTextOutcome::Warning(format!(
-                "maybe missed item with malformed OCR price \"{token}\" (context: \"{context}\")"
-            )));
+            deferred.push(DeferredTextOutcome::Warning(
+                ReceiptWarningKind::PossibleMissedItem,
+                format!("maybe missed item with malformed OCR price \"{token}\" (context: \"{context}\")"),
+            ));
         } else if line.to_ascii_lowercase().contains("/for")
             && re_tail_token().is_match(line)
             && re_tail_token()
@@ -1577,6 +1589,7 @@ pub fn extract_text_items(
                 .unwrap_or_default();
             let context = truncated_context(line);
             deferred.push(DeferredTextOutcome::Warning(
+                ReceiptWarningKind::PossibleMissedItem,
                 format!(
                     "maybe missed item near malformed multi-buy total \"{tail_token}\" (context: \"{context}\")"
                 ),
@@ -1611,8 +1624,8 @@ pub fn extract_text_items(
     for outcome in deferred {
         match outcome {
             DeferredTextOutcome::Item(item) => items.push(item),
-            DeferredTextOutcome::Warning(message) => {
-                maybe_push_warning(&mut warnings, items.len(), message);
+            DeferredTextOutcome::Warning(kind, message) => {
+                maybe_push_warning(&mut warnings, items.len(), kind, message);
             }
             DeferredTextOutcome::Malformed(candidate) => {
                 if let Some(recovered_price_cents) =
@@ -1627,6 +1640,7 @@ pub fn extract_text_items(
                     maybe_push_warning(
                         &mut warnings,
                         items.len(),
+                        ReceiptWarningKind::PriceAutoCorrected,
                         format!(
                             "auto-corrected malformed OCR price \"{}\" -> \"{}\" using summary reconciliation",
                             candidate.observed_token,
@@ -1637,6 +1651,7 @@ pub fn extract_text_items(
                     maybe_push_warning(
                         &mut warnings,
                         items.len(),
+                        ReceiptWarningKind::PossibleMissedItem,
                         format!(
                             "maybe missed item with malformed OCR price \"{}\" (context: \"{}\")",
                             candidate.observed_token, candidate.context
@@ -1660,6 +1675,7 @@ pub fn extract_text_items(
                 maybe_push_warning(
                     &mut warnings,
                     kept.len(),
+                    ReceiptWarningKind::DroppedImplausiblePrice,
                     format!(
                         "dropped implausible item price \"{}\" exceeding receipt total (context: \"{}\")",
                         format_cents(it.price_cents),

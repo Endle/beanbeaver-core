@@ -1,3 +1,5 @@
+use crate::receipt_common::ReceiptWarningKind;
+
 #[derive(Clone, Debug)]
 pub struct FormatterItemInput {
     pub description: String,
@@ -8,6 +10,7 @@ pub struct FormatterItemInput {
 
 #[derive(Clone, Debug)]
 pub struct FormatterWarningInput {
+    pub kind: ReceiptWarningKind,
     pub message: String,
     pub after_item_index: Option<usize>,
 }
@@ -215,13 +218,25 @@ fn extract_card_last4(raw_text: &str) -> Option<String> {
     None
 }
 
+/// Which warning kinds earn a `; WARN:PARSER` comment in the ledger text.
+///
+/// This is the formatter exercising the same right the phone UI has: the parser
+/// reports every finding, and each consumer decides what to do with it. A ledger
+/// entry is a durable artifact a human reads later, so it carries the findings
+/// that question the *numbers* — and not [`ReceiptWarningKind::UncategorizedItem`],
+/// which would stamp a comment on every unclassified line on every receipt and
+/// say nothing the `Expenses:FIXME` posting right above it doesn't already.
+fn belongs_in_ledger_text(kind: ReceiptWarningKind) -> bool {
+    !matches!(kind, ReceiptWarningKind::UncategorizedItem)
+}
+
 fn build_posting_warning_map(
     warnings: &[FormatterWarningInput],
     item_posting_indexes: &[usize],
 ) -> Vec<(usize, String)> {
     let mut mapped = Vec::new();
     for warning in warnings {
-        if warning.message.is_empty() {
+        if warning.message.is_empty() || !belongs_in_ledger_text(warning.kind) {
             continue;
         }
         let posting_idx = if item_posting_indexes.is_empty() {
@@ -1044,5 +1059,36 @@ mod tests {
         let out = format_enriched_transaction(&base(), &match_input, "Expenses:FIXME", None, None);
         assert!(!out.contains("beanbeaver-id"));
         assert!(!out.contains("document:"));
+    }
+
+    /// The ledger text carries findings about the *numbers* and drops the rest.
+    /// The parser reports both; choosing between them is this layer's job, and
+    /// an uncategorized line already announces itself as `Expenses:FIXME` one
+    /// line above where the comment would go.
+    #[test]
+    fn only_numeric_findings_reach_the_ledger_text() {
+        let mut receipt = base();
+        receipt.items = vec![item("MILK", "4.00", 1, "Expenses:Food:Grocery:Dairy")];
+        receipt.warnings = vec![
+            FormatterWarningInput {
+                kind: ReceiptWarningKind::UncategorizedItem,
+                message: "no classifier rule matched \"ZZQW\"".to_string(),
+                after_item_index: Some(0),
+            },
+            FormatterWarningInput {
+                kind: ReceiptWarningKind::TotalMismatch,
+                message: "items total 24.00 but the receipt total is 20.00".to_string(),
+                after_item_index: None,
+            },
+        ];
+        let out = format_parsed_receipt(&receipt, CC, None);
+        assert!(
+            out.contains("; WARN:PARSER items total 24.00"),
+            "the balance finding belongs in the ledger:\n{out}"
+        );
+        assert!(
+            !out.contains("no classifier rule matched"),
+            "an uncategorized line should not comment the ledger:\n{out}"
+        );
     }
 }

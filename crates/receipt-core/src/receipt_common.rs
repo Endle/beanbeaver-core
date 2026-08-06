@@ -1,6 +1,55 @@
 use regex::Regex;
 use std::sync::OnceLock;
 
+/// What a parser warning *is*, as a value rather than as English prose.
+///
+/// The parser's job is to report every finding honestly; deciding whether a
+/// finding deserves a red badge, a quiet note, or nothing at all is the
+/// consumer's job — the phone UI, the beancount formatter, and the matcher all
+/// answer it differently, and none of them should be sniffing `message` text to
+/// work out what happened. So **this enum carries no severity, and must not
+/// grow one.** Rank these in the client.
+///
+/// Lives in `receipt_common` because all three producing layers
+/// (`receipt_spatial`, `receipt_text`, `receipt_parser`) need it, and the kind
+/// has to survive the trip up through each of their own warning structs
+/// unchanged.
+///
+/// Variants are a compatibility surface: this crosses the FFI, so renaming one
+/// breaks the clients' `switch`. Adding is fine — clients are expected to have
+/// a fallback arm — removing is not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReceiptWarningKind {
+    /// Items (plus tax, when printed) overshoot the receipt's own total, so the
+    /// transaction cannot balance. Always a defect: a duplicated line, or a
+    /// summary amount parsed as an item.
+    TotalMismatch,
+    /// Items don't sum to the printed subtotal — a line was double-counted or
+    /// missed. Distinct from [`Self::TotalMismatch`]: the entry may still
+    /// balance against the total.
+    SubtotalMismatch,
+    /// A price was found with no item description to attach it to, so a line
+    /// item is probably missing from the parse.
+    PossibleMissedItem,
+    /// A malformed OCR price was **repaired** by reconciling against the
+    /// summary amounts. Informational — the parse is better for it, and the
+    /// note exists so the repair is auditable rather than silent.
+    PriceAutoCorrected,
+    /// A parsed price was discarded for exceeding the receipt total, on the
+    /// grounds that it cannot be a real line item.
+    DroppedImplausiblePrice,
+    /// An item matched no classifier rule, so it carries no tags and files to
+    /// no account. Emitted per item, with `after_item_index` naming it.
+    ///
+    /// This one used to be inferred client-side (`items.contains { $0.tags.isEmpty }`
+    /// in the iOS badge), which is why a *correctly* parsed discount line — a
+    /// discount is not a product and matches no product rule — flagged a receipt
+    /// forever. Reporting it as a kind moves the judgment to the consumer, where
+    /// it can be ranked below a mismatch instead of being indistinguishable
+    /// from one.
+    UncategorizedItem,
+}
+
 /// The weight unit as OCR actually renders it. `lb` loses its `l` to `1`/`I`
 /// and its `b` to `6`/`k` in any combination ("1b", "Ik", "16"), so the class is
 /// spelled as the cross-product rather than an enumerated list of spellings.

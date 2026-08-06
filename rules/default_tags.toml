@@ -156,6 +156,13 @@ display = "Beverage"
 path = "gift_card"
 display = "Gift Card"
 
+# A root of its own, like `gift_card`: a line-item discount is a discount
+# whatever the chain and whatever it discounts. It is not a property of the
+# product it reduces, which is why it does not hang under `grocery`.
+[[tags]]
+path = "discount"
+display = "Discount"
+
 [[tags]]
 path = "household"
 display = "Household"
@@ -256,3 +263,10 @@ display = "Gift Card"
 # dead code — and LCBO CARD declares plain `gift_card`, not this path, so keeping
 # it does not give that item an account.
 "restaurant/gift_card" = "Expenses:Food:Restaurant:GiftCard"
+# Unlike `gift_card`, this one claims an account. A discount posts a negative
+# amount, and leaving it on `Expenses:FIXME` meant every receipt with a coupon
+# line carried a posting that reads as unfinished work when it is nothing of the
+# sort. Whether a discount should instead *net* against the item it reduces is
+# still open — that is a change to how the entry is built, not to where an
+# un-netted discount files, and this table is the layer to override either way.
+"discount" = "Expenses:Discount"

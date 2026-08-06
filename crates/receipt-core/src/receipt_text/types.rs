@@ -1,5 +1,7 @@
 //! Public and private types for text-line item extraction.
 
+use crate::receipt_common::ReceiptWarningKind;
+
 #[derive(Clone, Debug)]
 pub struct ParsedTextItem {
     pub description: String,
@@ -10,6 +12,7 @@ pub struct ParsedTextItem {
 
 #[derive(Clone, Debug)]
 pub struct TextParserWarning {
+    pub kind: ReceiptWarningKind,
     pub message: String,
     pub after_item_index: Option<usize>,
 }
@@ -33,7 +36,7 @@ pub(crate) struct CandidatePriceOption {
 #[derive(Clone, Debug)]
 pub(crate) enum DeferredTextOutcome {
     Item(ParsedTextItem),
-    Warning(String),
+    Warning(ReceiptWarningKind, String),
     Malformed(MalformedTrailingPriceCandidate),
 }
 

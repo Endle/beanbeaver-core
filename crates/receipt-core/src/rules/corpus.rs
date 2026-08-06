@@ -505,25 +505,27 @@ pub fn default_known_merchants() -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// The migration renamed keys into paths but must not have lost, gained, or
-    /// altered a single beancount account — that is what keeps the corpus and the
+    /// The migration renamed keys into paths but must not have **lost or
+    /// altered** a beancount account — that is what keeps the corpus and the
     /// E2E fixtures meaningful across the format change.
+    ///
+    /// Containment, not equality: the table has kept growing since the
+    /// migration (`discount` is the current example), and a new account is
+    /// ordinary work, not migration drift. Dropping or renaming one still
+    /// fails here, because its string would go missing from the live table.
     #[test]
-    fn migrated_accounts_match_the_pre_vocabulary_table() {
+    fn migration_kept_every_pre_vocabulary_account() {
         let legacy = legacy_category_accounts();
         let (_, migrated) = default_tag_vocabulary();
-        assert_eq!(
-            legacy.len(),
-            migrated.len(),
-            "account count changed during migration"
-        );
-        let mut legacy_accounts: Vec<&String> = legacy.values().collect();
-        let mut migrated_accounts: Vec<&String> = migrated.values().collect();
-        legacy_accounts.sort();
-        migrated_accounts.sort();
-        assert_eq!(
-            legacy_accounts, migrated_accounts,
-            "the set of beancount accounts changed during migration"
+        let migrated_accounts: std::collections::HashSet<&String> = migrated.values().collect();
+        let mut missing: Vec<&String> = legacy
+            .values()
+            .filter(|account| !migrated_accounts.contains(account))
+            .collect();
+        missing.sort();
+        assert!(
+            missing.is_empty(),
+            "accounts lost or renamed since the pre-vocabulary table: {missing:?}"
         );
     }
 
