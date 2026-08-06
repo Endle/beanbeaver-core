@@ -1,5 +1,13 @@
 # Auto-generated from item_categories.py rule tables
-exact_only_keywords = []
+
+# Keywords that may only match literally, never fuzzily. A keyword earns a place
+# here when its fuzzy neighborhood contains real products it has no business
+# claiming — short, brand-ish tokens are the usual offenders.
+#
+#   DANDAN  (staple, legacy_0017) fuzzy-matched "PANDA", which is how a boxed
+#           Panda cookie picked up a `grocery/staple` tag. Dan dan noodles are
+#           always printed in full, so nothing is lost by requiring it.
+exact_only_keywords = ["DANDAN"]
 
 # RULE IDS ARE A COMPATIBILITY SURFACE — FROZEN AND ADDITIVE.
 #
@@ -730,4 +738,21 @@ id = "semantic_tag_0106"
 keywords = ["TPD/", "INSTANT SAVINGS", "YOU SAVED"]
 tags = ["discount"]
 priority = -90
+exact_only = false
+
+[[rules]]
+id = "panda_cookie_snack"
+# A boxed Panda cookie is a packaged snack, not fresh bakery. The bakery rule
+# (legacy_0015) matches "COOKIE" exactly, and at equal priority the longer
+# keyword wins, so a generic bakery word beats every brand — "OREO COOKIE"
+# lands on Bakery for exactly the same reason. Priority 20 settles the account.
+#
+# The `grocery/bakery` TAG still accumulates from that rule, as tags do
+# everywhere here (a rotisserie chicken carries both meat and prepared_meal).
+# Only the account is decided by priority. Subtracting the tag would need
+# `remove_tags`, which the bundled corpus deliberately never uses — see
+# `rules::book::tests::bundled_corpus_uses_no_subtraction`.
+keywords = ["PANDA COOKIE"]
+tags = ["grocery/snacks"]
+priority = 20
 exact_only = false
