@@ -774,6 +774,11 @@ mod tests {
             ("5592654 PRONAMEL", "Expenses:PersonalCare:Tooth"),
             // gift card: denomination glued to the brand, matched mid-token
             ("399 DOORDASH2X50", "Expenses:Food:Restaurant:GiftCard"),
+            // snacks — a boxed Panda cookie is packaged, not fresh bakery. The
+            // generic "COOKIE" keyword outranked every brand on the
+            // keyword-length tiebreak until this rule was given a priority
+            // (Costco 2026-08-05).
+            ("969786 PANDA COOKIE", "Expenses:Food:Grocery:Snacks"),
             // dairy (incl. milk/chocolate tiebreak + single-char noise)
             ("Natrel - 2% Partly Skimme", "Expenses:Food:Grocery:Dairy"),
             ("Milk Chocolate 1%", "Expenses:Food:Grocery:Dairy"),
@@ -886,6 +891,26 @@ mod tests {
                 "CHICKEN missing tag {t}"
             );
         }
+
+        // Two rules claim a boxed Panda cookie, and only one of them is wrong
+        // in a way a keyword can fix. `panda_cookie_snack` outranks the bakery
+        // rule's generic "COOKIE" for the ACCOUNT; the bakery *tag* stays,
+        // because tags accumulate from every match by design and the bundled
+        // corpus deliberately never subtracts (see
+        // `rules::book::tests::bundled_corpus_uses_no_subtraction`).
+        //
+        // The staple tag is the one that was simply false: the staple rule's
+        // "DANDAN" keyword fuzzy-matched "PANDA". It is `exact_only` now, so
+        // dan dan noodles still classify and cookies no longer do.
+        assert_eq!(
+            key("969786 PANDA COOKIE").as_deref(),
+            Some("grocery/snacks")
+        );
+        assert_eq!(
+            tags("969786 PANDA COOKIE"),
+            vec!["grocery", "grocery/bakery", "grocery/snacks"]
+        );
+        assert_eq!(key("DANDAN NOODLE").as_deref(), Some("grocery/staple"));
 
         assert_eq!(key("435259 FINE-FILT").as_deref(), Some("grocery/dairy"));
         for t in ["grocery", "grocery/dairy", "grocery/dairy/milk"] {
