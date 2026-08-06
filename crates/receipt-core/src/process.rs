@@ -11,6 +11,7 @@ use std::borrow::Cow;
 
 use crate::merchant_match::{MerchantFamily, MerchantMatch, MerchantMatchStatus};
 use crate::ocr_transform::{transform, RawDetection};
+use crate::receipt_common::ReceiptWarningKind;
 use crate::receipt_formatter::{
     format_parsed_receipt, FormatterItemInput, FormatterReceiptInput, FormatterTenderInput,
     FormatterWarningInput,
@@ -211,10 +212,20 @@ pub fn field_confidence(parsed: &ParsedReceiptData) -> FieldConfidence {
         cat / n
     };
 
+    // Deliberately counts only findings about the receipt's *numbers*: this
+    // legacy roll-up predates warning kinds, and folding
+    // `UncategorizedItem` in would flip it true for most receipts overnight —
+    // an unclassified line is normal, not a reason to re-check a parse. New
+    // consumers should rank `warnings` by kind themselves rather than read this.
+    let has_numeric_warning = parsed
+        .warnings
+        .iter()
+        .any(|w| w.kind != ReceiptWarningKind::UncategorizedItem);
+
     let needs_review = merchant < 0.7
         || date < 0.5
         || total < 0.55
-        || !parsed.warnings.is_empty()
+        || has_numeric_warning
         || parsed.merchant_match.status == MerchantMatchStatus::Suggested
         || parsed.merchant_match.status == MerchantMatchStatus::Unknown;
 
@@ -355,6 +366,7 @@ fn format_from_parsed(
             .warnings
             .iter()
             .map(|warning| FormatterWarningInput {
+                kind: warning.kind,
                 message: warning.message.clone(),
                 after_item_index: warning.after_item_index,
             })

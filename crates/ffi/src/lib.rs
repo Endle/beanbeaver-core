@@ -24,6 +24,7 @@ use receipt_core::process::{
     process_receipt_with_options, reformat_parsed_receipt, FieldConfidence, ProcessOptions,
     ProcessedReceipt, ReceiptCorrections,
 };
+use receipt_core::receipt_common::ReceiptWarningKind as CoreWarningKind;
 use receipt_core::receipt_parser::{
     ParsedReceiptData, ParsedReceiptItem, ParsedReceiptTender, ParsedReceiptWarning,
 };
@@ -236,6 +237,41 @@ impl From<FieldConfidence> for FieldConfidences {
     }
 }
 
+/// What a parser finding *is*, mirroring
+/// [`receipt_core::receipt_common::ReceiptWarningKind`] one-for-one.
+///
+/// Carries no severity on purpose: the parser reports, the client ranks. A
+/// client is expected to `switch` with a fallback arm — variants are additive
+/// over time, and an unrecognized kind should degrade to "show it quietly",
+/// never to a crash.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ReceiptWarningKind {
+    /// Items (+ tax) overshoot the printed total: the entry cannot balance.
+    TotalMismatch,
+    /// Items don't sum to the printed subtotal: a line was missed or doubled.
+    SubtotalMismatch,
+    /// A price with no description to attach it to.
+    PossibleMissedItem,
+    /// A malformed OCR price was repaired against the summary amounts.
+    PriceAutoCorrected,
+    /// A price was discarded for exceeding the receipt total.
+    DroppedImplausiblePrice,
+    /// An item matched no classifier rule, so it has no tags and no account.
+    UncategorizedItem,
+}
+
+/// One parser finding: what it is, what it says, and which item it sits under.
+#[derive(uniffi::Record, Clone)]
+pub struct ReceiptWarning {
+    pub kind: ReceiptWarningKind,
+    /// Human-readable detail. For display only — never switch on this text;
+    /// that is what `kind` is for.
+    pub message: String,
+    /// Item index this warning follows, or `-1` when it is about the receipt
+    /// as a whole.
+    pub after_item_index: i32,
+}
+
 /// Flattened, Swift-friendly view of `ProcessedReceipt`.
 #[derive(uniffi::Record)]
 pub struct ReceiptResult {
@@ -250,9 +286,9 @@ pub struct ReceiptResult {
     pub tax: Option<String>,
     pub subtotal: Option<String>,
     pub items: Vec<ReceiptItem>,
-    pub warnings: Vec<String>,
-    /// Parallel to `warnings`: optional item index each warning follows (`-1` = none).
-    pub warning_after_item_indices: Vec<i32>,
+    /// Every finding the parser made, in kind form. Ranking them into badges,
+    /// colors, or silence is the client's call — see [`ReceiptWarningKind`].
+    pub warnings: Vec<ReceiptWarning>,
     /// OCR dump used for card-last4 / metadata in beancount. Round-trip this
     /// through [`reformat_receipt`] so edits do not drop payment metadata.
     pub raw_text: String,
@@ -831,11 +867,7 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
         })
         .collect();
     let d = p.parsed;
-    let warning_after_item_indices: Vec<i32> = d
-        .warnings
-        .iter()
-        .map(|w| w.after_item_index.map(|i| i as i32).unwrap_or(-1))
-        .collect();
+    let warnings: Vec<ReceiptWarning> = d.warnings.iter().map(warning_to_ffi).collect();
     ReceiptResult {
         merchant: d.merchant,
         merchant_match: d.merchant_match.into(),
@@ -866,8 +898,7 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
                     .collect(),
             })
             .collect(),
-        warnings: d.warnings.iter().map(|w| w.message.clone()).collect(),
-        warning_after_item_indices,
+        warnings,
         raw_text: d.raw_text,
         image_filename: d.image_filename,
         tenders: d
@@ -886,6 +917,40 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
         timings,
         confidence,
         detections,
+    }
+}
+
+/// The two warning-kind enums are the same vocabulary on either side of the
+/// FFI, spelled twice because uniffi cannot re-export a foreign type. Keeping
+/// them as exhaustive `match`es (never a catch-all) is what makes the compiler
+/// point here the moment core grows a variant the clients would silently drop.
+fn warning_kind_to_ffi(kind: CoreWarningKind) -> ReceiptWarningKind {
+    match kind {
+        CoreWarningKind::TotalMismatch => ReceiptWarningKind::TotalMismatch,
+        CoreWarningKind::SubtotalMismatch => ReceiptWarningKind::SubtotalMismatch,
+        CoreWarningKind::PossibleMissedItem => ReceiptWarningKind::PossibleMissedItem,
+        CoreWarningKind::PriceAutoCorrected => ReceiptWarningKind::PriceAutoCorrected,
+        CoreWarningKind::DroppedImplausiblePrice => ReceiptWarningKind::DroppedImplausiblePrice,
+        CoreWarningKind::UncategorizedItem => ReceiptWarningKind::UncategorizedItem,
+    }
+}
+
+fn warning_kind_to_core(kind: ReceiptWarningKind) -> CoreWarningKind {
+    match kind {
+        ReceiptWarningKind::TotalMismatch => CoreWarningKind::TotalMismatch,
+        ReceiptWarningKind::SubtotalMismatch => CoreWarningKind::SubtotalMismatch,
+        ReceiptWarningKind::PossibleMissedItem => CoreWarningKind::PossibleMissedItem,
+        ReceiptWarningKind::PriceAutoCorrected => CoreWarningKind::PriceAutoCorrected,
+        ReceiptWarningKind::DroppedImplausiblePrice => CoreWarningKind::DroppedImplausiblePrice,
+        ReceiptWarningKind::UncategorizedItem => CoreWarningKind::UncategorizedItem,
+    }
+}
+
+fn warning_to_ffi(w: &ParsedReceiptWarning) -> ReceiptWarning {
+    ReceiptWarning {
+        kind: warning_kind_to_ffi(w.kind),
+        message: w.message.clone(),
+        after_item_index: w.after_item_index.map(|i| i as i32).unwrap_or(-1),
     }
 }
 
@@ -946,16 +1011,15 @@ fn receipt_result_to_parsed(r: &ReceiptResult) -> ParsedReceiptData {
         warnings: r
             .warnings
             .iter()
-            .enumerate()
-            .map(|(i, m)| {
-                let after = r
-                    .warning_after_item_indices
-                    .get(i)
-                    .copied()
-                    .filter(|&idx| idx >= 0)
-                    .map(|idx| idx as usize);
+            .map(|w| {
+                let after = if w.after_item_index >= 0 {
+                    Some(w.after_item_index as usize)
+                } else {
+                    None
+                };
                 ParsedReceiptWarning {
-                    message: m.clone(),
+                    kind: warning_kind_to_core(w.kind),
+                    message: w.message.clone(),
                     after_item_index: after,
                 }
             })
@@ -1011,7 +1075,6 @@ mod tests {
                 tags: vec![],
             }],
             warnings: vec![],
-            warning_after_item_indices: vec![],
             raw_text: "COSTCO\n**** 1234\nTOTAL 10.00".into(),
             image_filename: "costco.jpg".into(),
             tenders: vec![ReceiptTender {
