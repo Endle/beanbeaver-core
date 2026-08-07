@@ -912,6 +912,23 @@ mod tests {
         );
         assert_eq!(key("DANDAN NOODLE").as_deref(), Some("grocery/staple"));
 
+        // The other `exact_only` keyword, and the clearer case for the
+        // mechanism: "GINGER" fuzzy-matched "FINGER", so a beef rib came back
+        // tagged as seasoning — and the app shows the most specific tag, which
+        // made a 60-dollar cut of beef read as a spice. Nothing was misread
+        // here; GINGER and FINGER are simply one letter apart, which is a
+        // neighbor the fuzzy stage should never have entertained.
+        assert_eq!(
+            key("Beef Rib Boneless Finger").as_deref(),
+            Some("grocery/meat")
+        );
+        assert_eq!(
+            tags("Beef Rib Boneless Finger"),
+            vec!["grocery", "grocery/meat"]
+        );
+        // ...while ginger itself still classifies.
+        assert_eq!(key("Ginger Root").as_deref(), Some("grocery/seasoning"));
+
         assert_eq!(key("435259 FINE-FILT").as_deref(), Some("grocery/dairy"));
         for t in ["grocery", "grocery/dairy", "grocery/dairy/milk"] {
             assert!(
