@@ -7,7 +7,12 @@
 #   DANDAN  (staple, legacy_0017) fuzzy-matched "PANDA", which is how a boxed
 #           Panda cookie picked up a `grocery/staple` tag. Dan dan noodles are
 #           always printed in full, so nothing is lost by requiring it.
-exact_only_keywords = ["DANDAN"]
+#   GINGER  (seasoning, legacy_0019) fuzzy-matched "FINGER", tagging a
+#           "Beef Rib Boneless Finger" as seasoning. Note this is not OCR
+#           damage at all — the receipt is printed and read correctly, and
+#           GINGER/FINGER are simply one letter apart in English, which is a
+#           neighbor the fuzzy stage should never have entertained.
+exact_only_keywords = ["DANDAN", "GINGER"]
 
 # RULE IDS ARE A COMPATIBILITY SURFACE — FROZEN AND ADDITIVE.
 #
