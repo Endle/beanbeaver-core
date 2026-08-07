@@ -348,7 +348,16 @@ fn re_costco_discount_line() -> &'static Regex {
     // Allow embedded whitespace too — Costco OCR sometimes reads a digit
     // as a space (e.g. "TPD/1 96144" for "TPD/1796144"). Allow `TP[A-Z]/`
     // because OCR also occasionally reads the `D` as `U` etc.
-    RE.get_or_init(|| Regex::new(r"^TP[A-Z]/[\d/\s]+$").unwrap())
+    //
+    // The leading `[\d\s]*` is the discount row's own SKU and tier count.
+    // Costco prints them in the left column ahead of the reference
+    // ("2030193 3 TPD/1944033"), and whether they land in the same grouped
+    // line as the `TPD/` token is a fact about the OCR's column splitting,
+    // not about the receipt — so anchoring hard at `TP` made the rule fire
+    // on some Costco receipts and not others. Still anchored at both ends,
+    // and still digits-only either side, so this widens what counts as the
+    // *prefix* without letting a prose line through.
+    RE.get_or_init(|| Regex::new(r"^[\d\s]*TP[A-Z]/[\d/\s]+$").unwrap())
 }
 
 fn re_hed_word() -> &'static Regex {

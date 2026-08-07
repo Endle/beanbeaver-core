@@ -27,6 +27,10 @@
       "description": "KS BAGS 60",
       "price": "12.99",
       "category": "Expenses:Home:HouseholdSupply"
+    },
+    {
+      "description": "TPD/1944033",
+      "price": "-5.00"
     }
   ]
 }
