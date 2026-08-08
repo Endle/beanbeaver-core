@@ -11,7 +11,7 @@ members = [
 # Single source of truth for every crate here (all inherit `version.workspace`).
 # CI (.github/workflows/release-tag.yml) fails a `v*` tag push whose name does
 # not match this, so bump it in the PR that a release tag will be cut from.
-version = "0.8.2"
+version = "0.8.3"
 edition = "2021"
 license = "MIT"
 publish = false
