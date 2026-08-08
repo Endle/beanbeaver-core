@@ -52,8 +52,22 @@ fn pending_account_for_kind(kind: &str) -> &'static str {
 }
 
 /// Build payment postings for the receipt. Returns one posting per tender when
-/// `receipt.tenders` is non-empty, otherwise a single posting for `-total` against
-/// `fallback_account` (today's legacy shape).
+/// `receipt.tenders` is non-empty and they account for exactly the total,
+/// otherwise a single posting for `-total` against `fallback_account` (today's
+/// legacy shape).
+///
+/// The reconciliation guard lives here, in the one place that owes beancount a
+/// balanced entry, rather than upstream in `receipt_fields::extract_tenders`
+/// where it used to sit. That matters because the two layers want opposite
+/// things from a tender block that doesn't add up: the parser wants to *report*
+/// it (`ReceiptWarningKind::TenderMismatch`), and this function must not
+/// *emit* it — postings summing to `-sum` against an item side summing to
+/// `total` are a transaction beancount rejects.
+///
+/// Note this is not the parser's warning restated as a silent drop. The receipt
+/// is flagged either way; all that is withheld is the breakdown of a payment
+/// split we know to be wrong, in favour of the one posting that is certainly
+/// right — the total was charged somehow.
 fn build_payment_postings(
     receipt: &FormatterReceiptInput,
     fallback_account: &str,
@@ -62,7 +76,12 @@ fn build_payment_postings(
     let currency = &receipt.currency;
     let card_comment =
         extract_card_last4(&receipt.raw_text).map(|last4| format!("card ****{last4}"));
-    if receipt.tenders.is_empty() {
+    let tender_cents: i64 = receipt
+        .tenders
+        .iter()
+        .map(|tender| decimal_to_cents(&tender.amount))
+        .sum();
+    if receipt.tenders.is_empty() || tender_cents != total_cents {
         return vec![(
             fallback_account.to_string(),
             format!("{} {currency}", cents_to_fixed(-total_cents)),
@@ -930,6 +949,51 @@ mod tests {
         assert!(out.contains("Assets:GiftCards:Costco"));
         assert!(out.contains("-5.00 CAD"));
         assert!(out.contains("; gift card"));
+    }
+
+    /// Tenders that don't account for the total are not posted as a split.
+    ///
+    /// This is the LCBO shape: two gift cards, the second OCR'd a dollar low
+    /// (66.60 -> 65.60). Posting them would put -95.65 on the payment side
+    /// against a 96.65 item side and beancount would reject the entry, so the
+    /// formatter falls back to the one posting it knows is right — the total
+    /// was charged somehow. The receipt is not silently "fine": the parser has
+    /// already raised `TenderMismatch` on the same arithmetic.
+    #[test]
+    fn parsed_receipt_falls_back_when_tenders_do_not_account_for_the_total() {
+        let mut r = base();
+        r.total = "96.65".to_string();
+        r.tenders = vec![
+            FormatterTenderInput {
+                amount: "30.05".to_string(),
+                account: None,
+                kind: "gift_card".to_string(),
+            },
+            FormatterTenderInput {
+                amount: "65.60".to_string(),
+                account: None,
+                kind: "gift_card".to_string(),
+            },
+        ];
+        let out = format_parsed_receipt(&r, CC, None);
+        assert!(out.contains(&format!("{CC}  -96.65 CAD")) || out.contains("-96.65 CAD"));
+        assert!(!out.contains("-65.60 CAD"));
+        assert!(!out.contains("-30.05 CAD"));
+    }
+
+    /// One cent short is still short — the old $0.05 tolerance let this through
+    /// and emitted an entry that could not balance.
+    #[test]
+    fn parsed_receipt_falls_back_on_a_one_cent_tender_gap() {
+        let mut r = base();
+        r.tenders = vec![FormatterTenderInput {
+            amount: "19.99".to_string(),
+            account: None,
+            kind: "cash".to_string(),
+        }];
+        let out = format_parsed_receipt(&r, CC, None);
+        assert!(out.contains("-20.00 CAD"));
+        assert!(!out.contains("Assets:Cash:PENDING"));
     }
 
     /// A gift-card tender with no assigned account falls back to its PENDING slot.

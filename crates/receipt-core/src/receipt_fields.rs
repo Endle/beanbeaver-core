@@ -758,15 +758,35 @@ fn trim_tender_label(line: &str) -> String {
 
 /// Scan OCR lines for explicit tender lines (gift card / store credit / cash / card).
 ///
-/// Two-pass behavior: each candidate line picks an amount from the same line or the
-/// next standalone-amount line. Reconcile against `total_cents`: if the sum of
-/// detected tenders is within $0.05 of the total, return them; otherwise return
-/// an empty vec so the caller falls back to the single-payment shape.
-pub fn extract_tenders(lines: &[String], total_cents: i64) -> Vec<TenderLine> {
-    if total_cents <= 0 || lines.is_empty() {
-        return Vec::new();
-    }
-
+/// Each candidate line picks an amount from the same line or the next
+/// standalone-amount line. **Whether those amounts add up to the total is not
+/// this function's business** — it reports what the payment block says, and the
+/// caller reconciles.
+///
+/// It used to end by summing the tenders and comparing them against the total,
+/// returning an empty vec when they disagreed by more than $0.05. That was
+/// wrong in two directions at once:
+///
+/// - **It discarded the evidence.** The tender block is the only independent
+///   witness to the total the receipt prints, so throwing it away on
+///   disagreement destroyed the one signal that says a number is misread —
+///   and it did so precisely when the receipt was trying to say so. Worse, it
+///   was silent: no tenders and no warning, indistinguishable from a receipt
+///   that prints no payment block at all.
+/// - **The tolerance emitted entries that could not balance.** A gap of 1–5c
+///   passed as "reconciled" and the tenders became postings, so the payment
+///   side summed to `-sum` while the item side summed to `total` and beancount
+///   rejected the transaction. A gap of a cent is not a rounding artifact on a
+///   receipt — every amount here is printed to the cent — it is a misread
+///   digit, which is exactly the LCBO case where a $66.60 gift card read as
+///   $65.60.
+///
+/// Callers now get the lines plus the arithmetic and decide: `receipt_parser`
+/// raises [`ReceiptWarningKind::TenderMismatch`], and `receipt_formatter` falls
+/// back to the single-payment posting so the ledger still balances.
+///
+/// [`ReceiptWarningKind::TenderMismatch`]: crate::receipt_common::ReceiptWarningKind::TenderMismatch
+pub fn extract_tenders(lines: &[String]) -> Vec<TenderLine> {
     let mut tenders: Vec<TenderLine> = Vec::new();
     let mut consumed_next = false;
     for (idx, line) in lines.iter().enumerate() {
@@ -798,14 +818,47 @@ pub fn extract_tenders(lines: &[String], total_cents: i64) -> Vec<TenderLine> {
         });
     }
 
-    if tenders.is_empty() {
-        return tenders;
-    }
-    let sum: i64 = tenders.iter().map(|t| t.amount_cents).sum();
-    if (sum - total_cents).abs() > 5 {
-        return Vec::new();
-    }
     tenders
+}
+
+fn re_change_label() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // Word-boundary matched on purpose: plain `contains("CHANGE")` also fires
+    // on every `EXCHANGE` in a return policy, and the corpus prints several
+    // ("No Refund, Exchange Only Within 7 Days"). Same substring trap as
+    // `CASH` inside `CASHIER`.
+    RE.get_or_init(|| Regex::new(r"\bCHANGE\b").unwrap())
+}
+
+/// Cash handed back, summed over every change line the receipt prints.
+///
+/// Without this the tender identity is wrong for the commonest cash receipt
+/// there is: `CASH 25.00 / CHANGE 5.00` against a `TOTAL 20.00` is not a
+/// contradiction, it is arithmetic — the amount *tendered* is not the amount
+/// *applied*, and change is the missing term.
+pub fn extract_change(lines: &[String]) -> i64 {
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| re_change_label().is_match(&line.to_ascii_uppercase()))
+        .filter_map(|(idx, _)| tender_amount_for_line(lines, idx))
+        .sum()
+}
+
+/// Do the printed tenders account for exactly the printed total, once cash
+/// handed back is netted off?
+///
+/// Exact, deliberately: see [`extract_tenders`] on why there is no tolerance.
+/// An empty tender block is not a disagreement — most receipts print none — and
+/// neither is a receipt with no usable total to check against.
+pub fn tenders_reconcile(lines: &[String], tenders: &[TenderLine], total_cents: i64) -> bool {
+    tenders.is_empty() || total_cents <= 0 || tendered_net_cents(lines, tenders) == total_cents
+}
+
+/// What the payment block says was actually applied to this receipt: everything
+/// tendered, less any change handed back.
+pub fn tendered_net_cents(lines: &[String], tenders: &[TenderLine]) -> i64 {
+    tenders.iter().map(|t| t.amount_cents).sum::<i64>() - extract_change(lines)
 }
 
 pub fn extract_subtotal(lines: &[String]) -> Option<i64> {
@@ -828,8 +881,8 @@ pub fn extract_subtotal(lines: &[String]) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_date, extract_subtotal, extract_tax, extract_tenders, extract_total,
-        normalize_decimal_spacing, reconcile_tax,
+        extract_change, extract_date, extract_subtotal, extract_tax, extract_tenders,
+        extract_total, normalize_decimal_spacing, reconcile_tax, tenders_reconcile,
     };
 
     #[test]
@@ -1302,7 +1355,8 @@ mod tests {
             "441.68".to_string(),
         ];
 
-        let tenders = extract_tenders(&lines, 46_668);
+        let tenders = extract_tenders(&lines);
+        assert!(tenders_reconcile(&lines, &tenders, 46_668));
         assert_eq!(tenders.len(), 2);
         assert_eq!(tenders[0].kind, "gift_card");
         assert_eq!(tenders[0].amount_cents, 2_500);
@@ -1313,10 +1367,59 @@ mod tests {
     }
 
     #[test]
-    fn tenders_returns_empty_when_sum_does_not_reconcile() {
+    fn tenders_are_reported_even_when_the_sum_does_not_reconcile() {
         let lines = vec!["TOTAL 50.00".to_string(), "MASTERCARD 30.00".to_string()];
-        // Only 30 of 50 covered → reconciliation fails, drop tenders.
-        assert!(extract_tenders(&lines, 5_000).is_empty());
+        // Only 30 of 50 covered. The tender line is still what the receipt
+        // printed, so it is still reported — discarding it was how a misread
+        // amount became indistinguishable from a receipt with no payment block.
+        let tenders = extract_tenders(&lines);
+        assert_eq!(tenders.len(), 1);
+        assert_eq!(tenders[0].amount_cents, 3_000);
+        assert!(!tenders_reconcile(&lines, &tenders, 5_000));
+    }
+
+    #[test]
+    fn a_one_cent_tender_gap_does_not_reconcile() {
+        // The old $0.05 tolerance called this reconciled and emitted both
+        // tenders as postings, so the payment side summed to 96.64 against an
+        // item side summing to 96.65 and beancount rejected the entry. Every
+        // amount in a payment block is printed to the cent: a cent off is a
+        // misread digit, not rounding.
+        let lines = vec![
+            "Total 96.65".to_string(),
+            "Gift Card 30.05".to_string(),
+            "Gift Card 66.59".to_string(),
+        ];
+        let tenders = extract_tenders(&lines);
+        assert_eq!(tenders.len(), 2);
+        assert!(!tenders_reconcile(&lines, &tenders, 9_665));
+    }
+
+    #[test]
+    fn lcbo_split_gift_cards_reconcile() {
+        // The shape this must keep working: LCBO pays one slip from two gift
+        // cards, and the amounts partition the total instead of echoing it.
+        let lines = vec![
+            "Total 39.90".to_string(),
+            "Deposit (DEP) 0.40".to_string(),
+            "Gift Card 18.10".to_string(),
+            "608835xxxxx2424684x EXP:NONE".to_string(),
+            "AUTHOR.#:607022550 BAL: 0.00".to_string(),
+            "Gift Card 21.80".to_string(),
+        ];
+        let tenders = extract_tenders(&lines);
+        assert_eq!(tenders.len(), 2);
+        assert!(tenders_reconcile(&lines, &tenders, 3_990));
+    }
+
+    #[test]
+    fn an_empty_tender_block_is_not_a_disagreement() {
+        // Most receipts print no payment block at all; that is silence, not a
+        // contradiction, and must not warn.
+        let lines = vec!["TOTAL 50.00".to_string()];
+        let tenders = extract_tenders(&lines);
+        assert!(tenders.is_empty());
+        assert!(tenders_reconcile(&lines, &tenders, 5_000));
     }
 
     #[test]
@@ -1327,9 +1430,29 @@ mod tests {
             "CASH BACK 0.00".to_string(),
             "CHANGE 5.00".to_string(),
         ];
-        let tenders = extract_tenders(&lines, 2_000);
-        // 25 vs total 20 → 5 off, reconciliation fails → empty.
-        assert!(tenders.is_empty());
+        let tenders = extract_tenders(&lines);
+        // Only the CASH line is a tender; CASH BACK and CHANGE are not.
+        assert_eq!(tenders.len(), 1);
+        assert_eq!(tenders[0].amount_cents, 2_500);
+        // ...and $25 tendered against a $20 total is not a disagreement once
+        // the $5 change is netted off. This used to pass for the wrong reason:
+        // the old tolerance check saw 25 vs 20, gave up, and returned nothing.
+        assert!(tenders_reconcile(&lines, &tenders, 2_000));
+    }
+
+    #[test]
+    fn exchange_in_a_return_policy_is_not_a_change_line() {
+        // `contains("CHANGE")` matches "EXCHANGE"; several corpus receipts
+        // print a return policy, and reading one as change due would net a
+        // real amount off the tender sum and invent a mismatch.
+        let lines = vec![
+            "TOTAL 20.00".to_string(),
+            "CASH 20.00".to_string(),
+            "No Refund, Exchange Only Within 7 Days 20.00".to_string(),
+        ];
+        assert_eq!(extract_change(&lines), 0);
+        let tenders = extract_tenders(&lines);
+        assert!(tenders_reconcile(&lines, &tenders, 2_000));
     }
 }
 
