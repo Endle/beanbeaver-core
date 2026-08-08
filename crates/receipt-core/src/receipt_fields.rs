@@ -303,16 +303,42 @@ fn reconcile_total_with_charge(lines: &[String], candidate: i64) -> i64 {
             }
         }
     }
-    // A zero-change line means the card tender IS the grand total, so a single
-    // payment line suffices as corroboration (a mis-grouped TOTAL row can pick
-    // up the tax amount, leaving the true total only on the tender line). With
-    // change due, cash tendered can legitimately exceed the total, so the
-    // two-line corroboration requirement stays.
-    let zero_change = lines.iter().any(|line| {
-        let upper = line.to_ascii_uppercase();
-        upper.contains("CHANGE") && normalize_decimal_spacing(line).trim_end().ends_with("0.00")
+    // Nothing was handed back AND only one instrument paid ⇒ that one tender is
+    // the grand total, so a single payment line suffices as corroboration (a
+    // mis-grouped TOTAL row can pick up the tax amount, leaving the true total
+    // only on the tender line). Otherwise the two-line requirement stays.
+    //
+    // Both halves are load-bearing, and the second was missing. `payment_amounts`
+    // collects only card lines and their echoes — cash is deliberately excluded —
+    // so on a split-tender slip the lone card amount is a *portion* of the total
+    // and a zero-change line makes it look like the whole. The `a > candidate`
+    // guard below does not save it: that only holds while the candidate is
+    // already right, and this function exists for when it isn't. A slip paying
+    // VISA 23.41 + CASH 10.00 against a mis-grouped `TOTAL 2.41` adopted 23.41
+    // and reported it as the total with no warning.
+    //
+    // Reading the change amount matters just as much as testing it. This used to
+    // ask `ends_with("0.00")`, which is also true of `10.00`, `20.00` and
+    // `100.00` — so every whole-ten-dollar change amount, the ordinary case for
+    // cash, counted as zero change and unlocked the relaxation on exactly the
+    // receipts the two-line rule was there to protect.
+    let zero_change = lines.iter().enumerate().any(|(idx, line)| {
+        if !re_change_label().is_match(&line.to_ascii_uppercase()) {
+            return false;
+        }
+        // "CHANGE DUE $12.19 $0.00" prints the amount tendered first and the
+        // change second, so the change is the LAST amount on the row.
+        match prices_in_line(line).last().copied() {
+            Some(amount) => amount == 0,
+            None => tender_amount_for_line(lines, idx) == Some(0),
+        }
     });
-    let min_corroboration = if zero_change { 1 } else { 2 };
+    let single_instrument = extract_tenders(lines).len() <= 1;
+    let min_corroboration = if zero_change && single_instrument {
+        1
+    } else {
+        2
+    };
     let mut corroborated: Vec<i64> = payment_amounts
         .iter()
         .copied()
@@ -1194,6 +1220,41 @@ mod tests {
         ];
 
         assert_eq!(extract_total(&lines), 1_219);
+    }
+
+    #[test]
+    fn zero_change_does_not_promote_one_tender_of_a_split() {
+        // The relaxation above says "nothing handed back ⇒ that tender is the
+        // whole total". True of one instrument; false of two. Cash is not in
+        // `payment_amounts`, so the VISA portion looked like the entire charge
+        // and was adopted: 23.41 reported as the total of a 33.41 receipt, with
+        // nothing to say so. Falling through to the mis-grouped 2.41 is the
+        // correct outcome here — wrong, but wrong *loudly*: it disagrees with
+        // both the subtotal and the tender block, and `TenderMismatch` fires.
+        let lines = vec![
+            "SUBTOTAL 31.42".to_string(),
+            "HST 2.41".to_string(),
+            "TOTAL 2.41".to_string(),
+            "VISA 23.41".to_string(),
+            "CASH 10.00".to_string(),
+            "CHANGE 0.00".to_string(),
+        ];
+        assert_eq!(extract_total(&lines), 241);
+    }
+
+    #[test]
+    fn ten_dollars_change_is_not_zero_change() {
+        // `"10.00".ends_with("0.00")` is true, so the old suffix test read every
+        // whole-ten-dollar change amount as zero — the ordinary cash case, and
+        // precisely the population the two-line rule protects.
+        let lines = vec![
+            "SUBTOTAL 31.42".to_string(),
+            "HST 2.41".to_string(),
+            "TOTAL 2.41".to_string(),
+            "VISA 23.41".to_string(),
+            "CHANGE 10.00".to_string(),
+        ];
+        assert_eq!(extract_total(&lines), 241);
     }
 
     #[test]
