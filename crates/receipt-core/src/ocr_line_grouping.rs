@@ -100,6 +100,35 @@ impl AmountClaim {
     }
 }
 
+/// True for a RIGHT-column token that could be an amount at all — i.e. one that
+/// contains a digit.
+///
+/// The RIGHT partition is defined geometrically (`x_norm > 0.7`), so it holds
+/// more than the price column: several chains print a narrow per-line tax-code
+/// column further right still — Costco's `H` / `HH` / `E`, the Loblaw chains'
+/// `MRJ` / `HMRJ` / `RQ`. A bare code is not an amount in any convention, so no
+/// label may satisfy its claim with one.
+///
+/// This decides *partitioning*, not claim typing: a code is not an amount that
+/// some rows may not have, it is not an amount at all, so it never enters the
+/// price column to be claimed. Letting one stand in for a price is the same
+/// cascade [`AmountClaim`] exists to stop, entered from the other side — the row
+/// looks paid-for, its real amount falls through to the row below, and every
+/// following row inherits its neighbour's. costco/2026-03-05_costco_245_87 loses
+/// eight items to it, starting where `3966510 FO TANK S` claims the `HH` printed
+/// level with it and hands its own 19.99 to `TPD TANK TOP`.
+///
+/// Routing to MIDDLE rather than refusing the token inside the pairing loop is
+/// what keeps this from costing anything: the code still attaches to the row it
+/// was printed on, it just cannot be mistaken for that row's money. Refusing it
+/// in the loop instead leaves it an *orphan line*, which pulls MIDDLE text onto
+/// itself and away from the row that needed it — no_frills/2026-03-06 reads its
+/// date as 2006-03-26 that way, the `DateTime:` label having lost the timestamp
+/// it was labelling.
+fn is_amount_shaped(text: &str) -> bool {
+    text.contains(|c: char| c.is_ascii_digit())
+}
+
 /// True for a loyalty-points figure rather than money — `125 PTS`, `1300 PTS`.
 /// A currency marker disqualifies it, so a tax-coded price never reads as points.
 fn is_points_amount(text: &str) -> bool {
@@ -139,7 +168,10 @@ fn is_negative_amount(text: &str) -> bool {
 /// other chains word it differently (Costco prints `TPD/<sku>`), which is why
 /// this wants to move into the merchant rules data rather than grow inline.
 fn amount_claim(text: &str) -> AmountClaim {
-    if is_code_stub_label(text) || is_transaction_id_label(text) || is_priced_in_savings_label(text)
+    if is_code_stub_label(text)
+        || is_transaction_id_label(text)
+        || is_membership_label(text)
+        || is_priced_in_savings_label(text)
     {
         return AmountClaim::Never;
     }
@@ -187,6 +219,39 @@ fn is_transaction_id_label(text: &str) -> bool {
     }
     let rest = trimmed[11..].trim_start_matches([' ', '#', ':']).trim();
     rest.len() >= 4 && rest.chars().all(|ch| ch.is_ascii_digit())
+}
+
+/// True for a warehouse-club membership header — Costco's
+/// `Member 111942685019`, printed directly above the first item.
+///
+/// Same family as the code stubs and transaction ids above, and the same failure:
+/// the row never carries an amount, so when the right column leans up it is
+/// perfectly placed to swallow the first item's price and shift the rest of the
+/// receipt. costco/2026-03-10_costco_16_38 loses *both* its items that way — the
+/// header takes 6.69, `2% FINE-FILT` inherits `XL EGGS`'s 9.69, and the drift
+/// runs on through SUBTOTAL and TAX until TOTAL is left with nothing.
+///
+/// The trailing digit run is required, which is what separates this from the
+/// rows that only *mention* membership and do carry amounts — Real Canadian's
+/// `Member Pricing` reduction line, FreshCo's masked `Member card number:
+/// **x****062`. A leading OCR-noise token is tolerated because Costco's own
+/// scans produce one ("00 Member 111942685019").
+fn is_membership_label(text: &str) -> bool {
+    let trimmed = text.trim();
+    // Skip a leading noise token so "00 Member <digits>" reads the same as
+    // "Member <digits>"; anything longer than that is not this header.
+    let rest = match trimmed.split_once(char::is_whitespace) {
+        Some((head, tail)) if !head.eq_ignore_ascii_case("MEMBER") => tail.trim_start(),
+        _ => trimmed,
+    };
+    let Some(digits) = rest
+        .get(..6)
+        .filter(|head| head.eq_ignore_ascii_case("MEMBER"))
+        .map(|_| rest[6..].trim_start_matches([' ', '#', ':', '.']).trim())
+    else {
+        return false;
+    };
+    digits.len() >= 6 && digits.chars().all(|ch| ch.is_ascii_digit())
 }
 
 /// True for the quantity/unit-price breakdown a multi-buy item prints under its
@@ -595,7 +660,7 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
     let mut right: Vec<usize> = Vec::new();
     for (index, det) in dets.iter().enumerate() {
         let x_norm = det.min_x / image_width;
-        if x_norm > 0.7 {
+        if x_norm > 0.7 && is_amount_shaped(&det.text) {
             right.push(index);
         } else if belongs_in_left_column(&det.text, x_norm) {
             left.push(index);
@@ -980,6 +1045,71 @@ mod tests {
     }
 
     /// Render lines as text, the way the summary-block tests above do.
+    #[test]
+    fn tax_code_column_is_not_a_price_candidate() {
+        // costco/2026-03-05_costco_245_87 (image width 846): Costco prints a
+        // per-line tax code in a narrow column to the *right* of the price
+        // column, and on this scan `HH` sits level with `FO TANK S` while that
+        // row's own 19.99 leans a half-row up. Treated as an amount, the bare
+        // code satisfied the row's claim, and the 19.99 fell through to
+        // `TPD TANK TOP` — taking the next eight rows' amounts with it.
+        let dets = vec![
+            det_span("3966510 FO TANK S", 149.0, 1050.0, 1106.0),
+            det_span("HH", 647.0, 1036.0, 1085.0),
+            det_span("2045120 TPD TANK TOP", 151.0, 1087.0, 1141.0),
+            det_span("19.99", 552.0, 1071.0, 1111.0),
+            det_span("599010 LAVAZZA 1KG", 162.0, 1123.0, 1176.0),
+            det_span("5.00-", 560.0, 1106.0, 1146.0),
+        ];
+        let lines = rendered(&dets, 846.0);
+        // The code still lands on the row it was printed on — it just is not
+        // that row's money.
+        assert!(
+            lines.contains(&"3966510 FO TANK S 19.99 HH".to_string()),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&"2045120 TPD TANK TOP 5.00-".to_string()),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn membership_header_does_not_claim_the_first_item_price() {
+        // costco/2026-03-10_costco_16_38 (image width 918): the membership
+        // header prints directly above the first item, and the price column
+        // leans up ~15px against a 48px row pitch — enough for the header to
+        // overlap 6.69 and claim it, dropping `2% FINE-FILT` onto the next
+        // row's 9.69 and shifting the receipt through to TOTAL.
+        let dets = vec![
+            det_span("Member 111942685019", 119.0, 694.0, 759.0),
+            det_span("435259 2% FINE-FILT", 187.0, 737.0, 803.0),
+            det_span("6.69", 696.0, 728.0, 787.0),
+            det_span("430 XL EGGS", 246.0, 787.0, 849.0),
+            det_span("9.69", 696.0, 774.0, 832.0),
+        ];
+        let lines = rendered(&dets, 918.0);
+        assert!(
+            lines.contains(&"435259 2% FINE-FILT 6.69".to_string()),
+            "{lines:?}"
+        );
+        assert!(lines.contains(&"430 XL EGGS 9.69".to_string()), "{lines:?}");
+    }
+
+    #[test]
+    fn membership_typing_spares_the_rows_that_only_mention_membership() {
+        // The digit run is the whole discriminator: Real Canadian's
+        // `Member Pricing` is a reduction row that does carry an amount, and
+        // FreshCo masks its card number so the tail is not digits either.
+        assert!(is_membership_label("Member 111942685019"));
+        assert!(is_membership_label("00 Member 111942685019"));
+        assert!(!is_membership_label("Member Pricing"));
+        assert!(!is_membership_label("MEMBER PRICING"));
+        assert!(!is_membership_label("Member number:"));
+        assert!(!is_membership_label("MEMBER:"));
+        assert!(!is_membership_label("Member card number: **x****062"));
+    }
+
     fn rendered(dets: &[Detection], width: f64) -> Vec<String> {
         group_detections_into_lines(dets, width)
             .iter()
