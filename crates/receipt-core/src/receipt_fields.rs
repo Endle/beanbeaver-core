@@ -102,9 +102,21 @@ fn re_standalone_amount() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^\$?\s*\d+\.\d{2}\s*$").unwrap())
 }
 
+/// A tax label, with or without the rate printed as part of it.
+///
+/// The rate suffix is why this is not a plain `\b(HST|…)\b`: the Bestco/Foody/C&C
+/// POS family prints its 5% bucket as `hst5%`, with no separator, so the trailing
+/// word boundary never lands and the row read as untaxed text. Accepting the
+/// suffix makes `hst5%` an ordinary `HST 5%` row — the same shape as Costco's
+/// `P(H)HST 13%` and Loblaw's `H=HST 13%`, which already matched — rather than a
+/// token needing rules of its own.
+///
+/// The alternation ends in *either* a rate or a word boundary so `HSTX` still
+/// fails to match; only the rate form is allowed to end on `%`, which is not a
+/// word character and so cannot satisfy `\b` itself.
 fn re_tax_tokens() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\b(HST|GST|PST|TAX)\b").unwrap())
+    RE.get_or_init(|| Regex::new(r"\b(HST|GST|PST|TAX)(?:\s*\d{1,2}(?:\.\d+)?\s*%|\b)").unwrap())
 }
 
 fn normalize_decimal_spacing(text: &str) -> String {
@@ -539,7 +551,66 @@ pub fn extract_tax_reconciled(lines: &[String], total: i64) -> Option<i64> {
     reconcile_tax(extract_tax(lines), extract_subtotal(lines), total)
 }
 
+/// Sum of the tax rows printed between the subtotal and the total.
+///
+/// A receipt may split its tax across buckets rather than printing one figure.
+/// The Bestco/Foody/C&C POS family does exactly that — an `HST` row for the 13%
+/// basket and an `hst5%` row for the 5%-only basket — and the two add up to what
+/// the customer paid:
+///
+/// ```text
+/// Sub Total       81.76
+/// HST              0.00
+/// hst5%            0.20
+/// Total after Tax 81.96
+/// ```
+///
+/// Reading one row and stopping loses the other, which reaches the ledger as an
+/// unaccounted FIXME.
+///
+/// **The window is what makes summing safe.** Costco prints its tax twice — once
+/// as `TAX` in the summary block, then again as `P(H)HST 13%` in the trailer
+/// that breaks the tax down by code — and those are one bucket restated, not two
+/// buckets. Every genuine component sits *above* the total line, because that is
+/// what the total is the sum of; a restatement sits below it. So the scan starts
+/// after the subtotal label and stops at the first line bearing `TOTAL`, which is
+/// the grand total in both layouts (`Total after Tax`, `**** TOTAL`). That also
+/// keeps the header's `HST#…RT0001` registration number out of the sum.
+fn sum_summary_block_tax_rows(lines: &[String]) -> Option<i64> {
+    let subtotal_idx = (0..lines.len()).rev().find(|&idx| {
+        let line_upper = lines[idx].to_ascii_uppercase();
+        re_subtotal_label().is_match(&line_upper) || line_upper.contains("SUB TOTAL")
+    })?;
+
+    let mut amounts = Vec::new();
+    for line in &lines[subtotal_idx + 1..] {
+        let line_upper = line.to_ascii_uppercase();
+        // "AFTER TAX" ends the window on its own: OCR mangles the word "Total"
+        // often enough ("lotal after Tax 163.95") that the label alone cannot be
+        // relied on to mark the grand total.
+        if line_upper.contains("TOTAL") || line_upper.contains("AFTER TAX") {
+            break;
+        }
+        if line_upper.contains("TAXED") || line_upper.contains("TAXABLE") {
+            continue;
+        }
+        if !re_tax_tokens().is_match(&line_upper) {
+            continue;
+        }
+        if let Some(amount) = extract_price_from_line(line) {
+            amounts.push(amount);
+        }
+    }
+    (!amounts.is_empty()).then(|| amounts.iter().sum())
+}
+
 pub fn extract_tax(lines: &[String]) -> Option<i64> {
+    // Falls through to the row scan below when the receipt has no subtotal label
+    // or prints no tax between it and the total — that scan also reaches amounts
+    // sitting on a neighbouring line, which a column split can produce.
+    if let Some(summed) = sum_summary_block_tax_rows(lines) {
+        return Some(summed);
+    }
     for idx in (0..lines.len()).rev() {
         let line_upper = lines[idx].to_ascii_uppercase();
         if line_upper.contains("SUBTOTAL") || line_upper.contains("SUB TOTAL") {
@@ -798,6 +869,63 @@ mod tests {
     fn tax_is_left_alone_without_a_subtotal_to_check_against() {
         assert_eq!(reconcile_tax(Some(5894), None, 5894), Some(5894));
         assert_eq!(reconcile_tax(None, Some(5380), 5894), None);
+    }
+
+    #[test]
+    fn rate_suffixed_tax_label_is_read_as_a_tax_row() {
+        // Foody Mart 2026-08-07 prints its 5% bucket as "hst5%", with no space
+        // before the rate, so the label's trailing word boundary never landed and
+        // the row read as untaxed text. The 0.20 then reached the ledger as an
+        // unaccounted FIXME.
+        let lines = vec![
+            "Sub Total 81.76".to_string(),
+            "HST 0.00".to_string(),
+            "hst5% 0.20".to_string(),
+            "Total after Tax 81.96".to_string(),
+        ];
+        assert_eq!(extract_tax(&lines), Some(20));
+    }
+
+    #[test]
+    fn split_tax_buckets_are_summed() {
+        // Bestco 2026-06-25 charges both buckets: 181.32 + 2.36 + 0.09 = 183.77.
+        // Reading either row alone loses the other.
+        let lines = vec![
+            "Sub Total 181.32".to_string(),
+            "HST 2.36".to_string(),
+            "hst5% 0.09".to_string(),
+            "Total after Tax 183.77".to_string(),
+        ];
+        assert_eq!(extract_tax(&lines), Some(245));
+    }
+
+    #[test]
+    fn tax_restated_below_the_total_is_not_double_counted() {
+        // Costco prints the tax twice — once in the summary block, then again in
+        // the trailer that breaks it down by code. Both rows say 1.04, and the
+        // receipt's tax is 1.04, not 2.08. Only the rows above the total line are
+        // components of it.
+        let lines = vec![
+            "SUBTOTAL 70.23".to_string(),
+            "TAX 1.04".to_string(),
+            "**** TOTAL 71.27".to_string(),
+            "P (H)HST 13% 1.04".to_string(),
+            "TOTAL TAX 1.04".to_string(),
+        ];
+        assert_eq!(extract_tax(&lines), Some(104));
+    }
+
+    #[test]
+    fn tax_registration_number_in_the_header_is_not_a_tax_row() {
+        // "HST#821366291RT0001" sits above the subtotal, outside the window, and
+        // carries no amount besides — neither reason alone should be relied on.
+        let lines = vec![
+            "(905)305-9866 HST#821366291RT0001".to_string(),
+            "Sub Total 81.76".to_string(),
+            "hst5% 0.20".to_string(),
+            "Total after Tax 81.96".to_string(),
+        ];
+        assert_eq!(extract_tax(&lines), Some(20));
     }
 
     #[test]
