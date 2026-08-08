@@ -685,6 +685,27 @@ priority = 0
 exact_only = false
 
 [[rules]]
+id = "quail_eggs"
+# "LA - Quail Eggs" is a fixture of the Chinese-supermarket receipts, and the
+# product word is the part OCR keeps destroying: one scan read the line as
+# "LA - Quail E8g8" (both g's became 8's). No amount of "EGG" vocabulary reaches
+# that — two glyph errors inside a four-letter word is well past what
+# `ocr_confusion`'s equality budget will spend, and deliberately so; widening the
+# budget to cover it is how the M/N false positives got in. "QUAIL" is the half
+# of the name OCR left alone, being longer and sharing no confusable pairs, so
+# match on that instead.
+#
+# Negative priority, per the `no_name_med_wht_ovwrp_eggs` precedent below: this
+# is a last-resort identification of one product, so a legible "EGGS" still wins
+# when OCR leaves it readable, and a meat keyword would win on a quail sold as
+# poultry. Every "quail" in the corpus is quail eggs (Foody Mart x3, Al Premium
+# x1), so nothing currently relies on that second escape hatch.
+keywords = ["QUAIL"]
+tags = ["grocery/dairy"]
+priority = -80
+exact_only = false
+
+[[rules]]
 id = "no_name_med_wht_ovwrp_eggs"
 # Loblaw's house-brand eggs print as "NN MED WHT OVWRP MRJ" — no name, Medium,
 # WHiTe, OVerWRaP (the carton style). The product word never appears, so no
