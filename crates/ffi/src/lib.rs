@@ -258,6 +258,10 @@ pub enum ReceiptWarningKind {
     DroppedImplausiblePrice,
     /// An item matched no classifier rule, so it has no tags and no account.
     UncategorizedItem,
+    /// The printed tender lines don't add up to the printed total. One of the
+    /// two is misread and the arithmetic can't say which, so nothing is
+    /// repaired; the beancount falls back to a single payment posting.
+    TenderMismatch,
 }
 
 /// One parser finding: what it is, what it says, and which item it sits under.
@@ -932,6 +936,7 @@ fn warning_kind_to_ffi(kind: CoreWarningKind) -> ReceiptWarningKind {
         CoreWarningKind::PriceAutoCorrected => ReceiptWarningKind::PriceAutoCorrected,
         CoreWarningKind::DroppedImplausiblePrice => ReceiptWarningKind::DroppedImplausiblePrice,
         CoreWarningKind::UncategorizedItem => ReceiptWarningKind::UncategorizedItem,
+        CoreWarningKind::TenderMismatch => ReceiptWarningKind::TenderMismatch,
     }
 }
 
@@ -943,6 +948,7 @@ fn warning_kind_to_core(kind: ReceiptWarningKind) -> CoreWarningKind {
         ReceiptWarningKind::PriceAutoCorrected => CoreWarningKind::PriceAutoCorrected,
         ReceiptWarningKind::DroppedImplausiblePrice => CoreWarningKind::DroppedImplausiblePrice,
         ReceiptWarningKind::UncategorizedItem => CoreWarningKind::UncategorizedItem,
+        ReceiptWarningKind::TenderMismatch => CoreWarningKind::TenderMismatch,
     }
 }
 

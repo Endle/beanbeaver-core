@@ -48,6 +48,17 @@ pub enum ReceiptWarningKind {
     /// it can be ranked below a mismatch instead of being indistinguishable
     /// from one.
     UncategorizedItem,
+    /// The tender lines the receipt prints do not add up to the total it
+    /// prints. One of the two is misread, and **the arithmetic cannot say
+    /// which** — an LCBO slip whose second gift card OCR'd as `65.60` instead
+    /// of `66.60` and a mis-grouped TOTAL row on a split-tender slip produce
+    /// the identical shape, with opposite correct answers. So this reports the
+    /// disagreement and repairs nothing.
+    ///
+    /// Reported for any nonzero gap. A cent is not rounding noise here: every
+    /// amount in a payment block is printed to the cent, so a cent off is a
+    /// misread digit like any other.
+    TenderMismatch,
 }
 
 /// The weight unit as OCR actually renders it. `lb` loses its `l` to `1`/`I`

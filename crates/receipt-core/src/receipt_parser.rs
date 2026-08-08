@@ -459,6 +459,31 @@ pub fn parse_receipt(
         }
     }
 
+    // The payment block is an independent witness to the total: when a receipt
+    // prints its tenders, they partition the total rather than echoing it, so
+    // their sum is a second reading of the same number. Report the disagreement
+    // — `extract_tenders` used to swallow it, returning nothing at all, which
+    // made a misread amount look like a receipt with no payment block.
+    //
+    // Deliberately *only* a report. Which side is wrong is not recoverable from
+    // the arithmetic (see `ReceiptWarningKind::TenderMismatch`), so the total
+    // stands as parsed and `receipt_formatter` keeps the entry balanced by
+    // falling back to a single payment posting.
+    let tender_lines = receipt_fields::extract_tenders(&lines);
+    if !receipt_fields::tenders_reconcile(&lines, &tender_lines, total_cents) {
+        let net_cents = receipt_fields::tendered_net_cents(&lines, &tender_lines);
+        warnings.push(ParsedReceiptWarning {
+            kind: ReceiptWarningKind::TenderMismatch,
+            message: format!(
+                "payment lines account for {} but the receipt total is {} — {} unaccounted for, so one of the two is misread",
+                cents_to_fixed(net_cents),
+                cents_to_fixed(total_cents),
+                cents_to_fixed((net_cents - total_cents).abs()),
+            ),
+            after_item_index: None,
+        });
+    }
+
     // "This line matched no classifier rule" is a finding like any other, and
     // the parser is the only layer that knows it first-hand. It used to be
     // re-derived by each client from `tags.is_empty()`, which is how a
@@ -475,7 +500,7 @@ pub fn parse_receipt(
         }
     }
 
-    let tenders = receipt_fields::extract_tenders(&lines, total_cents)
+    let tenders = tender_lines
         .into_iter()
         .map(|tender| ParsedReceiptTender {
             amount: cents_to_fixed(tender.amount_cents),
