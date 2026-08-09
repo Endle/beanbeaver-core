@@ -54,13 +54,13 @@ PP-OCRv5 mobile weights are **not** vendored (size). Download the pinned release
 
 ```bash
 mkdir -p models
-base="https://github.com/Endle/beanbeaver/releases/download/ocr-models-v1"
+base="https://github.com/Endle/beanbeaver-core/releases/download/ocr-models-v1"
 for m in PP-OCRv5_mobile_det.onnx PP-OCRv5_mobile_rec.onnx PP-LCNet_x1_0_textline_ori.onnx; do
   curl -sSfL -o "models/$m" "$base/$m"
 done
 ```
 
-**Pinned release:** `ocr-models-v1` on `Endle/beanbeaver`.  
+**Pinned release:** `ocr-models-v1` on this repo (`Endle/beanbeaver-core`).  
 CI uses the same URL. Prefer verifying checksums when available in that release’s notes; do not point production builds at an untagged “latest.”
 
 Optional orientation classifier can be disabled at session load (iOS) to skip ~23% of scan time when captures are upright.
