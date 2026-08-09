@@ -7,6 +7,39 @@
 3. **License isolation** — MIT core safe for App Store / iOS and linkable from GPL desktop without infecting core with copyleft deps.
 4. **Parity** — desktop Python flow and iOS fat-Rust path share `receipt-core` semantics.
 
+## Layering
+
+```text
+receipt-image ──> ocr-paddle ──┐
+                               ├──> scan ──> ffi
+receipt-core ──────────────────┘
+```
+
+| Crate | Job | Build |
+|---|---|---|
+| `receipt-core` | bbox + text → itemized details / beancount **text** | device-**independent** |
+| `receipt-image` | pixels → pixels (resize, pad, EXIF) | device-independent |
+| `ocr-paddle` | pixels → detections (PP-OCRv5 on ONNX) | device-**dependent** (links ORT) |
+| `scan` | composition: prep → OCR → parse | device-dependent |
+| `ffi` | the single UniFFI entry point consumers bind to | device-dependent |
+
+The two halves — parse and OCR — do not know about each other; `scan` is the only
+place they meet. Consumers bind to `ffi` alone, so the internal structure costs
+them nothing: adding a crate here never adds a pin for them. The rules that keep
+this true live in `CLAUDE.md` and are asserted by
+`crates/receipt-core/tests/layering.rs`.
+
+**Why the OCR engine lives in an otherwise-portable repo.** One repo means one
+tag and one pin for the apps, and it keeps the whole-pipeline integration test in
+a single CI. The alternative — lifting OCR into its own repo — was reviewed and
+rejected: it adds a release chain to the *most frequent* kind of change (rules
+and parser work), and it lets two independently-green CIs hide a broken pair,
+which is the failure this project has already been bitten by (frozen `.ocr.json`
+fixtures passing while the app regressed). Confining `ort` to a single crate buys
+the isolation the split was meant to provide. Note also that the iOS/Android
+divergence is ORT *link* plumbing in each app's build script and CI cache —
+moving the crate would move none of it.
+
 ## Workspace crates
 
 ### `receipt-core`
@@ -51,23 +84,18 @@ PP-OCRv5 mobile:
 4. Recognition + CTC decode
 5. Return detections — and stop there
 
-This crate does **not** depend on `receipt-core`; joining detections to the
-parser is `scan`'s job (see the layering rules in `CLAUDE.md`, enforced by
-`crates/receipt-core/tests/layering.rs`). It is also the only crate allowed to
-depend on `ort`, and re-exports `ocr_paddle::Result` so callers need not.
-
-Feature `coreml` enables Apple Neural Engine / GPU via `ort` (iOS xcframework). Linux/desktop CI uses CPU ORT.
+The only crate that depends on `ort`; it re-exports `ocr_paddle::Result` so
+callers need not. Feature `coreml` enables Apple Neural Engine / GPU via `ort`
+(iOS xcframework); Linux/desktop CI uses CPU ORT.
 
 ### `scan`
 
-The composition root, and the only implementation of prep -> OCR -> parse:
+The composition root, and the only implementation of prep → OCR → parse:
 `scan::process_image` / `process_image_timed`, plus `ScanTimings` (which spans
 both halves, so it cannot live in either).
 
-Diagnostics and whole-pipeline tests live here because they need both halves:
+Whole-pipeline diagnostics and tests live here because they need both halves:
 `examples/device_sim.rs`, `tests/public_live_e2e.rs`, `tests/phase5_e2e.rs`.
-`device_sim` must call `scan::process_image` rather than re-implement it — a
-second copy would drift and it would stop reproducing device behaviour.
 
 ### `bb-receipt-ffi` (`crates/ffi`)
 
@@ -92,6 +120,13 @@ Scans on one session are serialized (`Mutex` around the engine).
 RawDetection { points: [(x,y); 4+], text, confidence }
 + padded_width, padded_height, padding
 ```
+
+This seam is a **coordinate space** as much as a type: detections come back in
+*padded-image* pixels, so the parser is handed the padded dimensions and the
+padding, and undoes them itself. Whoever composes owns keeping those numbers
+consistent with the `resize_and_pad` that actually ran — a coupling the type
+system cannot check, and much of why `scan::process_image` is one shared
+function rather than a few lines repeated at each call site.
 
 ### Parse result
 
@@ -137,6 +172,12 @@ Do **not** “fix” OCR by loosening parse expectations without measuring det v
 
 ## Non-goals
 
+Technical directions this repo does not take:
+
 - Shipping a GPL beancount Python dependency inside this tree
 - LLM as the primary parser
 - Vendoring multi-hundred-MB ONNX weights in git
+
+For *scope* prohibitions — what may not live in this repo at all (UI, beancount
+linking, importers, receipt↔transaction matching) — see `CLAUDE.md`, which is the
+single source for those.
