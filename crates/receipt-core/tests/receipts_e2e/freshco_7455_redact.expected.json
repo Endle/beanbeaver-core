@@ -6,8 +6,7 @@
   ],
   "total": "74.55",
   "known_failures": [
-    "total",
-    "tenders"
+    "total"
   ],
   "tenders": [
     {
