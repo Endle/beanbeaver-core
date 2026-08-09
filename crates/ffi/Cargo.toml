@@ -22,7 +22,11 @@ name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
 
 [dependencies]
-ocr-paddle = { path = "../ocr-paddle" }
+# The composition root (pixels -> receipt). Depending on `scan` rather than
+# reaching past it into `ocr-paddle` is deliberate: this crate is a binding
+# surface, not a place to re-assemble the pipeline. `scan` re-exports the engine
+# handle and prep helpers the seam needs.
+scan = { path = "../scan" }
 receipt-core = { path = "../receipt-core" }
 # Decode JPEG/PNG bytes handed across the FFI into an RgbImage.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
@@ -34,4 +38,4 @@ uniffi = { version = "0.28", features = ["cli"] }
 [features]
 # Forward CoreML (Apple Neural Engine / GPU) acceleration to ocr-paddle. Enabled
 # by the iOS xcframework build (build-xcframework.sh); off for host bindgen.
-coreml = ["ocr-paddle/coreml"]
+coreml = ["scan/coreml"]

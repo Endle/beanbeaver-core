@@ -19,12 +19,17 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 imageproc = "0.25"
 # Minimum-rotated-rectangle + polygon geometry for DB box extraction.
 geo = "0.29"
-# ONNX Runtime for PP-OCRv5 det/rec/cls inference.
+# ONNX Runtime for PP-OCRv5 det/rec/cls inference. This crate is the ONLY one in
+# the workspace permitted to depend on `ort` -- it is what makes a build
+# device-dependent. See CLAUDE.md.
 ort = "=2.0.0-rc.12"
-# Downstream parsing/formatting (detections -> structured receipt + beancount).
-receipt-core = { path = "../receipt-core" }
 # Shared pre-OCR resize/pad (Pillow-parity dims); single source with desktop path.
 receipt-image = { path = "../receipt-image" }
+
+# NOTE: `receipt-core` is deliberately absent. This crate produces detections and
+# stops there; composing them with the parser is the `scan` crate's job. Adding
+# it back would let OCR quietly grow parsing behaviour -- the exact drift the
+# layering rules in CLAUDE.md exist to prevent.
 
 [features]
 # Apple-only: register the CoreML execution provider (Neural Engine / GPU) for

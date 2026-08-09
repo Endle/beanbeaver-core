@@ -1,18 +1,49 @@
-//! The fat-Rust seam's single entry: a decoded image -> structured receipt +
-//! beancount, fully on-device. Mirrors the desktop flow
-//! (`resize_image_bytes` -> OCR service -> `process_receipt`).
+//! Composition: a decoded image -> structured receipt + beancount, on-device.
+//!
+//! This crate exists to be **the one place** the two halves of the pipeline meet:
+//!
+//! ```text
+//!   ocr-paddle    pixels -> detections     (device-dependent: links ONNX via `ort`)
+//!   receipt-core  detections -> receipt    (device-independent: pure Rust)
+//! ```
+//!
+//! Neither half knows about the other — see the layering rules in the repo's
+//! `CLAUDE.md`. `ocr-paddle` deliberately does **not** depend on `receipt-core`,
+//! so the OCR engine cannot quietly grow parsing behaviour, and `receipt-core`
+//! stays buildable (and testable) with no model, no ONNX, and no image decoding.
+//! Joining them is this crate's whole job.
+//!
+//! Everything that needs *both* halves lives here too: `examples/device_sim.rs`
+//! and the live end-to-end tests. That is deliberate. `device_sim`'s value is
+//! that it runs the exact code path a phone runs, so it must call
+//! [`process_image`] rather than re-implement the composition — a second copy
+//! could drift and the simulator would stop simulating.
 
 use std::time::Instant;
 
 use image::RgbImage;
+use ocr_paddle::engine::OcrEngine;
+use ocr_paddle::prep::resize_and_pad;
+// `ocr_paddle::Result` rather than `ort::Result`: only `ocr-paddle` may depend on
+// `ort`, so it re-exports the type for composition layers like this one.
+use ocr_paddle::Result as OcrResult;
 use receipt_core::ocr_transform::RawDetection;
 use receipt_core::process::{process_receipt, ProcessedReceipt};
 
-use crate::engine::OcrEngine;
+// Re-exported so the FFI seam (and the harnesses) can depend on `scan` alone
+// rather than reaching past it into `ocr-paddle`. Keeping the seam's dependency
+// list to `scan` + `receipt-core` is what makes the composition root obvious.
+pub use ocr_paddle::engine::OcrEngine as Engine;
+pub use ocr_paddle::prep::{
+    resize_and_pad as prepare_image, MAX_IMAGE_DIMENSION, OCR_IMAGE_PADDING,
+};
 
-/// End-to-end per-stage timings (milliseconds) for one `process_image` call.
+/// End-to-end per-stage timings (milliseconds) for one [`process_image`] call.
 /// `total_ms` is the whole Rust pipeline (prep → OCR → parse); it excludes the
 /// image decode, which happens in the FFI seam before `process_image`.
+///
+/// This type lives here rather than in `ocr-paddle` because it spans both
+/// halves: `parse_ms` and `total_ms` are only measurable at the composition.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ScanTimings {
     pub prep_ms: f64,
@@ -21,16 +52,6 @@ pub struct ScanTimings {
     pub recognize_ms: f64,
     pub parse_ms: f64,
     pub total_ms: f64,
-}
-
-/// Desktop/on-device prep constants (single source: `receipt-image`).
-pub use receipt_image::{MAX_IMAGE_DIMENSION, OCR_IMAGE_PADDING};
-
-/// Pre-OCR image prep via [`receipt_image`]: cap long side (Pillow int-truncation)
-/// then white-pad. EXIF orientation is handled upstream by the capture layer
-/// (iOS) or by `receipt_image::preprocess_image_bytes` (desktop bytes path).
-pub fn resize_and_pad(img: &RgbImage) -> RgbImage {
-    receipt_image::resize_and_pad(img, MAX_IMAGE_DIMENSION, OCR_IMAGE_PADDING)
 }
 
 /// Run the whole pipeline: image -> OCR -> parse/categorize/format.
@@ -46,7 +67,7 @@ pub fn process_image(
     currency: &str,
     tax_account: &str,
     image_sha256: Option<&str>,
-) -> ort::Result<ProcessedReceipt> {
+) -> OcrResult<ProcessedReceipt> {
     Ok(process_image_timed(
         engine,
         img,
@@ -72,7 +93,7 @@ pub fn process_image_timed(
     currency: &str,
     tax_account: &str,
     image_sha256: Option<&str>,
-) -> ort::Result<(ProcessedReceipt, ScanTimings)> {
+) -> OcrResult<(ProcessedReceipt, ScanTimings)> {
     let t_all = Instant::now();
 
     let t = Instant::now();
@@ -81,6 +102,12 @@ pub fn process_image_timed(
 
     let (detections, ocr) = engine.recognize_image_timed(&prepared)?;
 
+    // The contract between the two halves is a coordinate space as much as a
+    // type: detections are in *padded-image* pixels, so the parser is handed the
+    // padded dimensions and the padding it must undo. Whoever composes owns
+    // keeping these consistent with the `resize_and_pad` that actually ran —
+    // which is the main reason the composition is one function and not inlined
+    // at each call site.
     let raw: Vec<RawDetection> = detections
         .into_iter()
         .map(|d| RawDetection {
@@ -129,10 +156,9 @@ fn ms_since(t: Instant) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::OcrEngine;
 
     // Whole pipeline (image -> beancount), on-device-equivalent. Run with:
-    //   cargo test -p ocr-paddle -- --ignored --nocapture
+    //   cargo test -p scan -- --ignored --nocapture
     #[test]
     #[ignore = "needs converted models + fixture"]
     fn process_image_end_to_end_costco() {

@@ -14,8 +14,6 @@
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use ocr_paddle::engine::OcrEngine;
-use ocr_paddle::process::{process_image_timed, ScanTimings as CoreScanTimings};
 use receipt_core::merchant_match::{
     MerchantMatch as CoreMerchantMatch, MerchantMatchStatus as CoreStatus,
 };
@@ -29,6 +27,7 @@ use receipt_core::receipt_parser::{
     ParsedReceiptData, ParsedReceiptItem, ParsedReceiptTender, ParsedReceiptWarning,
 };
 use receipt_core::rules::RuleBook as CoreRuleBook;
+use scan::{process_image_timed, Engine as OcrEngine, ScanTimings as CoreScanTimings};
 
 uniffi::setup_scaffolding!();
 
@@ -661,8 +660,8 @@ impl OcrSession {
         // process is hard without exposing detections. Fall back to full
         // process_image_timed (default rules) only for timings of OCR stages, and
         // separately re-run OCR… That's double. Better: use engine.recognize after prep.
-        use ocr_paddle::process::{resize_and_pad, OCR_IMAGE_PADDING};
         use receipt_core::ocr_transform::RawDetection as CoreRaw;
+        use scan::{prepare_image as resize_and_pad, OCR_IMAGE_PADDING};
 
         let t = Instant::now();
         let prepared = resize_and_pad(&img);

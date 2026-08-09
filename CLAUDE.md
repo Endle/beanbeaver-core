@@ -2,49 +2,50 @@
 
 Portable, permissive (MIT) Rust crates shared by the desktop, iOS, and Android
 apps. Cross-repo rules (the license firewall, core-tag pinning) live in the
-umbrella `../CLAUDE.md`; repo detail (crates, tests, model fetch) is in
-`README.md` / `docs/`. This file owns one thing: **what is allowed to live here.**
+umbrella `../CLAUDE.md`. **What the crates are and how they fit together is in
+[`docs/architecture.md`](docs/architecture.md)** — read that for orientation.
+This file owns one thing: **what is allowed to live here.**
 
-## Charter — this repo parses OCR output, nothing else
+## The hard rules
 
-beanbeaver-core exists to do **exactly one job: turn OCR output (bounding boxes +
-text) into itemized receipt details as structured data / beancount *text*.**
-bbox in → itemized JSON out. `receipt-core` is that job; the model-free
-`parse_detections` FFI entry point is its front door.
+Parsing (`receipt-core`) and OCR (`ocr-paddle`) are separate halves that meet
+only in `scan`. These rules keep them that way, and are **enforced by
+`crates/receipt-core/tests/layering.rs`** in the ORT-free fast gate. If one
+fails, fix the dependency — do not loosen the assertion. Changing a rule means
+changing the rule and its test together, deliberately.
 
-**This is a hard boundary, not a style preference.** Do **not** grow this repo
-beyond that parse step. Specifically, none of the following ever belong here, no
-matter how convenient it seems in the moment:
+1. **`receipt-core` is a device-independent leaf.** No workspace dependencies, no
+   `ort`, no `image`. It stays buildable and testable with no model, no ONNX
+   Runtime, and no network.
+2. **Only `ocr-paddle` may depend on `ort`.** To name a fallible OCR call, use
+   `ocr_paddle::Result` — it is re-exported for exactly this reason.
+3. **`ocr-paddle` must not depend on `receipt-core`.** It produces detections and
+   stops.
+4. **`scan` is the only composition root.** One implementation of prep → OCR →
+   parse. Anything needing both halves — including diagnostics like `device_sim`
+   — belongs in `scan` and must *call* `scan::process_image`, never re-implement
+   it. A second copy would drift, and `device_sim` would stop reproducing device
+   behaviour.
+5. **`ffi` is a binding surface**, not a second place to assemble the pipeline.
+   It reaches the engine through `scan`, never past it.
+
+## What never belongs here
 
 - **UI** of any kind.
-- **Linking** beancount (core only ever *emits* beancount **text** — see the
+- **Linking** beancount — core only ever *emits* beancount **text** (see the
   umbrella `CLAUDE.md` license firewall).
-- **Bank-statement importers** or **receipt↔transaction matching** (those are the
-  desktop app's, `src/match_*.rs`).
-- **New** image-capture, image-preprocessing, or OCR-*inference* responsibility.
-  Core consumes detections; producing them is the consumer's problem.
+- **Bank-statement importers** or **receipt↔transaction matching** — those are
+  the desktop app's, `src/match_*.rs`.
 
-If a change needs any of the above, it belongs in a **consumer**
-(`beanbeaver/`, `beanbeaver-ios/`, `beanbeaver-android/`), not here. When in
-doubt, keep it out — a smaller core is the whole point.
+If a change needs one of these, it belongs in a consumer (`beanbeaver/`,
+`beanbeaver-ios/`, `beanbeaver-android/`).
 
-## The one deliberate exception: PP-OCRv5 (`crates/ocr-paddle`, `models/`)
+## PP-OCRv5 stays — settled, do not re-open
 
-The on-device OCR engine — image → bbox via ONNX (`ort`), plus the pixel-level
-`receipt-image` preprocessing and the `models/` weights — **currently lives in
-this repo, and that is architecturally the wrong place for it.** It violates the
-charter above: core is supposed to *consume* bounding boxes, not *produce* them,
-and shipping the heavy ONNX runtime inside what should be a pure parser is a
-mistake we have chosen to live with.
-
-**We keep it here on purpose, and we have no plan to remove the PP-OCRv5
-dependency.** Read that as a two-sided instruction:
-
-- **Do not extend it.** Treat `ocr-paddle` / `receipt-image` / `models/` as a
-  frozen, tolerated exception. Do not add new OCR-inference or image-handling
-  surface to core, and do not route new features through the OCR engine to "reuse
-  what's already here." The charter above still governs everything *new*.
-- **Do not rip it out either.** Evicting PP-OCRv5 is **not** a cleanup to do in
-  passing, and not something to start because the charter makes it look tidy. Any
-  actual removal is a separately-scoped, explicitly-approved project — until that
-  decision is made, `ocr-paddle` stays exactly where it is.
+This file used to describe `ocr-paddle` / `receipt-image` / `models/` as an
+architectural mistake to evict someday. That framing is **retired.** The engine
+lives here on purpose, and the layering above — not a repo split — is what keeps
+it from contaminating the parser. Do not propose eviction as a cleanup, and do
+not treat the OCR crates as frozen; they are a normal part of this repo,
+governed by the rules above like everything else. The reasoning is recorded
+under "Layering" in [`docs/architecture.md`](docs/architecture.md).

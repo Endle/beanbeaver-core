@@ -33,9 +33,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ocr_paddle::engine::OcrEngine;
-use ocr_paddle::process::process_image;
 use receipt_core::receipt_categories::resolve_account_target;
 use receipt_core::rules::default_parser_rule_layers;
+use scan::process_image;
 use serde_json::Value;
 
 /// Reference "today"; the corpus uses explicit full dates, so this is inert.

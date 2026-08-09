@@ -1,6 +1,6 @@
 //! Simulate the on-device extraction on macOS and report quality.
 //!
-//! "Device behaviour" is exactly `ocr_paddle::process::process_image` (same Rust
+//! "Device behaviour" is exactly `scan::process_image` (same Rust
 //! code + ONNX models + ONNX Runtime CPU EP as the iOS app), so feeding it the
 //! same image bytes reproduces the phone's result ~1:1. Use this to test the
 //! pipeline against a corpus, or to diagnose a single exported capture.
@@ -26,14 +26,15 @@ use std::path::{Path, PathBuf};
 use ocr_paddle::db_postprocess::{boxes_from_bitmap, DbConfig};
 use ocr_paddle::detect::Detector;
 use ocr_paddle::engine::OcrEngine;
-use ocr_paddle::process::{process_image, process_image_timed, resize_and_pad, ScanTimings};
+use ocr_paddle::prep::resize_and_pad;
 use receipt_core::ocr_transform::RawDetection;
 use receipt_core::process::{process_receipt, ProcessedReceipt};
 use receipt_core::receipt_categories::resolve_account_target;
 use receipt_core::rules::default_parser_rule_layers;
+use scan::{process_image, process_image_timed, ScanTimings};
 use serde_json::Value;
 
-/// Matches `ocr_paddle::process::OCR_IMAGE_PADDING` (the desktop server pads 50px
+/// Matches `ocr_paddle::prep::OCR_IMAGE_PADDING` (the desktop server pads 50px
 /// before OCR, so `.ocr.json` coords + dims are in that padded space).
 const OCR_IMAGE_PADDING: i64 = 50;
 
