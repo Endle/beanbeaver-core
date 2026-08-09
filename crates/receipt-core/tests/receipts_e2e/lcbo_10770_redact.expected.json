@@ -1,0 +1,7 @@
+{
+  "merchant": "LCBO",
+  "total": "107.70",
+  "critical_items": [
+    { "description": "BABY DUCK", "price": "107.70" }
+  ]
+}

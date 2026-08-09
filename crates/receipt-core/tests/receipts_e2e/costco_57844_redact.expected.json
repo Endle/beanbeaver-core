@@ -1,0 +1,15 @@
+{
+  "merchant": "COSTCO",
+  "merchant_any_of": ["COSTCO", "COSTCO WHOLESALE"],
+  "total": "578.44",
+  "critical_items": [
+    { "description": "COKE ZERO", "price": "17.99", "category": "Expenses:Food:Grocery:Drink:CocaCola" },
+    { "description": "XL EGGS", "price": "9.69", "category": "Expenses:Food:Grocery:Dairy" },
+    { "description": "KS ORG 2% 4L", "price": "10.29", "category": "Expenses:Food:Grocery:Dairy" },
+    { "description": "MILK 2", "price": "6.09", "category": "Expenses:Food:Grocery:Dairy" },
+    { "description": "PINEAP JUICE", "price": "11.99", "category": "Expenses:Food:Grocery:Drink:Juice" },
+    { "description": "KS PAD - JLA", "price": "21.49" },
+    { "description": "DOORDASH2X50", "price": "79.99" },
+    { "description": "LCBO CARD", "price": "400.00" }
+  ]
+}

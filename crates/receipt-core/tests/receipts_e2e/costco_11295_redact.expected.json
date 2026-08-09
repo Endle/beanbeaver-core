@@ -1,0 +1,15 @@
+{
+  "merchant": "COSTCO",
+  "merchant_any_of": ["COSTCO", "COSTCO WHOLESALE"],
+  "total": "112.95",
+  "critical_items": [
+    { "description": "BACKPACK", "price": "9.97" },
+    { "description": "XL EGGS", "price": "9.69", "category": "Expenses:Food:Grocery:Dairy" },
+    { "description": "MILK 2", "price": "6.09", "category": "Expenses:Food:Grocery:Dairy" },
+    { "description": "KS ORG 2% 4L", "price": "10.29", "category": "Expenses:Food:Grocery:Dairy" },
+    { "description": "ZOA", "price": "28.99", "category": "Expenses:Food:Grocery:Drink" },
+    { "description": "TPD/2919781", "price": "-10.00", "category": "Expenses:Discount" },
+    { "description": "BIOSTEEL", "price": "29.99", "category": "Expenses:Food:Grocery:Drink" },
+    { "description": "TPD/2908438", "price": "-6.00", "category": "Expenses:Discount" }
+  ]
+}

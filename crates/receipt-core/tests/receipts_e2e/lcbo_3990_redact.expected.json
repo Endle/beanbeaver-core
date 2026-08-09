@@ -1,0 +1,7 @@
+{
+  "merchant": "LCBO",
+  "total": "39.90",
+  "critical_items": [
+    { "description": "SPUMANTE BAMBINO WHITE", "price": "19.95" }
+  ]
+}

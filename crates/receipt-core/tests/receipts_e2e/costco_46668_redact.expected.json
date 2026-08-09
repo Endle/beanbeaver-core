@@ -1,0 +1,13 @@
+{
+  "merchant": "COSTCO",
+  "merchant_any_of": ["COSTCO", "COSTCO WHOLESALE"],
+  "total": "466.68",
+  "critical_items": [
+    { "description": "ROTI CHICKEN", "price": "7.99", "category": "Expenses:Food:Grocery:Meat" },
+    { "description": "2% FINE-FILT", "price": "6.69", "category": "Expenses:Food:Grocery:Dairy" },
+    { "description": "KS ORG 2% 4L", "price": "10.29", "category": "Expenses:Food:Grocery:Dairy" },
+    { "description": "LCBO CARD", "price": "400.00" },
+    { "description": "MONSTER VRTY", "price": "44.99", "category": "Expenses:Food:Grocery:Drink" },
+    { "description": "TPD/2773717", "price": "-9.00", "category": "Expenses:Discount" }
+  ]
+}
