@@ -862,12 +862,24 @@ fn re_change_label() -> &'static Regex {
 /// there is: `CASH 25.00 / CHANGE 5.00` against a `TOTAL 20.00` is not a
 /// contradiction, it is arithmetic — the amount *tendered* is not the amount
 /// *applied*, and change is the missing term.
+///
+/// The change is the **last** amount on its row, never the first. Two shapes
+/// force this and one of them is not rare: Pharmasave prints
+/// `CHANGE DUE $12.19 $0.00`, tendered before change; and line grouping merges
+/// Costco's customer-copy rows into `MasterCard 441.68 CHANGE 0.00`, where
+/// taking the first amount reads the entire card charge as change handed back
+/// and drives the net tendered negative.
 pub fn extract_change(lines: &[String]) -> i64 {
     lines
         .iter()
         .enumerate()
         .filter(|(_, line)| re_change_label().is_match(&line.to_ascii_uppercase()))
-        .filter_map(|(idx, _)| tender_amount_for_line(lines, idx))
+        .filter_map(|(idx, line)| {
+            prices_in_line(line)
+                .last()
+                .copied()
+                .or_else(|| tender_amount_for_line(lines, idx))
+        })
         .sum()
 }
 
@@ -1499,6 +1511,21 @@ mod tests {
         // the $5 change is netted off. This used to pass for the wrong reason:
         // the old tolerance check saw 25 vs 20, gave up, and returned nothing.
         assert!(tenders_reconcile(&lines, &tenders, 2_000));
+    }
+
+    #[test]
+    fn change_is_the_last_amount_on_a_merged_row() {
+        // Costco's customer copy prints the card charge and the change on
+        // consecutive rows, and line grouping merges them. Reading the FIRST
+        // amount took 441.68 as change handed back, so the net tendered went
+        // negative (-416.68) and the warning reported a $883.36 discrepancy on
+        // a receipt that is merely missing one tender line.
+        let lines = vec![
+            "TOTAL 466.68".to_string(),
+            "Shop Card 25.00".to_string(),
+            "MasterCard 441.68 CHANGE 0.00".to_string(),
+        ];
+        assert_eq!(extract_change(&lines), 0);
     }
 
     #[test]

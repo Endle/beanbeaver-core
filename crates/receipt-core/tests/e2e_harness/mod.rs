@@ -415,6 +415,78 @@ pub fn run_cached_corpus_in(
             }
         }
 
+        // tenders — how the receipt was PAID, positionally: kind + amount, in
+        // printed order. Checked only when the key is present.
+        //
+        // Worth asserting separately from `total` because the two fail
+        // independently and only one of them was ever visible. A split-tender
+        // receipt can report the right grand total while losing a tender line
+        // entirely (costco_46668 drops its MasterCard to a merged CHANGE row),
+        // or invent one that isn't a payment at all (freshco's `Gift Card
+        // Balance:` echo). Both look perfect through a total-only assertion.
+        //
+        // The count is part of the check: a spurious tender is exactly the
+        // defect worth catching, so an extra parsed tender fails even when
+        // every expected one matched. Like `critical_items`, an entry may carry
+        // `"known_failure": true` for its own index; the check-level
+        // `known_failures: ["tenders"]` umbrellas the whole block, including
+        // the count.
+        if let Some(want) = expected.get("tenders").and_then(Value::as_array) {
+            let mut msgs: Vec<String> = Vec::new();
+            let mut real_failure = false;
+            for (i, wt) in want.iter().enumerate() {
+                let want_amount = wt.get("amount").and_then(Value::as_str).unwrap_or_default();
+                let want_kind = wt.get("kind").and_then(Value::as_str);
+                let entry_known = wt
+                    .get("known_failure")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let got = parsed.tenders.get(i);
+                let entry_failed = match got {
+                    None => true,
+                    Some(t) => {
+                        !price_matches(want_amount, &t.amount)
+                            || want_kind.is_some_and(|k| k != t.kind)
+                    }
+                };
+                if entry_failed && !entry_known {
+                    real_failure = true;
+                    msgs.push(match got {
+                        None => format!(
+                            "tender[{i}] expected {want_kind:?} {want_amount}, but only {} tender(s) parsed",
+                            parsed.tenders.len()
+                        ),
+                        Some(t) => format!(
+                            "tender[{i}] expected {want_kind:?} {want_amount}, got \"{}\" {} ({})",
+                            t.kind, t.amount, t.raw_label
+                        ),
+                    });
+                } else if !entry_failed && entry_known {
+                    msgs.push(format!(
+                        "tender[{i}] marked known_failure but matched — remove the marker"
+                    ));
+                }
+            }
+            for (i, extra) in parsed.tenders.iter().enumerate().skip(want.len()) {
+                real_failure = true;
+                msgs.push(format!(
+                    "tender[{i}] unexpected: \"{}\" {} ({}) — receipt prints {} tender(s)",
+                    extra.kind,
+                    extra.amount,
+                    extra.raw_label,
+                    want.len()
+                ));
+            }
+            if real_failure {
+                failed.insert("tenders");
+            }
+            if !known.contains("tenders") {
+                for m in msgs {
+                    case_fail.push(m);
+                }
+            }
+        }
+
         // A known_failure that unexpectedly passed must be removed.
         for k in &known {
             if !failed.contains(k.as_str()) {

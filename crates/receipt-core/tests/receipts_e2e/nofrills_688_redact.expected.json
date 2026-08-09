@@ -1,0 +1,21 @@
+{
+  "merchant": "NOFRILLS",
+  "merchant_any_of": [
+    "NOFRILLS",
+    "NO FRILLS"
+  ],
+  "total": "6.88",
+  "tenders": [
+    {
+      "kind": "card",
+      "amount": "6.88"
+    }
+  ],
+  "critical_items": [
+    {
+      "description": "RED SDLS",
+      "price": "6.88",
+      "category": "Expenses:Food:Grocery:Fruit"
+    }
+  ]
+}

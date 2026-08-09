@@ -2,6 +2,12 @@
   "merchant": "COSTCO",
   "date": "2026-05-20",
   "total": "74.22",
+  "tenders": [
+    {
+      "kind": "card",
+      "amount": "74.22"
+    }
+  ],
   "critical_items": [
     {
       "description": "2% FINE-FILT",
