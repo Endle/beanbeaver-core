@@ -1,10 +1,14 @@
 [workspace]
 resolver = "2"
+# Listed in dependency order, which is also the layering order enforced by
+# tests/layering.rs and documented in CLAUDE.md: each crate may only depend on
+# ones above it.
 members = [
-    "crates/receipt-core",
-    "crates/receipt-image",
-    "crates/ocr-paddle",
-    "crates/ffi",
+    "crates/receipt-core",   # device-independent: bbox -> itemized JSON
+    "crates/receipt-image",  # device-independent: pixels -> pixels
+    "crates/ocr-paddle",     # device-DEPENDENT: pixels -> detections (links ORT)
+    "crates/scan",           # composition: pixels -> receipt
+    "crates/ffi",            # the single entry point consumers bind to
 ]
 
 [workspace.package]

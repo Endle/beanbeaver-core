@@ -16,9 +16,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ocr_paddle::engine::OcrEngine;
-use ocr_paddle::process::process_image;
 use receipt_core::receipt_categories::resolve_account_target;
 use receipt_core::rules::default_parser_rule_layers;
+use scan::process_image;
 use serde_json::Value;
 
 /// (fixture name, check id) pairs the on-device OCR currently can't satisfy vs

@@ -150,4 +150,4 @@ jobs:
       # Soft + hard live gates (see public_live_e2e.rs): random soft samples, plus
       # a fixed allowlist that must match merchant/total within tolerant matchers.
       - name: Public live E2E (on-device OCR)
-        run: cargo test -p ocr-paddle --test public_live_e2e -- --nocapture
+        run: cargo test -p scan --test public_live_e2e -- --nocapture

@@ -17,7 +17,8 @@ License policy is enforced by [`deny.toml`](deny.toml): only permissive (and MPL
 crates/
   receipt-core/   Pure parse + categorize + format (no Python, no ONNX)
   receipt-image/  Pre-OCR: EXIF transpose → resize → white pad → JPEG
-  ocr-paddle/     PP-OCRv5 det/rec/cls via ONNX Runtime + process_image
+  ocr-paddle/     PP-OCRv5 det/rec/cls via ONNX Runtime (pixels -> detections)
+  scan/           Composition: prep -> OCR -> parse (device_sim, live E2E)
   ffi/            UniFFI Swift seam (staticlib + cdylib)
 rules/            Bundled default TOML (item classifier, merchants, families)
 ```
@@ -45,7 +46,7 @@ cargo test -p receipt-core --lib
 cargo test -p receipt-core --test public_e2e -- --nocapture
 
 # Live OCR E2E: needs models under ./models (see below)
-cargo test -p ocr-paddle --test public_live_e2e -- --nocapture
+cargo test -p scan --test public_live_e2e -- --nocapture
 ```
 
 ### OCR models
@@ -82,8 +83,8 @@ Private corpus is token-gated in CI (`.github/workflows/private-regression.yml`)
 | Unit (`receipt-core`) | `cargo test -p receipt-core --lib` | No | No | Every change |
 | Public cached E2E | `cargo test -p receipt-core --test public_e2e -- cached` | No | No | Parser / rules |
 | Private cached E2E | `cargo test -p receipt-core --test private_e2e` + env | No | Clone private repo | Regression corpus |
-| Live public E2E | `cargo test -p ocr-paddle --test public_live_e2e` | Yes | Models download | OCR + full stack |
-| Phase 5 (strict, ignored) | `cargo test -p ocr-paddle --test phase5_e2e -- --ignored` | Yes | — | Local quality ledger |
+| Live public E2E | `cargo test -p scan --test public_live_e2e` | Yes | Models download | OCR + full stack |
+| Phase 5 (strict, ignored) | `cargo test -p scan --test phase5_e2e -- --ignored` | Yes | — | Local quality ledger |
 | FFI smoke (ignored) | `cargo test -p bb-receipt-ffi -- --ignored` | Yes | — | Swift seam |
 
 CI (`.github/workflows/ci.yml`) runs unit tests on Linux + macOS, public cached E2E on Linux, and live E2E on both after downloading models.

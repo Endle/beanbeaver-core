@@ -5,7 +5,7 @@
 //!
 //! Emits `<stem>.ocr.json` next to each `<stem>.jpg` that lacks one, in the exact
 //! shape the cached harness consumes (padded-image coordinate space, matching
-//! `process_image`'s `resize_and_pad` -> `recognize_image_timed`). Ignored so it
+//! `scan::process_image`'s `resize_and_pad` -> `recognize_image_timed`). Ignored so it
 //! never runs in normal `cargo test`.
 //!
 //! Target corpus: the vendored public fixtures by default, or the out-of-tree
@@ -17,7 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ocr_paddle::engine::OcrEngine;
-use ocr_paddle::process::resize_and_pad;
+use ocr_paddle::prep::resize_and_pad;
 use serde_json::{json, Value};
 
 fn manifest_rel(rel: &str) -> PathBuf {

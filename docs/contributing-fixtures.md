@@ -85,7 +85,7 @@ cargo test -p receipt-core --test public_e2e -- --nocapture cached
 Optional with models:
 
 ```bash
-LIVE_E2E_COUNT=1 LIVE_E2E_SEED=0 cargo test -p ocr-paddle --test public_live_e2e -- --nocapture
+LIVE_E2E_COUNT=1 LIVE_E2E_SEED=0 cargo test -p scan --test public_live_e2e -- --nocapture
 ```
 
 ### 6. Rules changes

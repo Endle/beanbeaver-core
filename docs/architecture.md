@@ -49,11 +49,25 @@ PP-OCRv5 mobile:
 2. Detection (DB post-process → quads)
 3. Optional textline orientation cls
 4. Recognition + CTC decode
-5. Hand off detections to `receipt-core::process_receipt`
+5. Return detections — and stop there
+
+This crate does **not** depend on `receipt-core`; joining detections to the
+parser is `scan`'s job (see the layering rules in `CLAUDE.md`, enforced by
+`crates/receipt-core/tests/layering.rs`). It is also the only crate allowed to
+depend on `ort`, and re-exports `ocr_paddle::Result` so callers need not.
 
 Feature `coreml` enables Apple Neural Engine / GPU via `ort` (iOS xcframework). Linux/desktop CI uses CPU ORT.
 
-Diagnostics: `examples/device_sim.rs`, scripts under `scripts/`.
+### `scan`
+
+The composition root, and the only implementation of prep -> OCR -> parse:
+`scan::process_image` / `process_image_timed`, plus `ScanTimings` (which spans
+both halves, so it cannot live in either).
+
+Diagnostics and whole-pipeline tests live here because they need both halves:
+`examples/device_sim.rs`, `tests/public_live_e2e.rs`, `tests/phase5_e2e.rs`.
+`device_sim` must call `scan::process_image` rather than re-implement it — a
+second copy would drift and it would stop reproducing device behaviour.
 
 ### `bb-receipt-ffi` (`crates/ffi`)
 

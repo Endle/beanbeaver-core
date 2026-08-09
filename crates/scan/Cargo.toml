@@ -1,0 +1,31 @@
+[package]
+name = "scan"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "scan"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Pixels -> detections. The device-dependent half: this is what drags in `ort`
+# and therefore ONNX Runtime.
+ocr-paddle = { path = "../ocr-paddle" }
+# Detections -> itemized receipt + beancount text. The device-independent half.
+receipt-core = { path = "../receipt-core" }
+# `RgbImage`, the pixel type the FFI seam hands in after decoding the photo.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+[features]
+# Apple-only: CoreML execution provider (Neural Engine / GPU), forwarded to the
+# OCR engine. Enabled by the iOS xcframework build.
+coreml = ["ocr-paddle/coreml"]
+
+[dev-dependencies]
+# The e2e harnesses and device_sim read `.expected.json` / `.ocr.json` fixtures.
+serde_json = "1"
