@@ -1,17 +1,65 @@
 {
   "merchant": "FRESHCO",
-  "merchant_any_of": ["FRESHCO", "FRESH CO"],
+  "merchant_any_of": [
+    "FRESHCO",
+    "FRESH CO"
+  ],
   "total": "74.55",
-  "known_failures": ["total"],
+  "known_failures": [
+    "total",
+    "tenders"
+  ],
+  "tenders": [
+    {
+      "kind": "gift_card",
+      "amount": "74.55"
+    }
+  ],
   "critical_items": [
-    { "description": "Yog Drink Ayran", "price": "1.79", "category": "Expenses:Food:Grocery:Drink" },
-    { "description": "Cocomax Coconut Wtr", "price": "3.49", "category": "Expenses:Food:Grocery:Drink" },
-    { "description": "Sauce Mild Chilli", "price": "7.49", "category": "Expenses:Food:Grocery:Seasoning" },
-    { "description": "Milk Chocolate 1%", "price": "7.49", "category": "Expenses:Food:Grocery:Dairy" },
-    { "description": "Cherries Red", "price": "6.16", "category": "Expenses:Food:Grocery:Fruit" },
-    { "description": "Natrel Milk 2% 4L", "price": "11.19", "category": "Expenses:Food:Grocery:Dairy" },
-    { "description": "Eggs Large", "price": "9.79", "category": "Expenses:Food:Grocery:Dairy" },
-    { "description": "Soft Drink Orange", "price": "8.99", "category": "Expenses:Food:Grocery:Drink" },
-    { "description": "INSTANT SAVINGS", "price": "-1.00", "category": "Expenses:Discount" }
+    {
+      "description": "Yog Drink Ayran",
+      "price": "1.79",
+      "category": "Expenses:Food:Grocery:Drink"
+    },
+    {
+      "description": "Cocomax Coconut Wtr",
+      "price": "3.49",
+      "category": "Expenses:Food:Grocery:Drink"
+    },
+    {
+      "description": "Sauce Mild Chilli",
+      "price": "7.49",
+      "category": "Expenses:Food:Grocery:Seasoning"
+    },
+    {
+      "description": "Milk Chocolate 1%",
+      "price": "7.49",
+      "category": "Expenses:Food:Grocery:Dairy"
+    },
+    {
+      "description": "Cherries Red",
+      "price": "6.16",
+      "category": "Expenses:Food:Grocery:Fruit"
+    },
+    {
+      "description": "Natrel Milk 2% 4L",
+      "price": "11.19",
+      "category": "Expenses:Food:Grocery:Dairy"
+    },
+    {
+      "description": "Eggs Large",
+      "price": "9.79",
+      "category": "Expenses:Food:Grocery:Dairy"
+    },
+    {
+      "description": "Soft Drink Orange",
+      "price": "8.99",
+      "category": "Expenses:Food:Grocery:Drink"
+    },
+    {
+      "description": "INSTANT SAVINGS",
+      "price": "-1.00",
+      "category": "Expenses:Discount"
+    }
   ]
 }

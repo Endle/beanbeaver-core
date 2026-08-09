@@ -2,6 +2,12 @@
   "merchant": "LOBLAW",
   "merchant_optional": true,
   "total": "16.41",
+  "tenders": [
+    {
+      "kind": "card",
+      "amount": "16.41"
+    }
+  ],
   "critical_items": [
     {
       "description": "COORS LIGHT",

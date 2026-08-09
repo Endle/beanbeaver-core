@@ -1,9 +1,29 @@
 {
   "merchant": "LCBO",
   "total": "96.65",
+  "tenders": [
+    {
+      "kind": "gift_card",
+      "amount": "30.05"
+    },
+    {
+      "kind": "gift_card",
+      "amount": "66.60"
+    }
+  ],
   "critical_items": [
-    { "description": "SPUMANTE BAMBINO WHITE", "price": "19.95" },
-    { "description": "BABY DUCK", "price": "17.95" },
-    { "description": "SMIRNOFF ICE CREAMSICLE", "price": "2.90", "category": "Expenses:Food:AlcoholicBeverage" }
+    {
+      "description": "SPUMANTE BAMBINO WHITE",
+      "price": "19.95"
+    },
+    {
+      "description": "BABY DUCK",
+      "price": "17.95"
+    },
+    {
+      "description": "SMIRNOFF ICE CREAMSICLE",
+      "price": "2.90",
+      "category": "Expenses:Food:AlcoholicBeverage"
+    }
   ]
 }

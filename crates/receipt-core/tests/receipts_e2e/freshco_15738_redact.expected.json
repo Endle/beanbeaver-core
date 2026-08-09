@@ -1,17 +1,70 @@
 {
   "merchant": "FRESHCO",
-  "merchant_any_of": ["FRESHCO", "FRESH CO"],
+  "merchant_any_of": [
+    "FRESHCO",
+    "FRESH CO"
+  ],
   "total": "157.38",
+  "tenders": [
+    {
+      "kind": "gift_card",
+      "amount": "116.24"
+    },
+    {
+      "kind": "card",
+      "amount": "41.14"
+    }
+  ],
   "critical_items": [
-    { "description": "Bath Tiss Jmbo", "price": "17.99", "category": "Expenses:Home:HouseholdSupply" },
-    { "description": "Soft Drink Orange", "price": "17.98", "category": "Expenses:Food:Grocery:Drink" },
-    { "description": "Sprite Zero", "price": "53.94", "category": "Expenses:Food:Grocery:Drink:CocaCola" },
-    { "description": "INSTANT SAVINGS", "price": "-6.00", "category": "Expenses:Discount" },
-    { "description": "Natrel 2% Milk 4L", "price": "7.19", "category": "Expenses:Food:Grocery:Dairy" },
-    { "description": "Bananas", "price": "1.95", "category": "Expenses:Food:Grocery:Fruit" },
-    { "description": "Cocomax Coconut Wtr", "price": "2.99", "category": "Expenses:Food:Grocery:Drink" },
-    { "description": "Onions Green", "price": "1.98", "category": "Expenses:Food:Grocery:Vegetable" },
-    { "description": "Cilantro", "price": "1.27", "category": "Expenses:Food:Grocery:Vegetable" },
-    { "description": "Eggs Large", "price": "9.18", "category": "Expenses:Food:Grocery:Dairy" }
+    {
+      "description": "Bath Tiss Jmbo",
+      "price": "17.99",
+      "category": "Expenses:Home:HouseholdSupply"
+    },
+    {
+      "description": "Soft Drink Orange",
+      "price": "17.98",
+      "category": "Expenses:Food:Grocery:Drink"
+    },
+    {
+      "description": "Sprite Zero",
+      "price": "53.94",
+      "category": "Expenses:Food:Grocery:Drink:CocaCola"
+    },
+    {
+      "description": "INSTANT SAVINGS",
+      "price": "-6.00",
+      "category": "Expenses:Discount"
+    },
+    {
+      "description": "Natrel 2% Milk 4L",
+      "price": "7.19",
+      "category": "Expenses:Food:Grocery:Dairy"
+    },
+    {
+      "description": "Bananas",
+      "price": "1.95",
+      "category": "Expenses:Food:Grocery:Fruit"
+    },
+    {
+      "description": "Cocomax Coconut Wtr",
+      "price": "2.99",
+      "category": "Expenses:Food:Grocery:Drink"
+    },
+    {
+      "description": "Onions Green",
+      "price": "1.98",
+      "category": "Expenses:Food:Grocery:Vegetable"
+    },
+    {
+      "description": "Cilantro",
+      "price": "1.27",
+      "category": "Expenses:Food:Grocery:Vegetable"
+    },
+    {
+      "description": "Eggs Large",
+      "price": "9.18",
+      "category": "Expenses:Food:Grocery:Dairy"
+    }
   ]
 }

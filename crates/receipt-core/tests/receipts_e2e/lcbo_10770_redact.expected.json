@@ -1,7 +1,20 @@
 {
   "merchant": "LCBO",
   "total": "107.70",
+  "tenders": [
+    {
+      "kind": "gift_card",
+      "amount": "100.00"
+    },
+    {
+      "kind": "card",
+      "amount": "7.70"
+    }
+  ],
   "critical_items": [
-    { "description": "BABY DUCK", "price": "107.70" }
+    {
+      "description": "BABY DUCK",
+      "price": "107.70"
+    }
   ]
 }

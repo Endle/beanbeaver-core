@@ -1,7 +1,20 @@
 {
   "merchant": "LCBO",
   "total": "39.90",
+  "tenders": [
+    {
+      "kind": "gift_card",
+      "amount": "18.10"
+    },
+    {
+      "kind": "gift_card",
+      "amount": "21.80"
+    }
+  ],
   "critical_items": [
-    { "description": "SPUMANTE BAMBINO WHITE", "price": "19.95" }
+    {
+      "description": "SPUMANTE BAMBINO WHITE",
+      "price": "19.95"
+    }
   ]
 }

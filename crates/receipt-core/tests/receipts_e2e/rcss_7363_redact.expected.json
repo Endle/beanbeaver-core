@@ -1,18 +1,76 @@
 {
   "merchant": "REAL CANADIAN SUPERSTORE",
-  "merchant_any_of": ["REAL CANADIAN SUPERSTORE", "SUPERSTORE"],
+  "merchant_any_of": [
+    "REAL CANADIAN SUPERSTORE",
+    "SUPERSTORE"
+  ],
   "total": "73.63",
+  "tenders": [
+    {
+      "kind": "card",
+      "amount": "73.63"
+    }
+  ],
   "critical_items": [
-    { "description": "CRUSH ZERO ORANG", "price": "8.29", "category": "Expenses:Food:Grocery:Drink", "known_failure": true },
-    { "description": "PEACE TEA MANGO", "price": "1.25", "category": "Expenses:Food:Grocery:Drink", "known_failure": true },
-    { "description": "FANTA STRAWBERRY", "price": "2.99", "category": "Expenses:Food:Grocery:Drink", "known_failure": true },
-    { "description": "DICED TOMATO", "price": "9.00", "category": "Expenses:Food:Grocery:Vegetable:Canned", "known_failure": true },
-    { "description": "NN MED WHT OUWRP", "price": "9.52", "known_failure": true },
-    { "description": "CHOC MLK", "price": "8.32", "category": "Expenses:Food:Grocery:Dairy", "known_failure": true },
-    { "description": "2% NATURAL YOGUR", "price": "2.49", "category": "Expenses:Food:Grocery:Dairy", "known_failure": true },
-    { "description": "COORS LIGHT", "price": "5.58" },
-    { "description": "POTATO RUSS 10LB", "price": "3.98", "category": "Expenses:Food:Grocery:Vegetable" },
-    { "description": "FM ORANGE 3LB", "price": "3.00", "category": "Expenses:Food:Grocery:Fruit" },
-    { "description": "DRUMSTICKS", "price": "4.47", "category": "Expenses:Food:Grocery:Meat" }
+    {
+      "description": "CRUSH ZERO ORANG",
+      "price": "8.29",
+      "category": "Expenses:Food:Grocery:Drink",
+      "known_failure": true
+    },
+    {
+      "description": "PEACE TEA MANGO",
+      "price": "1.25",
+      "category": "Expenses:Food:Grocery:Drink",
+      "known_failure": true
+    },
+    {
+      "description": "FANTA STRAWBERRY",
+      "price": "2.99",
+      "category": "Expenses:Food:Grocery:Drink",
+      "known_failure": true
+    },
+    {
+      "description": "DICED TOMATO",
+      "price": "9.00",
+      "category": "Expenses:Food:Grocery:Vegetable:Canned",
+      "known_failure": true
+    },
+    {
+      "description": "NN MED WHT OUWRP",
+      "price": "9.52",
+      "known_failure": true
+    },
+    {
+      "description": "CHOC MLK",
+      "price": "8.32",
+      "category": "Expenses:Food:Grocery:Dairy",
+      "known_failure": true
+    },
+    {
+      "description": "2% NATURAL YOGUR",
+      "price": "2.49",
+      "category": "Expenses:Food:Grocery:Dairy",
+      "known_failure": true
+    },
+    {
+      "description": "COORS LIGHT",
+      "price": "5.58"
+    },
+    {
+      "description": "POTATO RUSS 10LB",
+      "price": "3.98",
+      "category": "Expenses:Food:Grocery:Vegetable"
+    },
+    {
+      "description": "FM ORANGE 3LB",
+      "price": "3.00",
+      "category": "Expenses:Food:Grocery:Fruit"
+    },
+    {
+      "description": "DRUMSTICKS",
+      "price": "4.47",
+      "category": "Expenses:Food:Grocery:Meat"
+    }
   ]
 }

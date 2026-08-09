@@ -2,6 +2,12 @@
   "merchant": "COSTCO",
   "date": "2026-02-18",
   "total": "221.97",
+  "tenders": [
+    {
+      "kind": "card",
+      "amount": "221.97"
+    }
+  ],
   "critical_items": [
     {
       "description": "COKE ZERO",
