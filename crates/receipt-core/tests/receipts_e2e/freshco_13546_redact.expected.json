@@ -5,9 +5,6 @@
     "FRESH CO"
   ],
   "total": "135.46",
-  "known_failures": [
-    "tenders"
-  ],
   "tenders": [
     {
       "kind": "gift_card",

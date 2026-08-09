@@ -2,6 +2,8 @@ use regex::Regex;
 use std::cmp::Ordering;
 use std::sync::OnceLock;
 
+use crate::ocr_confusion;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SimpleDate {
     pub year: i32,
@@ -152,7 +154,8 @@ fn normalize_decimal_spacing(text: &str) -> String {
             && i + 2 < bytes.len()
             && bytes[i + 1].is_ascii_digit()
             && bytes[i + 2].is_ascii_digit()
-            && (i + 3 == bytes.len() || !bytes[i + 3].is_ascii_digit())
+            && (i + 3 == bytes.len()
+                || !(bytes[i + 3].is_ascii_digit() || is_digit_confusable(bytes[i + 3])))
         {
             out.push('.');
             out.push(bytes[i + 1] as char);
@@ -164,6 +167,25 @@ fn normalize_decimal_spacing(text: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// Whether `b` is a letter OCR routinely prints in place of a digit — `O` for 0,
+/// `l`/`I` for 1, `S` for 5, and the rest of [`ocr_confusion`]'s same-glyph tier.
+///
+/// Used only to widen a *negative* guard: the char after a suspected thousands
+/// separator. `Win a $1,00o PC gift card` is `$1,000` with its last zero read as
+/// `o`, and without this the comma repair sees a non-digit there, decides the
+/// comma must be a decimal point, and manufactures a `$1.00` price out of survey
+/// marketing copy — which then classifies as a gift-card tender.
+///
+/// [`ocr_confusion`]: crate::ocr_confusion
+fn is_digit_confusable(b: u8) -> bool {
+    let ch = (b as char).to_ascii_uppercase();
+    !ch.is_ascii_digit()
+        && ('0'..='9').any(|d| {
+            ocr_confusion::canonicalize_same_glyph(&ch.to_string())
+                == ocr_confusion::canonicalize_same_glyph(&d.to_string())
+        })
 }
 
 fn parse_cents(token: &str) -> Option<i64> {
@@ -717,7 +739,7 @@ pub struct TenderLine {
 
 fn classify_tender_line(line_upper: &str) -> Option<&'static str> {
     // Reject noise lines that contain price-paired keywords but aren't tenders.
-    if line_upper.contains("REMAINING BALANCE") {
+    if line_upper.contains("BALANCE") {
         return None;
     }
     if line_upper.contains("CASH BACK") {
@@ -752,10 +774,15 @@ fn classify_tender_line(line_upper: &str) -> Option<&'static str> {
     {
         return Some("card");
     }
-    if line_upper.contains("CASH") {
+    if re_cash_label().is_match(line_upper) {
         return Some("cash");
     }
     None
+}
+
+fn re_cash_label() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\bCASH\b").unwrap())
 }
 
 fn tender_amount_for_line(lines: &[String], idx: usize) -> Option<i64> {
@@ -895,8 +922,23 @@ pub fn tenders_reconcile(lines: &[String], tenders: &[TenderLine], total_cents: 
 
 /// What the payment block says was actually applied to this receipt: everything
 /// tendered, less any change handed back.
+///
+/// **Change is dropped when it exceeds the tenders**, because no receipt hands
+/// back more than it took in. That is not a repair — the sum still fails to
+/// match the total and [`tenders_reconcile`] still reports it — it only keeps a
+/// misread change line from turning the report into an impossible number.
+/// Costco's redacted `costco_46668` is the case: the amount column shifts a row
+/// into `MasterCard` / `CHANGE 441.68` / `0.00`, so the card tender loses its
+/// amount *and* the whole card charge reads as change. Netting it gives -416.68
+/// and a warning claiming 883.36 is unaccounted for, when the truth is that one
+/// 441.68 tender went missing — which is what the guarded number says.
 pub fn tendered_net_cents(lines: &[String], tenders: &[TenderLine]) -> i64 {
-    tenders.iter().map(|t| t.amount_cents).sum::<i64>() - extract_change(lines)
+    let tendered: i64 = tenders.iter().map(|t| t.amount_cents).sum();
+    let change = extract_change(lines);
+    if change > tendered {
+        return tendered;
+    }
+    tendered - change
 }
 
 pub fn extract_subtotal(lines: &[String]) -> Option<i64> {
@@ -920,7 +962,8 @@ pub fn extract_subtotal(lines: &[String]) -> Option<i64> {
 mod tests {
     use super::{
         extract_change, extract_date, extract_subtotal, extract_tax, extract_tenders,
-        extract_total, normalize_decimal_spacing, reconcile_tax, tenders_reconcile,
+        extract_total, normalize_decimal_spacing, reconcile_tax, tendered_net_cents,
+        tenders_reconcile,
     };
 
     #[test]
@@ -1541,6 +1584,100 @@ mod tests {
         assert_eq!(extract_change(&lines), 0);
         let tenders = extract_tenders(&lines);
         assert!(tenders_reconcile(&lines, &tenders, 2_000));
+    }
+
+    #[test]
+    fn cash_inside_a_longer_word_is_not_a_tender() {
+        // `1424970 CASHMERE TP 26.99 H` is toilet paper in the item block, and
+        // a bare `contains("CASH")` read it as a $26.99 cash payment — the only
+        // tender on the receipt, so it warned that $40.83 was unaccounted for.
+        // CASHIER lines are the same trap.
+        let lines = vec![
+            "1424970 CASHMERE TP 26.99 H".to_string(),
+            "CASHIER: 12.00".to_string(),
+            "**** TOTAL 67.82".to_string(),
+        ];
+        assert!(extract_tenders(&lines).is_empty());
+    }
+
+    #[test]
+    fn plain_cash_is_still_a_tender() {
+        let lines = vec!["TOTAL 124.13".to_string(), "CASH 124.13".to_string()];
+        let tenders = extract_tenders(&lines);
+        assert_eq!(tenders.len(), 1);
+        assert_eq!(tenders[0].kind, "cash");
+    }
+
+    #[test]
+    fn a_gift_card_balance_echo_is_not_a_second_tender() {
+        // FreshCo prints the card's REMAINING balance after the purchase. It
+        // carries the "GIFT CARD" keyword and a price, so it classified as a
+        // second gift-card tender and every FreshCo gift-card receipt warned.
+        // Guarding on BALANCE (not just Costco's "REMAINING BALANCE") covers
+        // both wordings; no real tender line in either corpus says BALANCE.
+        let lines = vec![
+            "TOTAL TOTAL TAX $135.46 $3.37".to_string(),
+            "Corp Gift Card TENDER $135.46".to_string(),
+            "Gift Card Balance: $116.24".to_string(),
+        ];
+        let tenders = extract_tenders(&lines);
+        assert_eq!(tenders.len(), 1);
+        assert_eq!(tenders[0].amount_cents, 13_546);
+        assert!(tenders_reconcile(&lines, &tenders, 13_546));
+    }
+
+    #[test]
+    fn a_thousands_separator_with_a_misread_zero_is_not_a_price() {
+        // "Win a $1,000 PC gift card" comes back as `$1,00o`. The comma repair
+        // only guards against a following *digit*, so `o` let it through and
+        // manufactured a $1.00 price out of survey marketing copy — which then
+        // classified as a gift-card tender on No Frills and RCSS receipts.
+        assert_eq!(
+            normalize_decimal_spacing("Vin a $1,00o PC gift card or"),
+            "Vin a $1,00o PC gift card or"
+        );
+        let lines = vec![
+            "TOTAL 6.88".to_string(),
+            "Account: MASTERCARD CAD$ 6.88".to_string(),
+            "Vin a $1,00o PC gift card or".to_string(),
+        ];
+        let tenders = extract_tenders(&lines);
+        assert_eq!(tenders.len(), 1);
+        assert!(tenders_reconcile(&lines, &tenders, 688));
+    }
+
+    #[test]
+    fn a_real_comma_decimal_point_still_parses() {
+        // The repair this guard sits inside must keep working: OCR reads a
+        // price's decimal point as a comma often enough to be worth repairing.
+        assert_eq!(normalize_decimal_spacing("BANANAS 0,99"), "BANANAS 0.99");
+        assert_eq!(
+            normalize_decimal_spacing("TOTAL $12,50 H"),
+            "TOTAL $12.50 H"
+        );
+    }
+
+    #[test]
+    fn change_larger_than_the_tenders_is_dropped() {
+        // Redaction re-scanned costco_46668 with the amount column shifted one
+        // row: `MasterCard` / `CHANGE 441.68` / `0.00`. The card tender loses
+        // its amount AND the card charge reads as change, so netting gives
+        // -416.68 and the warning claims 883.36 is unaccounted for. No receipt
+        // hands back more than it took in, so the change term is the untrusted
+        // one. Dropping it is not a repair — the sum still misses the total,
+        // and now by 441.68, which is exactly the tender that went missing.
+        let lines = vec![
+            "****TOTAL 466.68".to_string(),
+            "Shop Card 25.00".to_string(),
+            "MasterCard".to_string(),
+            "CHANGE 441.68".to_string(),
+            "0.00".to_string(),
+        ];
+        let tenders = extract_tenders(&lines);
+        assert_eq!(tenders.len(), 1);
+        assert_eq!(extract_change(&lines), 44_168);
+        assert_eq!(tendered_net_cents(&lines, &tenders), 2_500);
+        assert!(!tenders_reconcile(&lines, &tenders, 46_668));
     }
 }
 
