@@ -21,6 +21,37 @@ exact_only_keywords = ["DANDAN", "GINGER"]
 # ids part of the format: renaming or deleting one breaks user documents that
 # reference it. Add new ids freely; do not rename or remove an existing one.
 
+# FIRST ON PURPOSE — this rule's POSITION is load-bearing, not just its priority.
+#
+# Chinese supermarkets ring a miscellaneous purchase up under its department
+# name, so "Frozen" and "Meat" arrive as literal item descriptions (Foody Mart
+# 2026-08-07: "Frozen 6.99"). "MEAT" and "BAKERY" already work as keywords
+# because the department word is also the product word. "FROZEN" is different:
+# it is an ADJECTIVE inside ~25 other corpus item names ("FY - Raw Frozen
+# Vannaamei" x10, "*Frozen Raw Vannamei White" x5, "Shirakiku - Frozen Imitat"),
+# which is why it was never a keyword. Two separate mechanisms keep it from
+# damaging those lines, and BOTH are required:
+#
+#   priority  -200 makes this the lowest last-resort in the file, so it can only
+#             win the account when it is the SOLE match — i.e. the bare "Frozen"
+#             line. It must sit below `legacy_0046` ("PEELED" -> shrimp) at -150,
+#             the deepest last-resort here: measured at -80, this rule outranked
+#             it and moved "BQ - Frozen Raw Peeled Un" off Seafood:Shrimp onto
+#             Frozen. If a future rule goes below -200, this one must follow it
+#             down. A plain "loses to the default 0" value is NOT enough.
+#
+#   position  first, because the tag union is assembled in FILE order and the
+#             app leads with the LAST tag. Declared later, `grocery/frozen`
+#             would land after `grocery/seafood/shrimp` and relabel every frozen
+#             shrimp "Frozen". Declared first, it is only ever the last tag when
+#             it is the only tag. Do not move this rule down the file.
+[[rules]]
+id = "frozen_department_item"
+keywords = ["FROZEN"]
+tags = ["grocery/frozen"]
+priority = -200
+exact_only = false
+
 [[rules]]
 id = "legacy_0000"
 # "MILK CHOCOLATE" (note: the product is chocolate made with milk; distinct from
@@ -395,6 +426,27 @@ priority = 40
 exact_only = false
 
 [[rules]]
+id = "dim_sum"
+# Same department-name-as-item pattern as `frozen_department_item` above, from
+# the same receipt (Foody Mart 2026-08-07: "Dim Sum 3.99h" under the header
+# "&& 19-Dim Sum"). Unlike FROZEN, "DIM SUM" is not an adjective that turns up
+# inside unrelated product names, so it needs neither a negative priority nor a
+# reserved position.
+#
+# `prepared_meal` rather than `frozen/dumpling`, on the receipt's own evidence:
+# the line is flagged `h` and the receipt's only tax is `hst5% 0.20`, which is
+# 5% of 3.99 — Ontario's point-of-sale rebate of the provincial portion on
+# prepared food at or under $4. A frozen packaged dim sum would be zero-rated
+# basic groceries. So this is ready-to-eat, not a freezer box. (Other branches
+# print the department as "&& Dim Sum (Frozen)", so a future frozen-dim-sum SKU
+# is plausible — it would pick up `grocery/frozen` from the rule above and still
+# land here for the account, which reads correctly either way.)
+keywords = ["DIM SUM"]
+tags = ["grocery/prepared_meal"]
+priority = 0
+exact_only = false
+
+[[rules]]
 id = "legacy_0049"
 keywords = ["FRUIT (FT)"]
 tags = ["grocery/fruit"]
@@ -692,8 +744,18 @@ id = "quail_eggs"
 # that — two glyph errors inside a four-letter word is well past what
 # `ocr_confusion`'s equality budget will spend, and deliberately so; widening the
 # budget to cover it is how the M/N false positives got in. "QUAIL" is the half
-# of the name OCR left alone, being longer and sharing no confusable pairs, so
-# match on that instead.
+# of the name OCR left alone, so match on that instead.
+#
+# `exact_only`, because the claim that QUAIL "shares no confusable pairs" was
+# wrong: I/L is a confusable pair, so `confusable_find` aligned QUAIL against
+# QUALI inside "QUALITY" for two corpus lines — "Beat Quality - Squid Tent"
+# (Foody Mart, 2026-08-07) and "*Best Quality Frozen Boi" — hanging a
+# `grocery/dairy` tag on a squid and a slab of meat. Because the tag union is
+# built in FILE order while the account is chosen by priority, the account
+# stayed correct (Seafood:Shrimp) and only the *displayed* label went wrong:
+# `grocery/dairy` landed last, and the app leads with the last tag. Nothing is
+# lost by requiring a literal match — the OCR damage this rule exists to survive
+# is in EGGS, never in QUAIL, which every corpus case prints intact.
 #
 # Negative priority, per the `no_name_med_wht_ovwrp_eggs` precedent below: this
 # is a last-resort identification of one product, so a legible "EGGS" still wins
@@ -703,7 +765,7 @@ id = "quail_eggs"
 keywords = ["QUAIL"]
 tags = ["grocery/dairy"]
 priority = -80
-exact_only = false
+exact_only = true
 
 [[rules]]
 id = "no_name_med_wht_ovwrp_eggs"

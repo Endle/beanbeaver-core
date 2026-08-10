@@ -505,6 +505,104 @@ disables = ["legacy_9999"]
         );
     }
 
+    /// `QUAIL` must match literally. I/L is a confusable pair, so before this was
+    /// `exact_only` the OCR-noise stage aligned QUAIL against QUALI inside
+    /// "QUALITY" and hung `grocery/dairy` on two corpus lines. The account was
+    /// never wrong — priority kept it on the seafood rule — so only the tag list
+    /// showed it, and the app leads with the LAST tag, which is why a squid
+    /// displayed as "Dairy". Nothing the rule exists for is lost: the OCR damage
+    /// it survives is in EGGS, never in QUAIL.
+    #[test]
+    fn quail_matches_literally_and_does_not_claim_quality() {
+        let book = RuleBook::bundled();
+        for description in ["Beat Quality - Squid Tent", "*Best Quality Frozen Boi"] {
+            let explained = book.explain(description);
+            assert!(
+                !explained.tags.iter().any(|t| t == "grocery/dairy"),
+                "{description:?} must not be dairy, got {:?}",
+                explained.tags
+            );
+        }
+        assert_eq!(
+            book.explain("Beat Quality - Squid Tent").account.as_deref(),
+            Some("Expenses:Food:Grocery:Seafood:Shrimp")
+        );
+        // The cases the rule exists for still work, including the OCR damage in
+        // EGGS that motivated matching on QUAIL in the first place.
+        for description in ["LA - Quail Eggs", "#Foojoy Quail Eggs", "LA - Quail E8g8"] {
+            assert_eq!(
+                book.explain(description).account.as_deref(),
+                Some("Expenses:Food:Grocery:Dairy"),
+                "{description:?} should still be dairy"
+            );
+        }
+    }
+
+    /// `frozen_department_item` is guarded by TWO independent mechanisms, and a
+    /// regression in either is silent, so both are asserted here.
+    #[test]
+    fn frozen_department_item_is_last_resort_and_never_the_label() {
+        let book = RuleBook::bundled();
+
+        // It classifies the bare department-name line, which is its whole point.
+        assert_eq!(
+            book.explain("Frozen").account.as_deref(),
+            Some("Expenses:Food:Grocery:Frozen")
+        );
+
+        // PRIORITY: it must lose the account to every other rule, including the
+        // deepest last-resort in the corpus. At -80 it outranked legacy_0046
+        // ("PEELED" -> shrimp, -150) and moved this line onto Frozen.
+        let rules = book.item_rules();
+        let frozen = rules
+            .iter()
+            .find(|r| r.id.as_deref() == Some("frozen_department_item"))
+            .expect("rule present");
+        assert!(
+            rules
+                .iter()
+                .filter(|r| r.id.as_deref() != Some("frozen_department_item"))
+                .all(|r| r.priority > frozen.priority),
+            "frozen_department_item must be the lowest-priority bundled rule"
+        );
+        assert_eq!(
+            book.explain("BQ - Frozen Raw Peeled Un").account.as_deref(),
+            Some("Expenses:Food:Grocery:Seafood:Shrimp")
+        );
+
+        // POSITION: declared first in the file, so `grocery/frozen` is never the
+        // last tag when another rule also matched — the app labels an item with
+        // its last tag, so a later declaration would relabel every frozen shrimp.
+        for description in [
+            "FY - Raw Frozen Vannaamei",
+            "*Frozen Raw Vannamei White",
+            "Shirakiku - Frozen Imitat",
+            "Fu Yang Frozen Shrimp",
+        ] {
+            let tags = book.explain(description).tags;
+            assert!(
+                tags.iter().any(|t| t == "grocery/frozen"),
+                "{description:?} should carry the frozen tag"
+            );
+            assert_ne!(
+                tags.last().map(String::as_str),
+                Some("grocery/frozen"),
+                "{description:?} would be labelled Frozen, got {tags:?}"
+            );
+        }
+    }
+
+    /// Dim sum arrives as a department-name item too. It files as prepared food
+    /// on the receipt's own evidence — the line is taxed at 5%, Ontario's
+    /// prepared-food-under-$4 rate, where a frozen box would be zero-rated.
+    #[test]
+    fn dim_sum_is_a_prepared_meal() {
+        assert_eq!(
+            RuleBook::bundled().explain("Dim Sum").account.as_deref(),
+            Some("Expenses:Food:Grocery:PreparedMeal")
+        );
+    }
+
     /// The bundled corpus uses neither operator, so nothing it classifies changes.
     #[test]
     fn bundled_corpus_uses_no_subtraction() {
