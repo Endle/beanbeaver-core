@@ -25,6 +25,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 # Apple-only: CoreML execution provider (Neural Engine / GPU), forwarded to the
 # OCR engine. Enabled by the iOS xcframework build.
 coreml = ["ocr-paddle/coreml"]
+xnnpack = ["ocr-paddle/xnnpack"]
 
 [dev-dependencies]
 # The e2e harnesses and device_sim read `.expected.json` / `.ocr.json` fixtures.

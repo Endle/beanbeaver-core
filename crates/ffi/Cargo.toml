@@ -39,3 +39,4 @@ uniffi = { version = "0.28", features = ["cli"] }
 # Forward CoreML (Apple Neural Engine / GPU) acceleration to ocr-paddle. Enabled
 # by the iOS xcframework build (build-xcframework.sh); off for host bindgen.
 coreml = ["scan/coreml"]
+xnnpack = ["scan/xnnpack"]

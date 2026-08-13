@@ -36,6 +36,11 @@ receipt-image = { path = "../receipt-image" }
 # det/rec/cls. Off by default so Linux/desktop builds don't link CoreML; the iOS
 # xcframework build enables it. See src/session.rs for runtime tuning env vars.
 coreml = ["ort/coreml"]
+# Android-only: register the XNNPACK execution provider. Off by default so
+# desktop and CI builds keep the plain CPU EP; build-android.sh enables it, and
+# it requires an ONNX Runtime compiled with --use_xnnpack (see
+# beanbeaver-android/scripts/build-ort-android.sh). See src/session.rs.
+xnnpack = ["ort/xnnpack"]
 
 [dev-dependencies]
 # Parse the e2e `.expected.json` fixtures in the Phase 5 validation test.

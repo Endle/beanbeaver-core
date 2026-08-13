@@ -7,6 +7,10 @@
 //! transparently falls back to the ORT CPU provider, so behaviour is unchanged
 //! where acceleration isn't available.
 //!
+//! With the `xnnpack` feature (Android), the XNNPACK execution provider is
+//! registered instead; `OCR_XNNPACK=0` forces plain CPU and
+//! `OCR_XNNPACK_THREADS=<n>` caps its intra-op pool.
+//!
 //! Runtime tuning (no rebuild needed; only meaningful with the `coreml` feature):
 //! - `OCR_COREML=0` — disable CoreML, force CPU (for A/B latency comparisons).
 //! - `OCR_COREML_UNITS=ane|gpu|cpu|all` — compute units (default `ane` =
@@ -52,6 +56,35 @@ pub(crate) fn commit_from_file<P: AsRef<Path>>(path: P) -> ort::Result<Session> 
             // `?` converts Error<SessionBuilder> -> ort::Error; a hard failure
             // here is surfaced, but an EP that simply can't take nodes is a
             // non-fatal warning and leaves CPU execution intact.
+            builder = builder.with_execution_providers([ep.build()])?;
+        }
+    }
+
+    // Android's counterpart to the CoreML block above. Until this existed,
+    // Android registered no execution provider at all: PP-OCRv5 ran on the plain
+    // CPU EP (MLAS, NEON-optimised but CPU) while iOS ran the same models on the
+    // Neural Engine. That asymmetry was never a decision -- CoreML simply got
+    // wired up and Android did not. Measured on an SM-X218U before this: det
+    // 1591 ms, rec 2982 ms, ~5 s wall for one receipt.
+    //
+    // XNNPACK rather than NNAPI: MakeACopy's DocQuad runner records a native
+    // SIGABRT inside NNAPI graph partitioning on some devices, and a crash we
+    // cannot catch is a bad trade for an accelerator we cannot verify per-device.
+    #[cfg(feature = "xnnpack")]
+    {
+        if std::env::var("OCR_XNNPACK").ok().as_deref() != Some("0") {
+            use core::num::NonZeroUsize;
+            use ort::ep::XNNPACK;
+            let mut ep = XNNPACK::default();
+            if let Some(threads) = std::env::var("OCR_XNNPACK_THREADS")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .and_then(NonZeroUsize::new)
+            {
+                ep = ep.with_intra_op_num_threads(threads);
+            }
+            // As with CoreML: a hard builder failure surfaces, but an EP that
+            // simply cannot take a node falls back to CPU for that node.
             builder = builder.with_execution_providers([ep.build()])?;
         }
     }
