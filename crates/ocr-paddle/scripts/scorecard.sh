@@ -3,6 +3,10 @@
 # Standard accuracy + latency scorecard for the on-device OCR pipeline.
 # Always builds --release (debug latency is ~10-50× inflated and not trustworthy).
 #
+# Lives under ocr-paddle/ for historical reasons; `device_sim` itself moved to
+# the `scan` crate when that became the composition root (#61), because it needs
+# both halves of the pipeline. Only the -p below cares.
+#
 #   crates/ocr-paddle/scripts/scorecard.sh                 # live, private corpus
 #   crates/ocr-paddle/scripts/scorecard.sh <corpus-dir>    # live, custom corpus
 #   crates/ocr-paddle/scripts/scorecard.sh '' --cached     # cached (server OCR) baseline
@@ -24,4 +28,4 @@ if [ ! -e "$CORPUS" ]; then
   exit 2
 fi
 
-exec cargo run --release -q -p ocr-paddle --example device_sim -- "$CORPUS" "$@"
+exec cargo run --release -q -p scan --example device_sim -- "$CORPUS" "$@"
