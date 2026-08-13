@@ -393,6 +393,55 @@ pub fn parse_receipt(
     // defect: an item is duplicated, or a summary amount was parsed as an item.
     // It is also rare and specific — 6 of 125 receipts, every one genuinely
     // wrong — so warning on it is a signal, not noise.
+    // Every balance check below is gated on `total_cents > 0`, which reads as a
+    // guard and behaves as an off switch: a receipt whose total came back zero
+    // doesn't fail those checks, it skips them. A C&C slip parsed 23 items and a
+    // $0.00 total and reported nothing at all — the one shape where the entry is
+    // certainly wrong was the one shape that stayed quiet.
+    //
+    // Items alone are enough to know a total was expected. A genuinely zero
+    // receipt has nothing to post, so it never reaches here with items in hand.
+    if total_cents == 0 && !items.is_empty() {
+        warnings.push(ParsedReceiptWarning {
+            kind: ReceiptWarningKind::ImplausibleSummary,
+            message: format!(
+                "no receipt total could be read, but {} item{} parsed totalling {} — the entry cannot be trusted to balance",
+                items.len(),
+                if items.len() == 1 { " was" } else { "s were" },
+                cents_to_fixed(
+                    items
+                        .iter()
+                        .map(|item| crate::receipt_formatter::decimal_to_cents(&item.price))
+                        .sum::<i64>()
+                ),
+            ),
+            after_item_index: None,
+        });
+    }
+
+    // Subtotal equal to tax is not a near-miss, it is arithmetically impossible:
+    // it says the receipt taxed at 100%. What it really means is that one amount
+    // was handed to both labels, which happens when the label column and the
+    // amount column drift apart — on the C&C slip a single `153.55` overlapped
+    // both `Sub Total` and `HST` while the true total sat unclaimed a row below.
+    //
+    // Nothing is repaired. Which label should have kept the amount is not
+    // recoverable from the arithmetic, exactly as with `TenderMismatch`, and the
+    // real fix is in grouping. Zero is excluded: a genuinely untaxed receipt
+    // prints 0.00 for both, and that is a fact rather than a fault.
+    if let (Some(subtotal), Some(tax)) = (subtotal_cents, tax_cents) {
+        if subtotal == tax && subtotal != 0 {
+            warnings.push(ParsedReceiptWarning {
+                kind: ReceiptWarningKind::ImplausibleSummary,
+                message: format!(
+                    "subtotal and tax both read {} — they cannot both be right, so one of the summary amounts is misread",
+                    cents_to_fixed(subtotal),
+                ),
+                after_item_index: None,
+            });
+        }
+    }
+
     if total_cents > 0 {
         let posted_cents = items
             .iter()
@@ -563,6 +612,97 @@ mod tests {
     fn parse_text(text: &str) -> super::ParsedReceiptData {
         let layers = default_parser_rule_layers();
         super::parse_receipt(text, &[], &[], &layers, "receipt.jpg", &[], &[], 2026)
+    }
+
+    /// Every finding of the kind, so a test can't pass on the wrong shape.
+    fn implausible(parsed: &super::ParsedReceiptData) -> Vec<&super::ParsedReceiptWarning> {
+        parsed
+            .warnings
+            .iter()
+            .filter(|w| w.kind == ReceiptWarningKind::ImplausibleSummary)
+            .collect()
+    }
+
+    #[test]
+    fn warns_when_items_parsed_but_no_total_was_read() {
+        // The C&C slip's shape: items parse, the total does not. Every balance
+        // check is gated on `total > 0`, so this receipt used to satisfy all of
+        // them by skipping all of them.
+        let parsed = parse_text(
+            "C&C SUPERMARKET\n\
+             MILK 4.00\n\
+             BREAD 3.50\n",
+        );
+
+        assert_eq!(
+            parsed.total, "0.00",
+            "fixture must reach the zero-total path"
+        );
+        assert!(!parsed.items.is_empty(), "fixture must parse items");
+
+        let found = implausible(&parsed);
+        assert_eq!(found.len(), 1, "warnings were {:?}", parsed.warnings);
+        assert!(
+            found[0].message.contains("no receipt total"),
+            "message should say the total is missing: {}",
+            found[0].message
+        );
+    }
+
+    #[test]
+    fn does_not_warn_about_a_missing_total_when_nothing_was_parsed() {
+        // A receipt that yielded no items has nothing to post, so there is no
+        // entry to be wrong. Warning here would fire on every unreadable photo.
+        let parsed = parse_text("SOME SHOP\nTHANK YOU FOR SHOPPING\n");
+
+        assert!(parsed.items.is_empty(), "fixture must parse no items");
+        assert!(
+            implausible(&parsed).is_empty(),
+            "warnings were {:?}",
+            parsed.warnings
+        );
+    }
+
+    #[test]
+    fn warns_when_subtotal_equals_tax() {
+        // One amount handed to two labels — arithmetically a 100% tax rate. On
+        // the receipt that prompted this, a single `153.55` overlapped both
+        // `Sub Total` and `HST` because the amount column had drifted a row.
+        let parsed = parse_text(
+            "C&C SUPERMARKET\n\
+             MILK 4.00\n\
+             BREAD 3.50\n\
+             SUBTOTAL 7.50\n\
+             HST 7.50\n\
+             TOTAL 7.50\n",
+        );
+
+        let found = implausible(&parsed);
+        assert_eq!(found.len(), 1, "warnings were {:?}", parsed.warnings);
+        assert!(
+            found[0].message.contains("7.50") && found[0].message.contains("subtotal and tax"),
+            "message should name both labels and the shared amount: {}",
+            found[0].message
+        );
+    }
+
+    #[test]
+    fn does_not_warn_when_an_untaxed_receipt_prints_zero_for_both() {
+        // A genuinely untaxed receipt prints 0.00 for subtotal's tax line. Equal
+        // is only impossible when the amount is nonzero.
+        let parsed = parse_text(
+            "SOME SHOP\n\
+             MILK 4.00\n\
+             SUBTOTAL 4.00\n\
+             TAX 0.00\n\
+             TOTAL 4.00\n",
+        );
+
+        assert!(
+            implausible(&parsed).is_empty(),
+            "warnings were {:?}",
+            parsed.warnings
+        );
     }
 
     #[test]

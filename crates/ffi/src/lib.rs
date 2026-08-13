@@ -261,6 +261,10 @@ pub enum ReceiptWarningKind {
     /// two is misread and the arithmetic can't say which, so nothing is
     /// repaired; the beancount falls back to a single payment posting.
     TenderMismatch,
+    /// The summary block didn't read coherently: either no total was found
+    /// while items were parsed, or subtotal equalled tax. The amounts that
+    /// anchor the entry can't be trusted. Reported, never repaired.
+    ImplausibleSummary,
 }
 
 /// One parser finding: what it is, what it says, and which item it sits under.
@@ -936,6 +940,7 @@ fn warning_kind_to_ffi(kind: CoreWarningKind) -> ReceiptWarningKind {
         CoreWarningKind::DroppedImplausiblePrice => ReceiptWarningKind::DroppedImplausiblePrice,
         CoreWarningKind::UncategorizedItem => ReceiptWarningKind::UncategorizedItem,
         CoreWarningKind::TenderMismatch => ReceiptWarningKind::TenderMismatch,
+        CoreWarningKind::ImplausibleSummary => ReceiptWarningKind::ImplausibleSummary,
     }
 }
 
@@ -948,6 +953,7 @@ fn warning_kind_to_core(kind: ReceiptWarningKind) -> CoreWarningKind {
         ReceiptWarningKind::DroppedImplausiblePrice => CoreWarningKind::DroppedImplausiblePrice,
         ReceiptWarningKind::UncategorizedItem => CoreWarningKind::UncategorizedItem,
         ReceiptWarningKind::TenderMismatch => CoreWarningKind::TenderMismatch,
+        ReceiptWarningKind::ImplausibleSummary => CoreWarningKind::ImplausibleSummary,
     }
 }
 
