@@ -299,7 +299,16 @@ pub fn run_cached_corpus_in(
             TODAY_YEAR,
         );
 
-        let known = str_set(&expected, "known_failures");
+        // A tolerated divergence describes ONE engine at ONE version, and this
+        // corpus is replayed by four consumers on four different core pins —
+        // desktop sits on v0.3.2, the phone apps on their own tags and against
+        // live OCR rather than these snapshots. A flat marker asserts one
+        // engine's failures against all of them. So the bare key still means
+        // "every consumer" and `known_failures_core` is ours; we read the union
+        // and ignore the other consumers' keys. Schema lives in
+        // beanbeaver-private-test's CLAUDE.md.
+        let mut known = str_set(&expected, "known_failures");
+        known.extend(str_set(&expected, "known_failures_core"));
         let mut failed: HashSet<&'static str> = HashSet::new();
         let mut case_fail: Vec<String> = Vec::new();
 
@@ -365,8 +374,11 @@ pub fn run_cached_corpus_in(
                     .unwrap_or_default();
                 let price = ci.get("price").and_then(Value::as_str).unwrap_or_default();
                 let want_cat = ci.get("category").and_then(Value::as_str);
+                // Bare key = every consumer; `_core` = ours only. See the
+                // note on `known_failures` above.
                 let item_known = ci
                     .get("known_failure")
+                    .or_else(|| ci.get("known_failure_core"))
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 let matched: Vec<_> = parsed
@@ -439,6 +451,7 @@ pub fn run_cached_corpus_in(
                 let want_kind = wt.get("kind").and_then(Value::as_str);
                 let entry_known = wt
                     .get("known_failure")
+                    .or_else(|| wt.get("known_failure_core"))
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 let got = parsed.tenders.get(i);
