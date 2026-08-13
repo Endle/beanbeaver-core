@@ -791,6 +791,24 @@ fn run_single(
 
 /// A directory: run every `<stem>.jpg` that has a `<stem>.expected.json`.
 #[allow(clippy::too_many_arguments)]
+/// Recursively collect scorable `<stem>.jpg` under `dir`, counting every jpg
+/// seen so the header can still report how many lacked an `expected.json`.
+fn collect_jpgs(dir: &Path, all_jpg: &mut usize, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for path in entries.flatten().map(|e| e.path()) {
+        if path.is_dir() {
+            collect_jpgs(&path, all_jpg, out);
+        } else if path.extension().is_some_and(|x| x == "jpg") {
+            *all_jpg += 1;
+            if path.with_extension("expected.json").exists() {
+                out.push(path);
+            }
+        }
+    }
+}
+
 fn run_corpus(
     engine: &mut Option<OcrEngine>,
     cached: bool,
@@ -800,18 +818,16 @@ fn run_corpus(
     dump: bool,
     by_merchant: bool,
 ) {
-    let all_jpg = std::fs::read_dir(dir)
-        .expect("read dir")
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "jpg"))
-        .count();
-    let mut jpgs: Vec<PathBuf> = std::fs::read_dir(dir)
-        .expect("read dir")
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.extension().is_some_and(|x| x == "jpg") && p.with_extension("expected.json").exists()
-        })
-        .collect();
+    // Walk subdirectories. The private corpus is grouped one directory per
+    // merchant — a layout core's `private_e2e.rs` depends on to give each
+    // merchant its own `#[test]` — and a flat `read_dir` silently finds nothing
+    // there. This scored "0 .jpg" against the very corpus `scorecard.sh`
+    // defaults to, and reported it as an empty run rather than an error, so the
+    // standard scorecard quietly measured nothing after the corpus was
+    // reorganised.
+    let mut all_jpg = 0usize;
+    let mut jpgs: Vec<PathBuf> = Vec::new();
+    collect_jpgs(dir, &mut all_jpg, &mut jpgs);
     jpgs.sort();
     println!(
         "  corpus : {}  ({all_jpg} .jpg, {} with expected.json)",
