@@ -547,6 +547,32 @@ fn score_less(a: (u8, f64, f64), b: (u8, f64, f64)) -> bool {
 /// typed (see [`AmountClaim`]), not a wider window.
 const PAIR_OVERLAP_GATE: f64 = 0.3;
 
+/// Where the RIGHT (amount) column starts, as a fraction of image width.
+///
+/// A fixed fraction cannot be right for every receipt, and moving it does not
+/// help. Swept over the 123-receipt corpus (critical items / totals, against
+/// 893 / 121 here): 0.74→888, 0.68→891, 0.66→888. The two values that score
+/// *higher* on items, 0.62→894 and 0.58→894, both do it by **losing a total**
+/// (121/123 → 120/123), and a wrong total is the more severe defect. Lowering
+/// the bar for every receipt admits, on every other receipt, the middle-column
+/// token that was correctly excluded.
+///
+/// **Widening it per-receipt was tried too, and is also a net loss** — the
+/// obvious next move, since a photographed receipt's price column is not a
+/// straight vertical line and so straddles this cut. Measuring RIGHT's own left
+/// edge and re-admitting price-shaped MIDDLE tokens within ~1.5 character cells
+/// of it promotes exactly the right tokens (on lcbo/unknown-date_lcbo_74_35, the
+/// 11.95 and 16.40 at 0.694/0.696 that belong with their eight column-mates at
+/// 0.705-0.725) and still scores **888**, because promotion moves a token from
+/// one pipeline to another rather than from nowhere to somewhere. In MIDDLE it
+/// attaches to the *best-aligned* line; in RIGHT it must be claimed one-to-one
+/// in reading order. LCBO prints the item name on one line and `SKU … price` on
+/// the next, so the amount pairs with the SKU row and orphans the description
+/// that owns it — that receipt goes 2/7 → **0/7**, and a clean costco 13/13
+/// → 10/13. MIDDLE attachment is load-bearing for multi-line item layouts;
+/// do not "fix" the partition without moving that too.
+const RIGHT_COLUMN_CUT: f64 = 0.7;
+
 /// Pair LEFT labels to RIGHT amounts, returning the RIGHT slot each LEFT
 /// position claimed.
 ///
@@ -699,7 +725,7 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
     let mut right: Vec<usize> = Vec::new();
     for (index, det) in dets.iter().enumerate() {
         let x_norm = det.min_x / image_width;
-        if x_norm > 0.7 && is_amount_shaped(&det.text) {
+        if x_norm > RIGHT_COLUMN_CUT && is_amount_shaped(&det.text) {
             right.push(index);
         } else if belongs_in_left_column(&det.text, x_norm) {
             left.push(index);
