@@ -73,7 +73,7 @@ fn adaptive_middle_y_threshold(dets: &[Detection]) -> f64 {
 /// chain. Typing the label is what breaks it: a row that cannot legally hold the
 /// amount in front of it declines, and the whole downstream run re-aligns on its
 /// own.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AmountClaim {
     /// Ordinary item or summary row: takes the first overlapping amount.
     Any,
@@ -171,6 +171,7 @@ fn amount_claim(text: &str) -> AmountClaim {
     if is_code_stub_label(text)
         || is_transaction_id_label(text)
         || is_membership_label(text)
+        || is_department_header_label(text)
         || is_priced_in_savings_label(text)
     {
         return AmountClaim::Never;
@@ -252,6 +253,30 @@ fn is_membership_label(text: &str) -> bool {
         return false;
     };
     digits.len() >= 6 && digits.chars().all(|ch| ch.is_ascii_digit())
+}
+
+/// True for the section header the Loblaw chains print above each group of
+/// items — `21-GROCERY`, `22-DAIRY`, `27-PRODUCE`.
+///
+/// Same family as the code stubs and membership headers above: a row that never
+/// carries money, sitting where it can swallow a neighbour's price. It is worse
+/// placed than those, because it appears *between* every pair of item groups
+/// rather than once at the top, and it prints at the left margin — shallower
+/// than the item column, so [`yields_to_price_column`] reads it as a banner and
+/// lets it keep what it takes. real_canadian/rcss_20260130 loses two amounts to
+/// it directly (`22-DAIRY` takes the 9.00 belonging to the `6 @ $1.50` above it,
+/// `23-FROZEN` takes 2.49) and the rows below inherit the shift.
+///
+/// Shape only, no vocabulary: the corpus's own OCR renders these as `31-NEATS`,
+/// `41-HONE`, `26-L.IQUOR` and `42-ENTERTAINNENT`, so matching department names
+/// would miss exactly the noisy rows that cause trouble. Two digits and a dash
+/// is not a shape an item row can take — SKUs run 8-11 digits, and a quantity
+/// breakdown carries an `@`. Requiring letters after the dash is what keeps
+/// dates and masked card numbers out.
+fn is_department_header_label(text: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)^\s*\d{2}\s*[-–]\s*[A-Z][A-Z .&/]*$").unwrap())
+        .is_match(text.trim())
 }
 
 /// True for the quantity/unit-price breakdown a multi-buy item prints under its
@@ -508,6 +533,20 @@ fn score_less(a: (u8, f64, f64), b: (u8, f64, f64)) -> bool {
     }
 }
 
+/// How much of a row's height must overlap an amount for the row to claim it.
+///
+/// Measured, not chosen. Sweeping it over the 123-receipt corpus falls away
+/// monotonically as it loosens — 0.25→881, 0.20→872, 0.15→868, 0.10→855,
+/// 0.05→839 critical items, against 885 at 0.3. The temptation is real, because
+/// loosening *does* fix receipts whose two columns sit on different baselines:
+/// on real_canadian/rcss_20260130 the amount column runs ~26px low against a
+/// ~30px row pitch, so `06700000874` overlaps its own 1.25 by 0.177, declines
+/// it, and every row below inherits its neighbour's amount. But the same
+/// loosening lets the structural row next to an amount claim it everywhere else,
+/// and that costs more than it earns. Those receipts need the structural rows
+/// typed (see [`AmountClaim`]), not a wider window.
+const PAIR_OVERLAP_GATE: f64 = 0.3;
+
 /// Pair LEFT labels to RIGHT amounts, returning the RIGHT slot each LEFT
 /// position claimed.
 ///
@@ -554,7 +593,7 @@ fn pair_columns(
             if assigned_prices[slot] {
                 continue;
             }
-            if !boxes_overlap_y(&dets[left_index], &dets[right_index], 0.3)
+            if !boxes_overlap_y(&dets[left_index], &dets[right_index], PAIR_OVERLAP_GATE)
                 || !claim.accepts(&dets[right_index].text)
             {
                 continue;
@@ -922,6 +961,80 @@ mod tests {
             rendered
                 .iter()
                 .any(|line| line.contains("COKE ZERO") && line.contains("6.69")),
+            "{rendered:?}"
+        );
+    }
+
+    #[test]
+    fn department_headers_never_claim_an_amount() {
+        // The shapes the corpus actually produces, OCR noise included.
+        for header in [
+            "21-GROCERY",
+            "22-DAIRY",
+            "27-PRODUCE",
+            "31-NEATS",
+            "41-HONE",
+            "26-L.IQUOR",
+            "42-ENTERTAINNENT",
+            "25-NATURAL FOODS",
+            "33-BAKERY INSTORE",
+        ] {
+            assert_eq!(
+                amount_claim(header),
+                AmountClaim::Never,
+                "{header} is a department header"
+            );
+        }
+        // Rows that merely start with digits and must keep claiming.
+        for row in [
+            "05600001066 CRUSH ZERO ORANG",
+            "6 @ $1.50 MRJ",
+            "2045120 TPD TANK TOP",
+            "10-15-2026",
+            "20$0.10",
+        ] {
+            assert_eq!(amount_claim(row), AmountClaim::Any, "{row} carries a price");
+        }
+    }
+
+    #[test]
+    fn a_department_header_does_not_claim_a_neighbours_amount() {
+        // real_canadian/rcss_20260130, real live-OCR geometry, image width 895.
+        // `22-DAIRY` prints at the left margin — shallower than the item column,
+        // so the indent yield reads it as a banner and lets it keep whatever it
+        // takes — and its box sits 5px from the 9.00 that belongs to the
+        // `6 @ $1.50` breakdown above it, while that breakdown's own box is a
+        // full row away. Nothing geometric separates them; only the typing does.
+        let dets = vec![
+            det_box("(6)06780000235", 80.4, 300.0, 523.4, 557.2),
+            det_box("2.99", 650.7, 720.0, 520.2, 554.4),
+            det_box("6 @ $1.50", 102.6, 300.0, 550.7, 590.6),
+            det_box("22-DAIRY", 48.1, 260.0, 580.9, 621.2),
+            det_box("9.00", 732.2, 800.0, 578.7, 613.0),
+            det_box("06038309397", 78.0, 300.0, 617.7, 646.6),
+            det_box("9.52", 649.6, 720.0, 634.2, 672.6),
+        ];
+        let rendered = render(&dets, &group_detections_into_lines(&dets, 895.0));
+        assert!(
+            !rendered
+                .iter()
+                .any(|line| line.contains("22-DAIRY") && line.contains("9.00")),
+            "the department header must not claim an amount: {rendered:?}"
+        );
+        // What the header held back does *not* reach the breakdown here: the SKU
+        // row above it wrongly took 2.99 (the amount column on this receipt runs
+        // ~26px low, so every row is claiming its neighbour's — see
+        // [`PAIR_OVERLAP_GATE`]), which suppresses the breakdown in turn. So 9.00
+        // stands as an orphan line rather than becoming a wrong item price, and
+        // the rows past the header re-align on their own.
+        assert!(
+            rendered.contains(&"9.00".to_string()),
+            "it should stand alone rather than land on the wrong row: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("06038309397") && line.contains("9.52")),
             "{rendered:?}"
         );
     }
