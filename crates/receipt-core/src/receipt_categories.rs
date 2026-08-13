@@ -929,6 +929,18 @@ mod tests {
         // ...while ginger itself still classifies.
         assert_eq!(key("Ginger Root").as_deref(), Some("grocery/seasoning"));
 
+        // Salt is a seasoning, not a staple: a FOODY MART scan filed
+        // "Windsor - Table Salt" under Staple because "SALT" sat in the staple
+        // rule's keyword list beside FLOUR and SUGAR.
+        assert_eq!(
+            key("Windsor - Table Salt").as_deref(),
+            Some("grocery/seasoning")
+        );
+        assert_eq!(
+            tags("Windsor - Table Salt"),
+            vec!["grocery", "grocery/seasoning"]
+        );
+
         assert_eq!(key("435259 FINE-FILT").as_deref(), Some("grocery/dairy"));
         for t in ["grocery", "grocery/dairy", "grocery/dairy/milk"] {
             assert!(
