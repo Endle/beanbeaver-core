@@ -1,21 +1,28 @@
 //! Simulate the on-device extraction on macOS and report quality.
 //!
-//! "Device behaviour" is exactly `scan::process_image` (same Rust
-//! code + ONNX models + ONNX Runtime CPU EP as the iOS app), so feeding it the
-//! same image bytes reproduces the phone's result ~1:1. Use this to test the
-//! pipeline against a corpus, or to diagnose a single exported capture.
+//! "Device behaviour" is exactly `scan::process_image` — the same Rust code and
+//! the same ONNX models the phones run — so feeding it the same image bytes
+//! reproduces the phone's parse very closely. Use this to test the pipeline
+//! against a corpus, or to diagnose a single exported capture.
+//!
+//! **How close depends on the platform, and this used to overclaim.** This runs
+//! ONNX Runtime's **CPU** execution provider. That still matches **Android**,
+//! which is on plain CPU (XNNPACK is registered but does not link). **iOS moved
+//! to CoreML**, so an OCR-layer difference that only shows up on the Neural
+//! Engine is precisely what this cannot reproduce — confirm those on a
+//! simulator. The parser half is identical everywhere regardless.
 //!
 //! Two modes, same parser/scoring — the delta is purely OCR quality:
 //!   live    (default): run the on-device ONNX models on `<stem>.jpg`
 //!   --cached         : feed the desktop PaddleOCR `<stem>.ocr.json` detections
 //!
 //! Usage:
-//!   cargo run -p ocr-paddle --example device_sim -- <image-or-dir> [--cached] [--models DIR] [--today YYYY-MM-DD] [--dump]
+//!   cargo run -p scan --example device_sim -- <image-or-dir> [--cached] [--models DIR] [--today YYYY-MM-DD] [--dump]
 //!
 //!   # on-device OCR over the private corpus:
-//!   cargo run -p ocr-paddle --example device_sim -- ../beanbeaver-private-test/receipts_e2e
+//!   cargo run -p scan --example device_sim -- ../beanbeaver-private-test/receipts_e2e
 //!   # server OCR (cached) baseline over the same corpus, same parser:
-//!   cargo run -p ocr-paddle --example device_sim -- ../beanbeaver-private-test/receipts_e2e --cached
+//!   cargo run -p scan --example device_sim -- ../beanbeaver-private-test/receipts_e2e --cached
 //!
 //! Compares against a sibling `<stem>.expected.json` when present (same schema
 //! as tests/test_e2e_receipts.py: merchant / date / total / critical_items).
@@ -159,7 +166,7 @@ fn print_usage() {
     eprintln!(
         "device_sim — score & diagnose the on-device OCR pipeline on macOS\n\
          \n\
-         USAGE: cargo run --release -p ocr-paddle --example device_sim -- <image|dir> [flags]\n\
+         USAGE: cargo run --release -p scan --example device_sim -- <image|dir> [flags]\n\
          \n\
          ⚠  Build with --release for ANY latency number (debug is ~10-50× slower).\n\
          \n\
@@ -784,6 +791,24 @@ fn run_single(
 
 /// A directory: run every `<stem>.jpg` that has a `<stem>.expected.json`.
 #[allow(clippy::too_many_arguments)]
+/// Recursively collect scorable `<stem>.jpg` under `dir`, counting every jpg
+/// seen so the header can still report how many lacked an `expected.json`.
+fn collect_jpgs(dir: &Path, all_jpg: &mut usize, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for path in entries.flatten().map(|e| e.path()) {
+        if path.is_dir() {
+            collect_jpgs(&path, all_jpg, out);
+        } else if path.extension().is_some_and(|x| x == "jpg") {
+            *all_jpg += 1;
+            if path.with_extension("expected.json").exists() {
+                out.push(path);
+            }
+        }
+    }
+}
+
 fn run_corpus(
     engine: &mut Option<OcrEngine>,
     cached: bool,
@@ -793,18 +818,16 @@ fn run_corpus(
     dump: bool,
     by_merchant: bool,
 ) {
-    let all_jpg = std::fs::read_dir(dir)
-        .expect("read dir")
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "jpg"))
-        .count();
-    let mut jpgs: Vec<PathBuf> = std::fs::read_dir(dir)
-        .expect("read dir")
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.extension().is_some_and(|x| x == "jpg") && p.with_extension("expected.json").exists()
-        })
-        .collect();
+    // Walk subdirectories. The private corpus is grouped one directory per
+    // merchant — a layout core's `private_e2e.rs` depends on to give each
+    // merchant its own `#[test]` — and a flat `read_dir` silently finds nothing
+    // there. This scored "0 .jpg" against the very corpus `scorecard.sh`
+    // defaults to, and reported it as an empty run rather than an error, so the
+    // standard scorecard quietly measured nothing after the corpus was
+    // reorganised.
+    let mut all_jpg = 0usize;
+    let mut jpgs: Vec<PathBuf> = Vec::new();
+    collect_jpgs(dir, &mut all_jpg, &mut jpgs);
     jpgs.sort();
     println!(
         "  corpus : {}  ({all_jpg} .jpg, {} with expected.json)",
