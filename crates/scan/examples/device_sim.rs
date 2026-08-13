@@ -1,21 +1,28 @@
 //! Simulate the on-device extraction on macOS and report quality.
 //!
-//! "Device behaviour" is exactly `scan::process_image` (same Rust
-//! code + ONNX models + ONNX Runtime CPU EP as the iOS app), so feeding it the
-//! same image bytes reproduces the phone's result ~1:1. Use this to test the
-//! pipeline against a corpus, or to diagnose a single exported capture.
+//! "Device behaviour" is exactly `scan::process_image` — the same Rust code and
+//! the same ONNX models the phones run — so feeding it the same image bytes
+//! reproduces the phone's parse very closely. Use this to test the pipeline
+//! against a corpus, or to diagnose a single exported capture.
+//!
+//! **How close depends on the platform, and this used to overclaim.** This runs
+//! ONNX Runtime's **CPU** execution provider. That still matches **Android**,
+//! which is on plain CPU (XNNPACK is registered but does not link). **iOS moved
+//! to CoreML**, so an OCR-layer difference that only shows up on the Neural
+//! Engine is precisely what this cannot reproduce — confirm those on a
+//! simulator. The parser half is identical everywhere regardless.
 //!
 //! Two modes, same parser/scoring — the delta is purely OCR quality:
 //!   live    (default): run the on-device ONNX models on `<stem>.jpg`
 //!   --cached         : feed the desktop PaddleOCR `<stem>.ocr.json` detections
 //!
 //! Usage:
-//!   cargo run -p ocr-paddle --example device_sim -- <image-or-dir> [--cached] [--models DIR] [--today YYYY-MM-DD] [--dump]
+//!   cargo run -p scan --example device_sim -- <image-or-dir> [--cached] [--models DIR] [--today YYYY-MM-DD] [--dump]
 //!
 //!   # on-device OCR over the private corpus:
-//!   cargo run -p ocr-paddle --example device_sim -- ../beanbeaver-private-test/receipts_e2e
+//!   cargo run -p scan --example device_sim -- ../beanbeaver-private-test/receipts_e2e
 //!   # server OCR (cached) baseline over the same corpus, same parser:
-//!   cargo run -p ocr-paddle --example device_sim -- ../beanbeaver-private-test/receipts_e2e --cached
+//!   cargo run -p scan --example device_sim -- ../beanbeaver-private-test/receipts_e2e --cached
 //!
 //! Compares against a sibling `<stem>.expected.json` when present (same schema
 //! as tests/test_e2e_receipts.py: merchant / date / total / critical_items).
@@ -159,7 +166,7 @@ fn print_usage() {
     eprintln!(
         "device_sim — score & diagnose the on-device OCR pipeline on macOS\n\
          \n\
-         USAGE: cargo run --release -p ocr-paddle --example device_sim -- <image|dir> [flags]\n\
+         USAGE: cargo run --release -p scan --example device_sim -- <image|dir> [flags]\n\
          \n\
          ⚠  Build with --release for ANY latency number (debug is ~10-50× slower).\n\
          \n\
