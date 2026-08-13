@@ -59,6 +59,25 @@ pub enum ReceiptWarningKind {
     /// amount in a payment block is printed to the cent, so a cent off is a
     /// misread digit like any other.
     TenderMismatch,
+    /// The summary block — subtotal, tax, total — did not read coherently, so
+    /// the amounts that anchor the whole entry cannot be trusted.
+    ///
+    /// Two shapes, both observed on real receipts and both previously silent:
+    ///
+    /// - **No total at all** while items were parsed. Every other balance check
+    ///   here is gated on `total > 0`, so a total of zero didn't fail those
+    ///   checks — it *disabled* them, and a 23-item receipt shipped a $0.00
+    ///   transaction with no finding of any kind.
+    /// - **Subtotal equal to tax.** No real receipt taxes at 100%, so the two
+    ///   labels have been handed the same amount and at least one is wrong.
+    ///
+    /// Reported, never repaired. Both shapes are symptoms of the label and
+    /// amount columns drifting out of alignment — on the receipt that prompted
+    /// this, one amount overlapped both `Sub Total` and `HST` while the real
+    /// total sat unclaimed a row below. Guessing which field should have won
+    /// would be inventing an amount; the fix belongs in grouping, and this
+    /// stays as the net that catches it when grouping is wrong again.
+    ImplausibleSummary,
 }
 
 /// The weight unit as OCR actually renders it. `lb` loses its `l` to `1`/`I`
