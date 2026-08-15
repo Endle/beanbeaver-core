@@ -42,14 +42,27 @@ receipt-image = { path = "../receipt-image" }
 # layering rules in CLAUDE.md exist to prevent.
 
 [features]
+# NEITHER OF THESE IS ENABLED BY ANY SHIPPING BUILD TODAY. Both phones run the
+# plain CPU EP (MLAS). The comments here used to name a consumer that turned
+# each one on; both were stale, and the claim mattered because it is what makes
+# `device_sim` -- which is CPU-only -- look like a poor proxy for a phone. It is
+# not: it tracks both.
+#
 # Apple-only: register the CoreML execution provider (Neural Engine / GPU) for
-# det/rec/cls. Off by default so Linux/desktop builds don't link CoreML; the iOS
-# xcframework build enables it. See src/session.rs for runtime tuning env vars.
+# det/rec/cls. Off by default so Linux/desktop builds don't link CoreML.
+# beanbeaver-ios does NOT enable it: 3c580a6 (2026-07-01) dropped CoreML there
+# because on the shipped dynamic-shape mobile models the CPU EP won on both
+# speed and accuracy, and build-xcframework.sh says so in its own comment.
+# See src/session.rs for the runtime tuning env vars, which only bite when the
+# feature is on.
 coreml = ["ort/coreml"]
-# Android-only: register the XNNPACK execution provider. Off by default so
-# desktop and CI builds keep the plain CPU EP; build-android.sh enables it, and
-# it requires an ONNX Runtime compiled with --use_xnnpack (see
-# beanbeaver-android/scripts/build-ort-android.sh). See src/session.rs.
+# Android-only: register the XNNPACK execution provider. Off by default.
+# beanbeaver-android does NOT enable it either, though its
+# scripts/build-ort-android.sh does compile ONNX Runtime with --use_xnnpack:
+# turning the feature on fails at link with hundreds of undefined hidden `xnn_*`
+# microkernel symbols, because ort-sys does not add XNNPACK's kernel archives to
+# the link line -- the same shape as the re2 trap in that script. Until that is
+# solved this stays off and Android is on plain CPU. See src/session.rs.
 xnnpack = ["ort/xnnpack"]
 
 [dev-dependencies]
