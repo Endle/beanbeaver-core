@@ -16,7 +16,17 @@ workspace = true
 # Image decode + resize for the detection/recognition preprocessing.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 # Connected-components / contour finding for DB post-processing.
-imageproc = "0.25"
+# `default-features = false` is load-bearing, not tidiness. imageproc's default
+# is ["rayon", "image/default"], and that `image/default` re-enables every codec
+# on the `image` above -- avif, exr, gif, tiff, webp, bmp, dds, hdr, ico, pnm,
+# qoi, tga. Cargo unifies features across the whole graph, so one permissive
+# dependant re-arms them for every crate here and the careful
+# `features = ["jpeg", "png"]` on the line above buys nothing. It is not free:
+# `avif` pulls the rav1e AV1 *encoder*, which was 1.27 MB of the Android .so --
+# 23% of all Rust code in it, to encode a format we never write.
+# `rayon` must be kept explicitly: `warp_into`, which recognize.rs calls once
+# per detected text box, is parallel only under that feature.
+imageproc = { version = "0.25", default-features = false, features = ["rayon"] }
 # Minimum-rotated-rectangle + polygon geometry for DB box extraction.
 geo = "0.29"
 # ONNX Runtime for PP-OCRv5 det/rec/cls inference. This crate is the ONLY one in

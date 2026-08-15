@@ -28,8 +28,12 @@ path = "src/bin/uniffi-bindgen.rs"
 # handle and prep helpers the seam needs.
 scan = { path = "../scan" }
 receipt-core = { path = "../receipt-core" }
-# Decode JPEG/PNG bytes handed across the FFI into an RgbImage.
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# Decode JPEG/PNG/WebP bytes handed across the FFI into an RgbImage. This crate
+# and `receipt-image` are the two that decode *arbitrary user bytes* (a photo
+# picker hands over whatever the file is), so the codec list is a capability
+# decision, not a detail -- see the note on imageproc in ocr-paddle/Cargo.toml
+# for why it is easy to widen this by accident.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 # Content hash of the received image bytes -> the receipt's portable identity.
 sha2 = "0.10"
 # UniFFI proc-macro bindings ("cli" provides uniffi_bindgen_main for the bin).

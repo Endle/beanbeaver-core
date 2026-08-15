@@ -11,5 +11,8 @@ description = "Pre-OCR image preprocessing (EXIF + resize + pad + JPEG), shared 
 workspace = true
 
 [dependencies]
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# WebP is decode-only here and is kept because `decode()` sniffs the format of
+# bytes it did not produce (an Android photo picker can hand back a WebP).
+# JPEG covers every camera path; PNG covers screenshots.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 thiserror = "2"
