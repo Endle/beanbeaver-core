@@ -31,12 +31,6 @@ use scan::{process_image_timed, Engine as OcrEngine, ScanTimings as CoreScanTimi
 
 uniffi::setup_scaffolding!();
 
-/// Fixed bundle filenames for the three converted PP-OCRv5 models. The Swift
-/// app ships these as resources; `OcrSession::new` is handed their directory.
-const DET_MODEL: &str = "PP-OCRv5_mobile_det.onnx";
-const REC_MODEL: &str = "PP-OCRv5_mobile_rec.onnx";
-const CLS_MODEL: &str = "PP-LCNet_x1_0_textline_ori.onnx";
-
 /// Calendar date passed in from Swift (used for date inference + placeholder).
 #[derive(uniffi::Record)]
 pub struct DateYmd {
@@ -559,8 +553,9 @@ pub struct OcrSession {
 
 #[uniffi::export]
 impl OcrSession {
-    /// Load the PP-OCRv5 models from `model_dir` (the bundle directory holding
-    /// `PP-OCRv5_mobile_det.onnx`, `_rec.onnx`, `PP-LCNet…_ori.onnx`).
+    /// Load the PP-OCRv5 models from `model_dir` — the bundle directory holding
+    /// the three files named in [`scan::model_files`], which is where their
+    /// filenames are defined.
     ///
     /// When `use_orientation_cls` is false the textline-orientation classifier is
     /// not loaded or run: it fixes 180°-flipped lines, but captures from an
@@ -569,9 +564,11 @@ impl OcrSession {
     /// session to change this.
     #[uniffi::constructor]
     pub fn new(model_dir: String, use_orientation_cls: bool) -> Result<Arc<Self>, ScanError> {
-        let dir = std::path::Path::new(&model_dir);
-        let cls_model = use_orientation_cls.then(|| dir.join(CLS_MODEL));
-        let engine = OcrEngine::from_paths(dir.join(DET_MODEL), dir.join(REC_MODEL), cls_model)
+        // Fixed bundle filenames: the Swift/Kotlin app ships the three models as
+        // resources and hands this constructor their directory. The names come
+        // from `scan::model_files` so there is one definition in the workspace.
+        let (det, rec, cls) = scan::model_files::in_dir(&model_dir);
+        let engine = OcrEngine::from_paths(det, rec, use_orientation_cls.then_some(cls))
             .map_err(|e| ScanError::ModelLoad { msg: e.to_string() })?;
         Ok(Arc::new(Self {
             engine: Mutex::new(engine),

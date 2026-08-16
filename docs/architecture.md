@@ -108,7 +108,7 @@ Models expected in `model_dir`:
 
 - `PP-OCRv5_mobile_det.onnx`
 - `PP-OCRv5_mobile_rec.onnx`
-- `PP-LCNet_x1_0_textline_ori.onnx` (optional path when cls disabled)
+- `PP-LCNet_x0_25_textline_ori.onnx` (optional path when cls disabled)
 
 Scans on one session are serialized (`Mutex` around the engine).
 

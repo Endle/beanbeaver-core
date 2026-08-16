@@ -661,6 +661,14 @@ fn run_attrib(engine: &mut OcrEngine, path: &Path) {
 
 /// Find the single `*<suffix>` ONNX in a model dir (works for both `mobile`
 /// and `server` naming, e.g. `PP-OCRv5_server_det.onnx`).
+///
+/// This deliberately does *not* use [`scan::model_files`]' exact names: the
+/// point of `--models DIR` is to run a set the shipping build has never heard
+/// of (a quantized export, a different backbone) and diff it against the
+/// baseline. The cost is that two files sharing a suffix in one directory
+/// resolve to whichever `read_dir` yields first, with no warning — fine for a
+/// diagnostic you point at a scratch dir, which is exactly why the seam that
+/// loads the app's bundled models does not work this way.
 fn find_model(dir: &Path, suffix: &str) -> PathBuf {
     std::fs::read_dir(dir)
         .unwrap_or_else(|_| panic!("model dir not found: {}", dir.display()))
@@ -1309,7 +1317,11 @@ fn score(
     let subtotal_ok = expected
         .get("subtotal")
         .and_then(Value::as_str)
-        .map(|want| d.subtotal.as_deref().is_some_and(|a| price_matches(want, a)));
+        .map(|want| {
+            d.subtotal
+                .as_deref()
+                .is_some_and(|a| price_matches(want, a))
+        });
     let tax_ok = expected
         .get("tax")
         .and_then(Value::as_str)

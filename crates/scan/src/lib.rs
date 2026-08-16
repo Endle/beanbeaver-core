@@ -34,6 +34,7 @@ use receipt_core::process::{process_receipt, ProcessedReceipt};
 // rather than reaching past it into `ocr-paddle`. Keeping the seam's dependency
 // list to `scan` + `receipt-core` is what makes the composition root obvious.
 pub use ocr_paddle::engine::OcrEngine as Engine;
+pub use ocr_paddle::model_files;
 pub use ocr_paddle::prep::{
     resize_and_pad as prepare_image, MAX_IMAGE_DIMENSION, OCR_IMAGE_PADDING,
 };
@@ -165,12 +166,8 @@ mod tests {
         let img = image::open("../../tests/receipts_e2e/costco_20260218_redact.jpg")
             .expect("load fixture")
             .to_rgb8();
-        let mut engine = OcrEngine::from_paths(
-            "../../models/PP-OCRv5_mobile_det.onnx",
-            "../../models/PP-OCRv5_mobile_rec.onnx",
-            Some("../../models/PP-LCNet_x1_0_textline_ori.onnx"),
-        )
-        .unwrap();
+        let (det, rec, cls) = model_files::in_dir("../../models");
+        let mut engine = OcrEngine::from_paths(det, rec, Some(cls)).unwrap();
 
         let result = process_image(
             &mut engine,

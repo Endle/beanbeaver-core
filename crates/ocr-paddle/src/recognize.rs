@@ -191,8 +191,9 @@ mod tests {
         let img = image::open("../../tests/receipts_e2e/costco_20260218_redact.jpg")
             .expect("load fixture")
             .to_rgb8();
-        let mut det = Detector::from_path("../../models/PP-OCRv5_mobile_det.onnx").unwrap();
-        let mut rec = Recognizer::from_path("../../models/PP-OCRv5_mobile_rec.onnx").unwrap();
+        let (det_path, rec_path, _) = crate::model_files::in_dir("../../models");
+        let mut det = Detector::from_path(det_path).unwrap();
+        let mut rec = Recognizer::from_path(rec_path).unwrap();
 
         let quads = det.detect(&img).unwrap();
         let mut lines: Vec<(f32, String, f32)> = quads

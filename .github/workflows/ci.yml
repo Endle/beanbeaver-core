@@ -136,13 +136,13 @@ jobs:
       # beancount) over the vendored redacted receipts. Runs on BOTH Linux and
       # macOS so the real det/rec/cls path is exercised on each. The PP-OCRv5
       # mobile models are not vendored (too large); pull them from the public
-      # ocr-models-v1 release. CoreML stays OFF (iOS ships CPU), so macOS here
+      # ocr-models-v2 release. CoreML stays OFF (iOS ships CPU), so macOS here
       # uses the same CPU ORT path as production.
       - name: Download OCR models
         run: |
           mkdir -p models
-          base="https://github.com/Endle/beanbeaver-core/releases/download/ocr-models-v1"
-          for m in PP-OCRv5_mobile_det.onnx PP-OCRv5_mobile_rec.onnx PP-LCNet_x1_0_textline_ori.onnx; do
+          base="https://github.com/Endle/beanbeaver-core/releases/download/ocr-models-v2"
+          for m in PP-OCRv5_mobile_det.onnx PP-OCRv5_mobile_rec.onnx PP-LCNet_x0_25_textline_ori.onnx; do
             curl -sSfL -o "models/$m" "$base/$m"
           done
           ls -la models
