@@ -88,21 +88,45 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0003"
-keywords = ["SHRIMP", "PRAWN", "LOBSTER", "CRAB", "SCALLOP", "MUSSEL", "CLAM", "OYSTER", "SQUID", "OCTOPUS", "CALAMARI", "VANNAMEI"]
+# "SCALLOP" used to be here and is deliberately NOT anymore — it books as plain
+# `grocery/seafood` via legacy_0005. This rule's tag is the narrow
+# `grocery/seafood/shrimp`, so every keyword in it is asserting "this item is a
+# shrimp", which is false for a scallop (Foody Mart 2026-08-15: "BQ - Bay
+# Scallop Meat 60-" booked to Seafood:Shrimp).
+#
+# The remaining non-shrimp shellfish below (MUSSEL, CLAM, OYSTER, SQUID,
+# OCTOPUS, CALAMARI) have the same problem and were left alone on purpose,
+# scoped to what was reported. Today only "Squid Tent" (2026-08-07 foody_mart)
+# exercises one, and its fixture still asserts Seafood:Shrimp.
+keywords = ["SHRIMP", "PRAWN", "LOBSTER", "CRAB", "MUSSEL", "CLAM", "OYSTER", "SQUID", "OCTOPUS", "CALAMARI", "VANNAMEI"]
 tags = ["grocery/seafood/shrimp"]
 priority = 0
 exact_only = false
 
 [[rules]]
 id = "legacy_0005"
-keywords = ["SEAFOOD", "FROZEN IMITAT", "IMITATION CRAB"]
+# "SCALLOP" lands here rather than in a `grocery/seafood/scallop` leaf of its
+# own: the taxonomy has leaves only for fish and shrimp, and scallop is simply
+# seafood. It stays 7 characters, so it still outranks legacy_0001's "MEAT" (4)
+# on `keyword_length` — which it must, because the line reads "Bay Scallop
+# Meat". Declared after legacy_0001, so `grocery/seafood` is the last tag in the
+# union and the displayed label, not "Meat".
+keywords = ["SEAFOOD", "FROZEN IMITAT", "IMITATION CRAB", "SCALLOP"]
 tags = ["grocery/seafood"]
 priority = 0
 exact_only = false
 
 [[rules]]
 id = "legacy_0006"
-keywords = ["APPLE", "BANANA", "ORANGE", "BERRY", "BERRIES", "STRAWBERRY", "BLUEBERRY", "RASPBERRY", "BLACKBERRY", "GRAPE", "GRAPES", "MANGO", "PINEAPPLE", "WATERMELON", "MELON", "CANTALOUPE", "PEACH", "PEAR", "PLUM", "CHERRY", "CHERRIES", "KIWI", "LEMON", "LIME", "GRAPEFRUIT", "AVOCADO", "COCONUT", "PAPAYA", "POMEGRANATE", "FIG", "DATE", "APRICOT", "NECTARINE", "TANGERINE", "MANDARIN", "CLEMENTINE", "POMELO", "DRAGONFRUIT", "LYCHEE", "DURIAN", "JACKFRUIT", "PERSIMMON", "CRAISINS", "WATERMLN", "WTRMLN"]
+# "SUGAR BABY" and "SUNVINE" are both watermelon, and both are here to beat
+# "SUGAR" (staple, legacy_0017) rather than to add a fruit the list is missing.
+# Foody Mart truncates the line to "Sunvine - Sugar Baby Wate", cutting
+# "Watermelon" down to "Wate" — so every watermelon keyword below misses while
+# "SUGAR" hits, and the melon books as a staple. Sugar Baby is a watermelon
+# cultivar and Sunvine is a watermelon brand, so either token alone identifies
+# the fruit; both are longer than "SUGAR" and win on `keyword_length` at equal
+# priority, the same tiebreak "CORN STARCH" and "WINTER MELON" rely on.
+keywords = ["APPLE", "BANANA", "ORANGE", "BERRY", "BERRIES", "STRAWBERRY", "BLUEBERRY", "RASPBERRY", "BLACKBERRY", "GRAPE", "GRAPES", "MANGO", "PINEAPPLE", "WATERMELON", "MELON", "CANTALOUPE", "PEACH", "PEAR", "PLUM", "CHERRY", "CHERRIES", "KIWI", "LEMON", "LIME", "GRAPEFRUIT", "AVOCADO", "COCONUT", "PAPAYA", "POMEGRANATE", "FIG", "DATE", "APRICOT", "NECTARINE", "TANGERINE", "MANDARIN", "CLEMENTINE", "POMELO", "DRAGONFRUIT", "LYCHEE", "DURIAN", "JACKFRUIT", "PERSIMMON", "CRAISINS", "WATERMLN", "WTRMLN", "SUGAR BABY", "SUNVINE"]
 tags = ["grocery/fruit"]
 priority = 0
 exact_only = false
@@ -118,7 +142,19 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0008"
-keywords = ["LETTUCE", "SPINACH", "KALE", "CABBAGE", "BROCCOLI", "CAULIFLOWER", "CARROT", "CELERY", "CUCUMBER", "CUKES", "TOMATO", "TOMATOES", "PEPPER", "PEPPERS", "ONION", "POTATO", "POTATOES", "SWEET POTATO", "MUSHROOM", "ZUCCHINI", "SQUASH", "EGGPLANT", "ASPARAGUS", "CORN", "GREEN BEAN", "PEA", "PEAS", "EDAMAME", "BOK CHOY", "SHEPHERDS PURSE", "NAPA", "RADISH", "TURNIP", "BEET", "ARTICHOKE", "LEEK", "SCALLION", "SHALLOT", "CHIVE", "CILANTRO", "PARSLEY", "BASIL", "DILL", "TOFU", "BEAN SPROUT", "SPROUTS", "SALAD", "COLESLAW", "GREENS"]
+# "VEGETABLES"/"VEGETABLE" are department words, added for the same reason
+# `frozen_department_item` exists at the top of this file: a Chinese supermarket
+# rings a miscellaneous purchase up under its department name, so "Vegetables"
+# (蔬菜類) arrives as a literal item description (Foody Mart 2026-08-15, 6.50
+# under `&& 02-Vegetable`). With no such keyword the line fell through to a
+# fuzzy hit on legacy_0021's "VEGETABLE OIL" and booked as Seasoning.
+#
+# Unlike "FROZEN" this needs no priority dance: the one place the adjective
+# appears inside another product is "Vegetable Oil", and "VEGETABLE OIL" (13)
+# outranks "VEGETABLE" (9) on `keyword_length` at equal priority, so the oil
+# stays Seasoning. Corpus: "Unico - Vegetable Oil" is asserted as Seasoning and
+# must remain so.
+keywords = ["LETTUCE", "SPINACH", "KALE", "CABBAGE", "BROCCOLI", "CAULIFLOWER", "CARROT", "CELERY", "CUCUMBER", "CUKES", "TOMATO", "TOMATOES", "PEPPER", "PEPPERS", "ONION", "POTATO", "POTATOES", "SWEET POTATO", "MUSHROOM", "ZUCCHINI", "SQUASH", "EGGPLANT", "ASPARAGUS", "CORN", "GREEN BEAN", "PEA", "PEAS", "EDAMAME", "BOK CHOY", "SHEPHERDS PURSE", "NAPA", "RADISH", "TURNIP", "BEET", "ARTICHOKE", "LEEK", "SCALLION", "SHALLOT", "CHIVE", "CILANTRO", "PARSLEY", "BASIL", "DILL", "TOFU", "BEAN SPROUT", "SPROUTS", "SALAD", "COLESLAW", "GREENS", "VEGETABLES", "VEGETABLE"]
 tags = ["grocery/vegetable"]
 priority = 0
 exact_only = false
@@ -179,7 +215,13 @@ exact_only = false
 # `keyword_length` — the same tiebreak "CANNED CORN" already relies on. No
 # priority bump needed.
 id = "legacy_0017"
-keywords = ["RICE", "PASTA", "NOODLE", "NOODLES", "DRIED NOOD", "SPAGHETTI", "MACARONI", "PENNE", "FLOUR", "SUGAR", "OIL", "OLIVE OIL", "CANOLA OIL", "VINEGAR", "OATMEAL", "OATS", "CEREAL", "QUINOA", "COUSCOUS", "BARLEY", "MILLET", "LENTIL", "LENTILS", "CHICKPEA", "BEAN", "BEANS", "BLACK BEAN", "KIDNEY BEAN", "PINTO BEAN", "INSTANT NOODLE", "INSTANT NOODLES", "LONGKOU", "VERMICELLI", "RAMEN", "DANDAN", "CORN STARCH", "CORNSTARCH"]
+# "SHODOSHIMA" is a brand, not a product word, and it is here because the
+# product word never survives the receipt. Foody Mart prints this line as
+# "Shodoshima - Asian Style" — truncated at ~25 chars, so the "VERMICELLI"
+# keyword two entries back has nothing to match; 紅薯粉絲 (sweet potato
+# vermicelli) appears only on the Chinese sub-line, which PP-OCRv5 does not
+# reliably detect. Without the brand the line classifies as nothing at all.
+keywords = ["RICE", "PASTA", "NOODLE", "NOODLES", "DRIED NOOD", "SPAGHETTI", "MACARONI", "PENNE", "FLOUR", "SUGAR", "OIL", "OLIVE OIL", "CANOLA OIL", "VINEGAR", "OATMEAL", "OATS", "CEREAL", "QUINOA", "COUSCOUS", "BARLEY", "MILLET", "LENTIL", "LENTILS", "CHICKPEA", "BEAN", "BEANS", "BLACK BEAN", "KIDNEY BEAN", "PINTO BEAN", "INSTANT NOODLE", "INSTANT NOODLES", "LONGKOU", "VERMICELLI", "RAMEN", "DANDAN", "CORN STARCH", "CORNSTARCH", "SHODOSHIMA"]
 tags = ["grocery/staple"]
 priority = 0
 exact_only = false
