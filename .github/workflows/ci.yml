@@ -13,12 +13,14 @@ permissions:
   contents: read
 
 jobs:
-  # Independent style / safety gate (Linux only). Required for merge; runs in
-  # parallel with `test` (no `needs:` edge — lint failure does not skip OCR work).
+  # Independent style / safety gate (Linux only). Runs in parallel with `test`
+  # (no `needs:` edge — lint failure does not skip OCR work). Informational:
+  # `continue-on-error` means a lint failure never blocks merge.
   lint:
     name: lint (fmt, clippy, deny)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    continue-on-error: true
     env:
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"

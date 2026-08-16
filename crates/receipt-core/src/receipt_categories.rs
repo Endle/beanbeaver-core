@@ -1038,10 +1038,7 @@ mod tests {
         // The sibling shellfish were deliberately left on the shrimp rule when
         // scallop moved off it. This asserts that scope decision, so whoever
         // finishes the job sees this line fail and updates it on purpose.
-        assert_eq!(
-            key("Squid Tent").as_deref(),
-            Some("grocery/seafood/shrimp")
-        );
+        assert_eq!(key("Squid Tent").as_deref(), Some("grocery/seafood/shrimp"));
 
         // Department-name line vs. the adjective inside a product name.
         // "VEGETABLE OIL" (13) must keep outranking "VEGETABLE" (9), or adding
