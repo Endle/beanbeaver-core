@@ -986,6 +986,84 @@ mod tests {
         assert!(tags("MARUTAI").is_empty());
     }
 
+    /// Collisions that are decided by `keyword_length` — the THIRD key in
+    /// [`compare_match_rank`], below `priority` and `is_exact`.
+    ///
+    /// These deserve a test of their own because the mechanism is invisible in
+    /// the rule file: nothing in `default_item_classifier.toml` states that
+    /// "SUNVINE" must outrank "SUGAR", it merely happens to be two characters
+    /// longer. Adding a keyword elsewhere in the file can flip any of these
+    /// silently, and the only other thing that would notice is a private-corpus
+    /// fixture the public gate cannot see.
+    ///
+    /// `priority` cannot express these. It is a property of the *rule*, not the
+    /// keyword, so lifting the fruit rule above the staple rule to win one line
+    /// would also lift all ~45 of its other keywords — making "APPLE" beat the
+    /// juice rule's "APPLE JUICE", and "MELON" beat "WINTER MELON". Priority
+    /// also outranks exactness, so a bump lets fuzzy hits beat literal ones
+    /// (see the `NOODLES`/snacks note on `fuzzy_contains`). Length sits below
+    /// exactness and can never do that, which is why it stays the default and
+    /// these assertions exist instead.
+    ///
+    /// Cases are from Foody Mart 2026-08-15 (`2026-08-15_foody_mart_47_48`),
+    /// whose ~25-character description truncation is what strands the product
+    /// word and leaves these collisions to be resolved by length at all.
+    #[test]
+    fn length_decided_keyword_collisions_stay_decided() {
+        let layers = default_parser_rule_layers();
+        let key = |d: &str| classify_item_key(d, &layers.category_rules, None);
+
+        // "Sugar Baby" is a watermelon cultivar and "Sunvine" a watermelon
+        // brand. The line truncates "Watermelon" to "Wate", so every watermelon
+        // keyword misses and the staple rule's "SUGAR" is the only other hit —
+        // it filed a melon as a staple. Both new keywords are longer than
+        // "SUGAR" (10 and 7 vs 5); either alone would carry it, which is the
+        // point of having both.
+        assert_eq!(
+            key("Sunvine - Sugar Baby Wate").as_deref(),
+            Some("grocery/fruit")
+        );
+        // Guard the mechanism, not just the outcome: plain sugar is still a
+        // staple, so this is a genuine collision and not the fruit rule
+        // swallowing the keyword.
+        assert_eq!(key("Rogers Sugar 2kg").as_deref(), Some("grocery/staple"));
+
+        // "SCALLOP" (7) must outrank legacy_0001's "MEAT" (4) — the line
+        // literally reads "Bay Scallop Meat". It must also land on plain
+        // seafood rather than the narrow shrimp leaf it used to sit in.
+        assert_eq!(
+            key("BQ - Bay Scallop Meat 60-").as_deref(),
+            Some("grocery/seafood")
+        );
+        // The sibling shellfish were deliberately left on the shrimp rule when
+        // scallop moved off it. This asserts that scope decision, so whoever
+        // finishes the job sees this line fail and updates it on purpose.
+        assert_eq!(
+            key("Squid Tent").as_deref(),
+            Some("grocery/seafood/shrimp")
+        );
+
+        // Department-name line vs. the adjective inside a product name.
+        // "VEGETABLE OIL" (13) must keep outranking "VEGETABLE" (9), or adding
+        // the department word would have dragged every bottle of oil out of
+        // seasoning.
+        assert_eq!(key("Vegetables").as_deref(), Some("grocery/vegetable"));
+        assert_eq!(
+            key("Unico - Vegetable Oil").as_deref(),
+            Some("grocery/seasoning")
+        );
+
+        // Not a length collision — a brand keyword standing in for a product
+        // word that the truncation removed entirely. Included because it is the
+        // same defect class: 紅薯粉絲 (sweet potato vermicelli) survives only on
+        // the Chinese sub-line, which the OCR does not reliably detect, so
+        // "VERMICELLI" has nothing to match and the line classified as nothing.
+        assert_eq!(
+            key("Shodoshima - Asian Style").as_deref(),
+            Some("grocery/staple")
+        );
+    }
+
     /// `list_item_categories` returns path-sorted (path, account) pairs drawn
     /// from both the account map and the rules. Mirrors the desktop test.
     #[test]
