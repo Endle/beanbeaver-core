@@ -1221,12 +1221,24 @@ struct FixtureScore {
     total_ok: bool,
     items_ok: usize,
     items_total: usize,
+    /// `line_item_count` / `subtotal` / `tax`, when the fixture states them.
+    /// `None` = not asserted, which is the common case: these are opt-in and
+    /// deliberately never backfilled from a parser dump.
+    count_ok: Option<bool>,
+    subtotal_ok: Option<bool>,
+    tax_ok: Option<bool>,
     merchant_group: String,
 }
 
 impl FixtureScore {
     fn is_fully_ok(&self) -> bool {
-        self.merchant_ok && self.date_ok && self.total_ok && self.items_ok == self.items_total
+        self.merchant_ok
+            && self.date_ok
+            && self.total_ok
+            && self.items_ok == self.items_total
+            && self.count_ok.unwrap_or(true)
+            && self.subtotal_ok.unwrap_or(true)
+            && self.tax_ok.unwrap_or(true)
     }
     fn notes(&self) -> String {
         let mut n = Vec::new();
@@ -1235,6 +1247,15 @@ impl FixtureScore {
         }
         if !self.date_ok {
             n.push("date");
+        }
+        if self.count_ok == Some(false) {
+            n.push("line_item_count");
+        }
+        if self.subtotal_ok == Some(false) {
+            n.push("subtotal");
+        }
+        if self.tax_ok == Some(false) {
+            n.push("tax");
         }
         if !self.total_ok {
             n.push("total");
@@ -1277,6 +1298,22 @@ fn score(
         .get("total")
         .and_then(Value::as_str)
         .map_or(true, |t| price_matches(t, &d.total));
+
+    // Opt-in arithmetic/shape checks. `line_item_count` is the only one that
+    // can see a line the parser invented or dropped — `critical_items` is a
+    // subset assertion and counts nothing.
+    let count_ok = expected
+        .get("line_item_count")
+        .and_then(Value::as_u64)
+        .map(|want| d.items.len() as u64 == want);
+    let subtotal_ok = expected
+        .get("subtotal")
+        .and_then(Value::as_str)
+        .map(|want| d.subtotal.as_deref().is_some_and(|a| price_matches(want, a)));
+    let tax_ok = expected
+        .get("tax")
+        .and_then(Value::as_str)
+        .map(|want| d.tax.as_deref().is_some_and(|a| price_matches(want, a)));
 
     let mut items_ok = 0;
     let mut items_total = 0;
@@ -1339,6 +1376,9 @@ fn score(
         total_ok,
         items_ok,
         items_total,
+        count_ok,
+        subtotal_ok,
+        tax_ok,
         merchant_group: merchant_group_key(raw_merchant),
     }
 }
