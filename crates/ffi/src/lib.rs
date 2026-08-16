@@ -35,7 +35,7 @@ uniffi::setup_scaffolding!();
 /// app ships these as resources; `OcrSession::new` is handed their directory.
 const DET_MODEL: &str = "PP-OCRv5_mobile_det.onnx";
 const REC_MODEL: &str = "PP-OCRv5_mobile_rec.onnx";
-const CLS_MODEL: &str = "PP-LCNet_x1_0_textline_ori.onnx";
+const CLS_MODEL: &str = "PP-LCNet_x0_25_textline_ori.onnx";
 
 /// Calendar date passed in from Swift (used for date inference + placeholder).
 #[derive(uniffi::Record)]

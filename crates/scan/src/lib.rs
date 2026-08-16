@@ -168,7 +168,7 @@ mod tests {
         let mut engine = OcrEngine::from_paths(
             "../../models/PP-OCRv5_mobile_det.onnx",
             "../../models/PP-OCRv5_mobile_rec.onnx",
-            Some("../../models/PP-LCNet_x1_0_textline_ori.onnx"),
+            Some("../../models/PP-LCNet_x0_25_textline_ori.onnx"),
         )
         .unwrap();
 

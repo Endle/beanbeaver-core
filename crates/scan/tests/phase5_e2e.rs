@@ -149,7 +149,7 @@ fn phase5_on_device_vs_expected() {
     let mut engine = OcrEngine::from_paths(
         models.join("PP-OCRv5_mobile_det.onnx"),
         models.join("PP-OCRv5_mobile_rec.onnx"),
-        Some(models.join("PP-LCNet_x1_0_textline_ori.onnx")),
+        Some(models.join("PP-LCNet_x0_25_textline_ori.onnx")),
     )
     .expect("load models");
 

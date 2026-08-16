@@ -55,7 +55,7 @@ fn gen_ocr_snapshot() {
     let (det, rec, cls) = (
         models.join("PP-OCRv5_mobile_det.onnx"),
         models.join("PP-OCRv5_mobile_rec.onnx"),
-        models.join("PP-LCNet_x1_0_textline_ori.onnx"),
+        models.join("PP-LCNet_x0_25_textline_ori.onnx"),
     );
     assert!(
         det.exists() && rec.exists() && cls.exists(),

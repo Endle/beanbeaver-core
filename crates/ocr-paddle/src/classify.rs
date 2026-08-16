@@ -2,7 +2,7 @@
 //! `use_textline_orientation=True`): decides whether a cropped line is upside
 //! down (180°) so it can be rotated before recognition.
 //!
-//! Config from `PP-LCNet_x1_0_textline_ori_infer/inference.yml`:
+//! Config from `PP-LCNet_x0_25_textline_ori_infer/inference.yml`:
 //! ResizeImage size [160, 80] (WxH), NormalizeImage ImageNet mean/std scale
 //! 1/255, ToCHWImage; Topk over labels [0_degree, 180_degree].
 

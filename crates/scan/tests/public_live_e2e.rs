@@ -25,7 +25,7 @@
 //!
 //! Skips (does not fail) when the ONNX models are absent, so a plain
 //! `cargo test -p ocr-paddle` stays green without `models/` provisioned. CI
-//! downloads them from the `ocr-models-v1` release first.
+//! downloads them from the `ocr-models-v2` release first.
 
 use std::collections::HashMap;
 use std::fs;
@@ -188,11 +188,11 @@ fn public_live_e2e() {
     let (det, rec, cls) = (
         models.join("PP-OCRv5_mobile_det.onnx"),
         models.join("PP-OCRv5_mobile_rec.onnx"),
-        models.join("PP-LCNet_x1_0_textline_ori.onnx"),
+        models.join("PP-LCNet_x0_25_textline_ori.onnx"),
     );
     if !det.exists() || !rec.exists() || !cls.exists() {
         eprintln!(
-            "SKIP public_live_e2e: OCR models missing under {} (download the ocr-models-v1 release)",
+            "SKIP public_live_e2e: OCR models missing under {} (download the ocr-models-v2 release)",
             models.display()
         );
         return;
