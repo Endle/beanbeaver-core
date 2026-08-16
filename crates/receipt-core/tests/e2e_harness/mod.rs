@@ -355,6 +355,48 @@ pub fn run_cached_corpus_in(
             }
         }
 
+        // subtotal / tax (exact/decimal). Printed on nearly every receipt, so
+        // they are cheap to author from the photo and unambiguous. `subtotal`
+        // earns its place independently of `total`: a mis-priced item shifts it
+        // while leaving the total — which the parser reads directly — intact.
+        for (key, actual) in [("subtotal", &parsed.subtotal), ("tax", &parsed.tax)] {
+            let Some(want) = expected.get(key).and_then(Value::as_str) else {
+                continue;
+            };
+            let ok = actual.as_deref().is_some_and(|a| price_matches(want, a));
+            if !ok {
+                failed.insert(key);
+                if !known.contains(key) {
+                    case_fail.push(format!("{key} expected '{want}', got {actual:?}"));
+                }
+            }
+        }
+
+        // line_item_count — how many line items the parse should emit.
+        //
+        // This is the only check that can see a line the parser INVENTED or
+        // DROPPED. `critical_items` is a subset assertion: every expected item
+        // must be found, but extra items are not flagged and nothing counts
+        // them, so a receipt whose amount is claimed twice still passes. Home
+        // Hardware 2026-08-09 is the case — two items on paper, three emitted,
+        // 9.99 claimed twice, and the fixture green.
+        //
+        // It counts LINE ITEMS THE PARSER EMITS, not units purchased, and it
+        // includes discount/negative lines. Deliberately not the "Item Count"
+        // some receipts print: Foody Mart 2026-08-15 prints `Item Count: 15`
+        // for a parse of 11 lines, because `2 @ $3.59` is one line and two
+        // units. Count the lines on the photo, never a printed total and never
+        // a parser dump.
+        if let Some(want) = expected.get("line_item_count").and_then(Value::as_u64) {
+            let got = parsed.items.len() as u64;
+            if got != want {
+                failed.insert("line_item_count");
+                if !known.contains("line_item_count") {
+                    case_fail.push(format!("line_item_count expected {want}, got {got}"));
+                }
+            }
+        }
+
         // critical items — description + price + HARD category. Each item may
         // carry `"known_failure": true` to tolerate *its own* divergence (finer
         // than the check-level `known_failures: ["critical_items"]`, which
