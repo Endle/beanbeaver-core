@@ -146,12 +146,8 @@ fn phase5_on_device_vs_expected() {
         .into_iter()
         .collect();
 
-    let mut engine = OcrEngine::from_paths(
-        models.join("PP-OCRv5_mobile_det.onnx"),
-        models.join("PP-OCRv5_mobile_rec.onnx"),
-        Some(models.join("PP-LCNet_x0_25_textline_ori.onnx")),
-    )
-    .expect("load models");
+    let (det, rec, cls) = scan::model_files::in_dir(&models);
+    let mut engine = OcrEngine::from_paths(det, rec, Some(cls)).expect("load models");
 
     let mut names: Vec<String> = fs::read_dir(&fixtures)
         .expect("read fixtures dir")

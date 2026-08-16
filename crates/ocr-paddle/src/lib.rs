@@ -15,6 +15,7 @@ pub mod classify;
 pub mod db_postprocess;
 pub mod detect;
 pub mod engine;
+pub mod model_files;
 pub mod prep;
 pub mod preprocess;
 pub mod recognize;

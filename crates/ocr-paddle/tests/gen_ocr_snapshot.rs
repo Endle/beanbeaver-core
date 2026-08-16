@@ -52,11 +52,7 @@ fn gen_ocr_snapshot() {
         fixtures.display()
     );
     let models = manifest_rel("../../models");
-    let (det, rec, cls) = (
-        models.join("PP-OCRv5_mobile_det.onnx"),
-        models.join("PP-OCRv5_mobile_rec.onnx"),
-        models.join("PP-LCNet_x0_25_textline_ori.onnx"),
-    );
+    let (det, rec, cls) = ocr_paddle::model_files::in_dir(&models);
     assert!(
         det.exists() && rec.exists() && cls.exists(),
         "OCR models missing under {}",

@@ -65,14 +65,13 @@ Bump the tag in:
   phone apps consume — moving it is part of *their* catch-up, not this repo's)
 - iOS app resource packaging docs
 
-Two consumers deliberately stay behind and must **not** be swept along:
+A consumer pinning an older core tag keeps the model set that tag expects, so it
+is safe to leave behind — `ocr-models-v1` is not going away. Move it when its
+core pin moves, not before.
 
-- `beanbeaver/runtime/ocr_models.py` (desktop) stays on `ocr-models-v1` — it is
-  pinned at `ocr-paddle` v0.3.2 and its scanning path is being sunset.
-- `beanbeaver-android` stays on `ocr-models-v1` until it bumps its core tag. It
-  hardcodes the old filename in `ModelStore.kt`, `models/README.md` and
-  `scripts/ort-required-ops.config`, so those three must move **in the same
-  commit** as its core-tag bump or session load fails on a missing file.
+Inside this repo the filenames have **one** definition,
+[`ocr_paddle::model_files`](../crates/ocr-paddle/src/model_files.rs) (re-exported
+as `scan::model_files`); everything else here is prose or a fetch script.
 
 Prefer publishing SHA-256 sums on the GitHub release and verifying before shipping
 an xcframework.

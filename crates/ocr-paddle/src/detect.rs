@@ -144,9 +144,9 @@ mod tests {
     // Requires the (gitignored) converted model + a fixture image; run with:
     //   cargo test -p ocr-paddle -- --ignored --nocapture
     #[test]
-    #[ignore = "needs models/PP-OCRv5_mobile_det.onnx"]
+    #[ignore = "needs the converted detection model under models/"]
     fn detects_text_boxes_on_costco_fixture() {
-        let model = "../../models/PP-OCRv5_mobile_det.onnx";
+        let (model, _, _) = crate::model_files::in_dir("../../models");
         let image_path = "../../tests/receipts_e2e/costco_20260218_redact.jpg";
 
         let img = image::open(image_path).expect("load fixture").to_rgb8();
