@@ -4,7 +4,20 @@
 //! `tests/test_e2e_receipts.py` (merchant fuzzy / date exact / total exact /
 //! critical items), but runs the fat-Rust seam end to end.
 //!
-//!   cargo test -p ocr-paddle --test phase5_e2e -- --ignored --nocapture
+//! **Manual quality ledger, not a CI gate** — deliberately `#[ignore]`d, and
+//! deliberately absent from `ci.yml`. Two reasons: it needs a populated
+//! `models/` directory, and its pass/fail bar is the append-only
+//! `KNOWN_ON_DEVICE_GAPS` list below, which is a record of measured parity
+//! rather than a contract. CI's live on-device coverage is
+//! `crates/scan/tests/public_live_e2e.rs`, which asserts a fixed allowlist and
+//! *is* a gate. Run this one by hand when a parity question comes up:
+//!
+//! ```text
+//! cargo test --release -p scan --test phase5_e2e -- --ignored --nocapture
+//! ```
+//!
+//! (The invocation above used to read `-p ocr-paddle`; `device_sim` and this
+//! test moved to the `scan` crate in #61 when that became the composition root.)
 //!
 //! Parity is approximate by design (Core-Image vs PIL resize, ORT vs Paddle
 //! kernels), so a small set of critical-item checks the on-device OCR currently
