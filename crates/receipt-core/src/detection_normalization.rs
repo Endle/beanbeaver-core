@@ -602,6 +602,21 @@ pub enum DeskewEstimator {
 }
 
 /// Result of the deskew pass. `new_y` is `Some` only when the shear is applied.
+///
+/// Everything other than `new_y` is a **diagnostic record of why the gate
+/// decided what it did**: `ocr_transform` reads `new_y` and nothing else, and
+/// the rest exists to be read by a human debugging a gate constant. Most of
+/// those fields are asserted by this module's own tests, which is what keeps
+/// them honest; `row_tightening`, `sweep_margin` and `sweep_misalignment` are
+/// not read by anything at all today, including tests. They are kept, not
+/// deleted, because each one is the measured quantity behind a named constant
+/// (`DESKEW_MIN_ROW_TIGHTENING`, `DESKEW_SWEEP_ALIAS_SEPARATION_DEG`,
+/// `DESKEW_SWEEP_MIN_MISALIGNMENT`) and dropping them would mean recomputing
+/// them by hand the next time one of those is swept.
+#[allow(
+    dead_code,
+    reason = "diagnostic fields for gate constants; see the doc comment above"
+)]
 pub struct DeskewOutcome {
     pub angle_deg: f64,
     pub applied: bool,

@@ -29,6 +29,9 @@ pub struct FormatterReceiptInput {
     pub date_is_placeholder: bool,
     pub total: String,
     pub tax: Option<String>,
+    /// Only the staged-draft path ever read this; see
+    /// [`format_draft_beancount`]. Unreachable at HEAD.
+    #[allow(dead_code, reason = "unreachable staged-draft/matching path")]
     pub image_filename: String,
     pub raw_text: String,
     pub items: Vec<FormatterItemInput>,
@@ -114,6 +117,10 @@ fn build_payment_postings(
         .collect()
 }
 
+#[allow(
+    dead_code,
+    reason = "unreachable staged-draft/matching path; see above"
+)]
 #[derive(Clone, Debug)]
 pub struct EnrichedPostingInput {
     pub account: String,
@@ -121,6 +128,10 @@ pub struct EnrichedPostingInput {
     pub currency: Option<String>,
 }
 
+#[allow(
+    dead_code,
+    reason = "unreachable staged-draft/matching path; see above"
+)]
 #[derive(Clone, Debug)]
 pub struct EnrichedMatchInput {
     pub transaction_date_iso: String,
@@ -418,6 +429,22 @@ pub fn format_parsed_receipt(
     lines.join("\n")
 }
 
+/// **Unreachable at HEAD — awaiting a removal decision.** This and the items
+/// marked alongside it (`EnrichedPostingInput`, `EnrichedMatchInput`,
+/// `format_draft_beancount`, `generate_filename`, `format_enriched_transaction`,
+/// and `FormatterReceiptInput::image_filename`) are the desktop staged-draft and
+/// receipt-to-transaction *matching* output path. Nothing in this workspace calls
+/// them; their own unit tests are the only callers, which is why narrowing this
+/// module to `pub(crate)` is what finally surfaced them.
+///
+/// Two reasons they are marked rather than deleted: the workspace rule that
+/// features are not removed without fresh explicit approval, and the fact that
+/// `CLAUDE.md` already says matching "never belongs here" — which makes their
+/// removal a scope question for a human, not a refactor step.
+#[allow(
+    dead_code,
+    reason = "unreachable staged-draft/matching path; see above"
+)]
 pub fn format_draft_beancount(
     receipt: &FormatterReceiptInput,
     credit_card_account: &str,
@@ -591,6 +618,10 @@ pub fn beanbeaver_document_relpath(
     ))
 }
 
+#[allow(
+    dead_code,
+    reason = "unreachable staged-draft/matching path; see format_draft_beancount"
+)]
 pub fn generate_filename(date_iso: &str, date_is_placeholder: bool, merchant: &str) -> String {
     let date_str = if date_is_placeholder {
         "unknown-date"
@@ -601,6 +632,10 @@ pub fn generate_filename(date_iso: &str, date_is_placeholder: bool, merchant: &s
     format!("{date_str}-{}.beancount", merchant_slug(merchant))
 }
 
+#[allow(
+    dead_code,
+    reason = "unreachable staged-draft/matching path; see format_draft_beancount"
+)]
 pub fn format_enriched_transaction(
     receipt: &FormatterReceiptInput,
     match_input: &EnrichedMatchInput,

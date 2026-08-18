@@ -75,11 +75,12 @@ mod tests {
         );
         // Compared as sets, not sequences: `account_mapping` is a `Vec` built by
         // iterating a `HashMap`, so its order is nondeterministic between runs.
-        // That is pre-existing and load-bearing in one place —
-        // `receipt_staged_json::account_for_classification` returns the *first*
-        // mapping key whose `_`-split segments contain a tag, and tags like
-        // `grocery` match ~20 keys — so which account that fallback picks is
-        // currently arbitrary. Fix belongs with the format work, not here.
+        // That was pre-existing and load-bearing in exactly one place —
+        // `receipt_staged_json::account_for_classification`, which returned the
+        // *first* mapping key whose `_`-split segments contain a tag. That
+        // module was unreachable at HEAD and has been deleted, so nothing
+        // depends on the order any more; the set comparison below stays because
+        // the order is still nondeterministic, not because anything reads it.
         let sorted = |m: &Vec<(String, String)>| {
             let mut v = m.clone();
             v.sort();
