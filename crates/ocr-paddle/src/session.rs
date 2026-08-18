@@ -1,5 +1,11 @@
 //! Shared ORT session construction.
 //!
+//! **Neither the `coreml` nor the `xnnpack` feature is enabled by any shipping
+//! build.** Both phones, CI and `device_sim` run the plain CPU EP (MLAS), so
+//! everything below describes code paths that are currently dormant. See
+//! `Cargo.toml`'s `[features]` block for why each one is off. Do not read the
+//! paragraphs below as a description of what the apps do.
+//!
 //! When built with the `coreml` feature (Apple targets), the CoreML execution
 //! provider is registered so detection/recognition/classification can run on the
 //! **Apple Neural Engine / GPU** instead of the CPU. EP registration is
