@@ -13,11 +13,34 @@ permissions:
   contents: read
 
 jobs:
+  # Formatting is a BLOCKING gate. It is deterministic, has no false positives,
+  # and is clean at the commit that introduced this job — so it can only fail on
+  # a real regression. Split out of the advisory `lint` job below (#77 was "Fix
+  # lint", which is what an advisory formatting gate reliably produces).
+  fmt:
+    name: fmt (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out core (public)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
   # Independent style / safety gate (Linux only). Runs in parallel with `test`
   # (no `needs:` edge — lint failure does not skip OCR work). Informational:
-  # `continue-on-error` means a lint failure never blocks merge.
+  # `continue-on-error` means a lint failure never blocks merge. `fmt` is NOT
+  # here — it is its own blocking job above.
   lint:
-    name: lint (fmt, clippy, deny)
+    name: lint (clippy, deny)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     continue-on-error: true
@@ -33,16 +56,13 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
 
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-
-      - name: rustfmt
-        run: cargo fmt --all -- --check
 
       - name: clippy
         # Correctness is a hard gate. Style/perf/suspicious warnings remain
@@ -109,11 +129,18 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      # Fast gate: the inline `#[cfg(test)]` lib unit tests only. Runs on both
+      # Fast gate: the inline `#[cfg(test)]` lib unit tests, plus `layering` —
+      # the executable form of CLAUDE.md's crate-dependency rules. Runs on both
       # Linux and macOS to catch platform-specific divergence (float formatting,
       # path handling); fails in seconds before the slower E2E corpus.
-      - name: Unit tests
-        run: cargo test -p receipt-core --lib -- --nocapture
+      #
+      # `layering` only reads Cargo.toml files (no models, no ORT, no network),
+      # so it costs ~0.01s here. It is named explicitly because this step
+      # enumerates targets: without `--test layering` the assertion that
+      # CLAUDE.md and docs/architecture.md both call "enforced" would pass
+      # locally and never be reported by CI.
+      - name: Unit tests + layering rules
+        run: cargo test -p receipt-core --lib --test layering -- --nocapture
 
       # Image prep unit tests (EXIF/resize/pad) — pure Rust, no models.
       - name: receipt-image unit tests
