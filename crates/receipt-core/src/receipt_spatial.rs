@@ -58,9 +58,6 @@ pub struct SpatialExtractionOutcome {
 #[derive(Clone, Debug)]
 struct ParsedLine {
     line_y: f64,
-    /// Left edge of the row's leftmost description word, as a fraction of image
-    /// width. The receipt's print-grid column, before it is clustered into one.
-    left_x: f64,
     full_text: String,
     left_text: String,
     /// Set by [`mark_annotation_columns`]: this row stands in a grid column that
@@ -1056,7 +1053,6 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
             let line_has_price = line_has_trailing_price(&full_text);
             let mut left_words = Vec::new();
             let mut left_y = None;
-            let mut left_x = f64::INFINITY;
             for word in &line.words {
                 let x = x_center(word);
                 // PRICE_X_THRESHOLD is the description/price boundary;
@@ -1071,7 +1067,6 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
                         continue;
                     }
                     left_words.push(text.to_string());
-                    left_x = left_x.min(word.bbox.left);
                     if left_y.is_none() {
                         left_y = Some(y_center(word));
                     }
@@ -1081,7 +1076,6 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
             let line_index = all_lines.len();
             all_lines.push(ParsedLine {
                 line_y,
-                left_x,
                 full_text: full_text.clone(),
                 left_text: left_words.join(" "),
                 is_annotation: false,
