@@ -85,8 +85,21 @@ PP-OCRv5 mobile:
 5. Return detections — and stop there
 
 The only crate that depends on `ort`; it re-exports `ocr_paddle::Result` so
-callers need not. Feature `coreml` enables Apple Neural Engine / GPU via `ort`
-(iOS xcframework); Linux/desktop CI uses CPU ORT.
+callers need not.
+
+**Every shipping build runs the plain CPU EP (MLAS)** — iOS, Android, CI and
+`device_sim` alike. The `coreml` and `xnnpack` features exist but **no consumer
+enables either**: `beanbeaver-ios` dropped CoreML in 3c580a6 (2026-07-01)
+because the CPU EP won on both speed and accuracy for the shipped dynamic-shape
+mobile models, and `xnnpack` does not link. This is load-bearing, because it is
+what makes `device_sim` — which is CPU-only — a faithful proxy for both phones
+rather than a poor one. See `crates/ocr-paddle/Cargo.toml` for the full
+reasoning.
+
+Note that the iOS binary still *links* `CoreML.framework` and carries CoreML EP
+symbols, because pyke's prebuilt `libonnxruntime.a` is compiled with the EP and
+`build-xcframework.sh` merges the whole archive. **The framework being linked is
+not evidence that the EP is used** — check the cargo feature, not the binary.
 
 ### `scan`
 

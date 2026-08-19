@@ -6,8 +6,9 @@ This is the permissive “core island” shared by:
 
 | Consumer | License | How it uses core |
 |----------|---------|------------------|
-| **beanbeaver** (desktop) | GPL | Parser + rules via PyO3 / native path; no copyleft deps flow *into* this repo |
-| **beanbeaver-ios** | MIT | UniFFI (`bb-receipt-ffi`) + ONNX PP-OCRv5 on device |
+| **beanbeaver-ios** | MIT | UniFFI (`bb-receipt-ffi`, via `bb-mobile-ffi`) + ONNX PP-OCRv5 on device |
+| **beanbeaver-android** | MIT | Same seam, Kotlin bindings; arm64-v8a only |
+| **beanbeaver** (desktop) | GPL | Parser + rules via PyO3 / native path; no copyleft deps flow *into* this repo. **Pinned at v0.3.2 and sunset** — its on-device scanning is not tracking this repo |
 
 License policy is enforced by [`deny.toml`](deny.toml): only permissive (and MPL-2.0 via UniFFI) licenses are allowed.
 
