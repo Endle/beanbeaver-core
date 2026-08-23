@@ -2,29 +2,7 @@ use regex::Regex;
 use std::sync::OnceLock;
 
 use crate::merchant_match::{self, MerchantFamily, MerchantMatch};
-
-#[derive(Clone, Debug)]
-pub struct MerchantWordInput {
-    pub confidence: f64,
-    pub has_bbox: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct MerchantLineInput {
-    pub text: String,
-    pub words: Vec<MerchantWordInput>,
-    /// Tallest detection-box height (px, de-padded image space) among this line's
-    /// words. A large-font store banner sits well above the body text height, so
-    /// this drives the size-prior in [`extract_merchant_with_confidence`].
-    pub height: f64,
-    /// Line center Y (px). Used to restrict the banner search to the receipt top.
-    pub center_y: f64,
-}
-
-#[derive(Clone, Debug)]
-pub struct MerchantPageInput {
-    pub lines: Vec<MerchantLineInput>,
-}
+use crate::ocr_document::{OcrDocument, OcrLine};
 
 fn re_numeric_date_like() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -83,7 +61,7 @@ fn clean_merchant_candidate(value: &str) -> String {
 /// Loose plausibility used by both the size-prior and the first-line fallback:
 /// a confident, non-empty, non-date line that cleans to a usable candidate.
 /// Returns the cleaned candidate, or `None` if the line can't be a merchant.
-fn line_merchant_candidate(line: &MerchantLineInput) -> Option<String> {
+fn line_merchant_candidate(line: &OcrLine) -> Option<String> {
     if line.words.is_empty() {
         return None;
     }
@@ -119,7 +97,7 @@ fn median(mut values: Vec<f64>) -> f64 {
 /// stands out by size — the uniform-font case — so the caller falls back to the
 /// historical first-line behavior. Only the tallest banner-eligible line in the
 /// top region wins, and [`re_banner_reject`] vetoes tall date/address/price rows.
-fn banner_by_size(lines: &[&MerchantLineInput]) -> Option<String> {
+fn banner_by_size(lines: &[OcrLine]) -> Option<String> {
     let heights: Vec<f64> = lines
         .iter()
         .map(|l| l.height)
@@ -171,17 +149,17 @@ fn banner_by_size(lines: &[&MerchantLineInput]) -> Option<String> {
     // latter does not.
     let mut first = best;
     let mut last = best;
-    while first > 0 && joins_banner(lines[first - 1], lines[first], lines[best].height, cut) {
+    while first > 0 && joins_banner(&lines[first - 1], &lines[first], lines[best].height, cut) {
         first -= 1;
     }
     while last + 1 < lines.len()
-        && joins_banner(lines[last + 1], lines[last], lines[best].height, cut)
+        && joins_banner(&lines[last + 1], &lines[last], lines[best].height, cut)
     {
         last += 1;
     }
 
     let joined = (first..=last)
-        .filter_map(|index| line_merchant_candidate(lines[index]))
+        .filter_map(|index| line_merchant_candidate(&lines[index]))
         .collect::<Vec<_>>()
         .join(" ");
     (!joined.is_empty()).then_some(joined)
@@ -194,12 +172,7 @@ fn banner_by_size(lines: &[&MerchantLineInput]) -> Option<String> {
 /// [`re_banner_reject`]; a line printed far below the logo fails the adjacency
 /// check, whose budget is the two lines' mean height — roughly "no more than one
 /// display line of blank space between them".
-fn joins_banner(
-    cand: &MerchantLineInput,
-    neighbor: &MerchantLineInput,
-    banner_height: f64,
-    cut: f64,
-) -> bool {
+fn joins_banner(cand: &OcrLine, neighbor: &OcrLine, banner_height: f64, cut: f64) -> bool {
     cand.center_y <= cut
         && cand.height >= STACKED_BANNER_MIN_RATIO * banner_height
         && !re_banner_reject().is_match(&cand.text)
@@ -207,24 +180,15 @@ fn joins_banner(
         && (cand.center_y - neighbor.center_y).abs() <= (cand.height + neighbor.height) / 2.0
 }
 
-pub fn extract_merchant_with_confidence(pages: &[MerchantPageInput]) -> Option<String> {
-    if pages.is_empty() {
-        return None;
-    }
-
-    let lines: Vec<&MerchantLineInput> = pages.iter().flat_map(|page| page.lines.iter()).collect();
-
+pub fn extract_merchant_with_confidence(doc: &OcrDocument) -> Option<String> {
     // Prefer a dominant large-font banner when one exists...
-    if let Some(banner) = banner_by_size(&lines) {
+    if let Some(banner) = banner_by_size(&doc.lines) {
         return Some(banner);
     }
 
     // ...otherwise fall back to the first plausible header line (historical
     // behavior), bounded to the first 10 lines of the header region.
-    lines
-        .iter()
-        .take(10)
-        .find_map(|line| line_merchant_candidate(line))
+    doc.lines.iter().take(10).find_map(line_merchant_candidate)
 }
 
 /// Best-effort OCR'd merchant name straight from the receipt header, *before*
@@ -232,8 +196,8 @@ pub fn extract_merchant_with_confidence(pages: &[MerchantPageInput]) -> Option<S
 /// back to the first plausible non-date line. This is the `raw` the matcher
 /// preserves; `"UNKNOWN_MERCHANT"` is the last-resort sentinel (kept for parity
 /// with the prior behavior).
-fn ocr_header_candidate(lines: &[String], pages: &[MerchantPageInput]) -> String {
-    if let Some(confident) = extract_merchant_with_confidence(pages) {
+fn ocr_header_candidate(lines: &[String], doc: &OcrDocument) -> String {
+    if let Some(confident) = extract_merchant_with_confidence(doc) {
         return confident;
     }
 
@@ -256,27 +220,13 @@ fn ocr_header_candidate(lines: &[String], pages: &[MerchantPageInput]) -> String
 pub fn extract_merchant_match(
     lines: &[String],
     full_text: &str,
-    pages: &[MerchantPageInput],
+    doc: &OcrDocument,
     known_merchants: &[String],
     families: &[MerchantFamily],
 ) -> MerchantMatch {
-    let raw = ocr_header_candidate(lines, pages);
+    let raw = ocr_header_candidate(lines, doc);
     let full_text_upper = full_text.to_ascii_uppercase();
     merchant_match::resolve(&raw, &full_text_upper, known_merchants, families)
-}
-
-pub fn has_useful_bbox_data(pages: &[MerchantPageInput]) -> bool {
-    if pages.is_empty() {
-        return false;
-    }
-    for line in pages[0].lines.iter().take(10) {
-        for word in &line.words {
-            if word.has_bbox {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 pub fn is_spatial_layout_receipt(full_text: &str) -> bool {
@@ -302,28 +252,35 @@ pub fn is_spatial_layout_receipt(full_text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        extract_merchant_match, extract_merchant_with_confidence, MerchantLineInput,
-        MerchantPageInput, MerchantWordInput,
-    };
+    use super::{extract_merchant_match, extract_merchant_with_confidence};
     use crate::merchant_match::MerchantFamily;
+    use crate::ocr_document::{Bbox, OcrDocument, OcrLine, OcrWord};
 
     /// One header line with a single word at the given confidence, box `height`,
-    /// and line `center_y` — the geometry the size-prior reads.
-    fn mline(text: &str, confidence: f64, height: f64, center_y: f64) -> MerchantLineInput {
-        MerchantLineInput {
+    /// and line `center_y` — the geometry the size-prior reads. `height` and
+    /// `center_y` are ratios of image height, and only ever compared with each
+    /// other, so these fixtures keep the pixel-ish magnitudes they were written
+    /// with rather than restating them as fractions.
+    fn mline(text: &str, confidence: f64, height: f64, center_y: f64) -> OcrLine {
+        OcrLine {
             text: text.to_string(),
-            words: vec![MerchantWordInput {
+            words: vec![OcrWord {
+                text: text.to_string(),
+                bbox: Bbox {
+                    left: 0.0,
+                    top: 0.0,
+                    right: 1.0,
+                    bottom: 1.0,
+                },
                 confidence,
-                has_bbox: true,
             }],
             height,
             center_y,
         }
     }
 
-    fn one_page(lines: Vec<MerchantLineInput>) -> Vec<MerchantPageInput> {
-        vec![MerchantPageInput { lines }]
+    fn one_page(lines: Vec<OcrLine>) -> OcrDocument {
+        OcrDocument { lines }
     }
 
     fn families() -> Vec<MerchantFamily> {
@@ -348,9 +305,15 @@ mod tests {
 
     fn display(full_text: &str) -> String {
         let lines: Vec<String> = full_text.lines().map(str::to_string).collect();
-        extract_merchant_match(&lines, full_text, &[], &["COSTCO".to_string()], &families())
-            .display()
-            .to_string()
+        extract_merchant_match(
+            &lines,
+            full_text,
+            &OcrDocument::default(),
+            &["COSTCO".to_string()],
+            &families(),
+        )
+        .display()
+        .to_string()
     }
 
     #[test]

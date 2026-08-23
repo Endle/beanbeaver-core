@@ -202,15 +202,15 @@ fn build_item(
 }
 
 pub fn parse_receipt(
-    full_text: &str,
-    pages_for_helper: &[receipt_parse_helpers::MerchantPageInput],
-    pages_for_spatial: &[receipt_spatial::PageInput],
+    doc: &crate::ocr_document::OcrDocument,
     rule_layers: &ParserRuleLayers,
     image_filename: &str,
     known_merchants: &[String],
     merchant_families: &[crate::merchant_match::MerchantFamily],
     current_year: i32,
 ) -> ParsedReceiptData {
+    let document_text = doc.full_text();
+    let full_text = document_text.as_str();
     let lines = full_text
         .lines()
         .map(str::trim)
@@ -225,18 +225,20 @@ pub fn parse_receipt(
     // chains this catches — Food Basics' `Saving 4.72` — word their annotations
     // in a vocabulary no keyword list has met yet.
     //
-    // `full_text` is the grouped lines joined with newlines and each group's own
-    // text never contains one, so `full_text.lines()` is 1:1 with the spatial
-    // pages' lines and the flags index straight into it. Callers that build the
-    // two independently (tests, and any consumer passing no geometry at all) are
-    // not 1:1, and there the flags index nothing — so require the counts to
-    // agree before trusting them rather than silently marking the wrong row.
-    let annotation_flags = receipt_spatial::annotation_line_flags(pages_for_spatial);
-    let aligned = annotation_flags.len() == full_text.lines().count();
+    // The flags index straight into `full_text.lines()`, which is what
+    // [`OcrDocument`](crate::ocr_document::OcrDocument) guarantees: `full_text`
+    // is its own lines joined with newlines and no line's text contains one, so
+    // the two sequences are the same sequence. This used to be three parallel
+    // parameters with a runtime `aligned` count-check guarding against callers
+    // that built them independently; the document type makes that
+    // unrepresentable. The `get` is not that check returning by another name —
+    // it is bounds safety for the one way a hand-built document could still
+    // break the 1:1 property, a line whose own text contains a newline.
+    let annotation_flags = receipt_spatial::annotation_line_flags(doc);
     let item_lines: Vec<String> = full_text
         .lines()
         .enumerate()
-        .filter(|(index, _)| !aligned || !annotation_flags[*index])
+        .filter(|(index, _)| !annotation_flags.get(*index).copied().unwrap_or(false))
         .map(|(_, line)| line.trim())
         .filter(|line| !line.is_empty())
         .map(str::to_string)
@@ -245,7 +247,7 @@ pub fn parse_receipt(
     let merchant_match = receipt_parse_helpers::extract_merchant_match(
         &lines,
         full_text,
-        pages_for_helper,
+        doc,
         known_merchants,
         merchant_families,
     );
@@ -276,13 +278,12 @@ pub fn parse_receipt(
         summary_amounts.insert(subtotal_cents);
     }
 
-    let spatial_layout = receipt_parse_helpers::has_useful_bbox_data(pages_for_helper)
-        && receipt_parse_helpers::is_spatial_layout_receipt(full_text);
+    let spatial_layout =
+        doc.has_useful_bbox_data() && receipt_parse_helpers::is_spatial_layout_receipt(full_text);
 
     let (items, mut warnings): (Vec<ParsedReceiptItem>, Vec<ParsedReceiptWarning>) =
         if spatial_layout {
-            let spatial_outcome =
-                receipt_spatial::extract_spatial_items(pages_for_spatial.to_vec());
+            let spatial_outcome = receipt_spatial::extract_spatial_items(doc);
             if spatial_outcome.items.is_empty() {
                 let (items, warnings) =
                     receipt_text::extract_text_items(&item_lines, &summary_amounts);
@@ -596,7 +597,14 @@ mod tests {
     /// path runs, which is all these balance assertions need.
     fn parse_text(text: &str) -> super::ParsedReceiptData {
         let layers = default_parser_rule_layers();
-        super::parse_receipt(text, &[], &[], &layers, "receipt.jpg", &[], &[], 2026)
+        super::parse_receipt(
+            &crate::ocr_document::OcrDocument::from_text(text),
+            &layers,
+            "receipt.jpg",
+            &[],
+            &[],
+            2026,
+        )
     }
 
     /// Every finding of the kind, so a test can't pass on the wrong shape.

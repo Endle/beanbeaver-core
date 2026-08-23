@@ -1,17 +1,15 @@
 //! Port of `receipt/ocr_helpers.py::transform_paddleocr_result` and the
 //! `receipt/detection_normalization.py` pipeline orchestration into pure Rust.
 //!
-//! Input: raw PaddleOCR detections (padded-image pixel coordinates). Output: the
-//! line/word grouping (with normalized [0,1] bboxes) and the joined `full_text`
-//! that `receipt_parser::parse_receipt` consumes — split into the helper-page and
-//! spatial-page shapes the parser expects.
+//! Input: raw PaddleOCR detections (padded-image pixel coordinates). Output: one
+//! [`OcrDocument`] — the line/word grouping, normalized to `[0,1]` against the
+//! de-padded image, that `receipt_parser::parse_receipt` consumes.
 
 use crate::detection_normalization::{
     deskew, filter_bob_markers, filter_low_quality, sort_reading_order, Detection,
 };
+use crate::ocr_document::{Bbox, OcrDocument, OcrLine, OcrWord};
 use crate::ocr_line_grouping::group_detections_into_lines;
-use crate::receipt_parse_helpers::{MerchantLineInput, MerchantPageInput, MerchantWordInput};
-use crate::receipt_spatial::{BboxInput, LineInput, PageInput, WordInput};
 
 /// One raw OCR detection: a polygon (>=2 points, padded-image pixels), the
 /// recognized text, and a confidence score.
@@ -20,14 +18,6 @@ pub struct RawDetection {
     pub points: Vec<(f64, f64)>,
     pub text: String,
     pub confidence: f64,
-}
-
-/// Transformed OCR document, in the two forms the parser needs plus `full_text`.
-#[derive(Clone, Debug, Default)]
-pub struct TransformedOcr {
-    pub full_text: String,
-    pub helper_pages: Vec<MerchantPageInput>,
-    pub spatial_pages: Vec<PageInput>,
 }
 
 fn clamp_unit_interval(value: f64) -> f64 {
@@ -48,8 +38,8 @@ fn normalize(mut dets: Vec<Detection>, image_width: f64) -> Vec<Detection> {
     if let Some(new_y) = outcome.new_y {
         for (det, (center_y, y_min, y_max)) in dets.iter_mut().zip(new_y) {
             // The corner points have to move with the summary fields. Line
-            // grouping reads y_min/y_max/center_y, but the spatial path builds
-            // its BboxInput top/bottom straight off `bbox`, so leaving the
+            // grouping reads y_min/y_max/center_y, but the document's word
+            // boxes are built straight off `bbox`, so leaving the
             // corners behind hands the two paths different geometry for the
             // same detection. Re-derive the shift from center_y rather than
             // recomputing the shear, so the two can never drift apart.
@@ -78,16 +68,12 @@ pub fn transform(
     padded_width: i64,
     padded_height: i64,
     padding: i64,
-) -> TransformedOcr {
+) -> OcrDocument {
     let image_width = (padded_width - 2 * padding) as f64;
     let image_height = (padded_height - 2 * padding) as f64;
 
     if detections.is_empty() {
-        return TransformedOcr {
-            full_text: String::new(),
-            helper_pages: vec![MerchantPageInput { lines: Vec::new() }],
-            spatial_pages: vec![PageInput { lines: Vec::new() }],
-        };
+        return OcrDocument::default();
     }
 
     let pad = padding as f64;
@@ -117,13 +103,10 @@ pub fn transform(
     let detection_data = normalize(detection_data, image_width);
     let groups = group_detections_into_lines(&detection_data, image_width);
 
-    let mut full_text_lines: Vec<String> = Vec::with_capacity(groups.len());
-    let mut helper_lines: Vec<MerchantLineInput> = Vec::with_capacity(groups.len());
-    let mut spatial_lines: Vec<LineInput> = Vec::with_capacity(groups.len());
+    let mut lines: Vec<OcrLine> = Vec::with_capacity(groups.len());
 
     for group in groups {
-        let mut helper_words = Vec::with_capacity(group.len());
-        let mut spatial_words = Vec::with_capacity(group.len());
+        let mut words = Vec::with_capacity(group.len());
         let mut texts = Vec::with_capacity(group.len());
         let mut line_height = 0.0f64;
         let mut sum_center_y = 0.0f64;
@@ -133,7 +116,7 @@ pub fn transform(
             sum_center_y += det.center_y;
             let xs: Vec<f64> = det.bbox.iter().map(|(x, _)| *x).collect();
             let ys: Vec<f64> = det.bbox.iter().map(|(_, y)| *y).collect();
-            let bbox = BboxInput {
+            let bbox = Bbox {
                 left: clamp_unit_interval(
                     xs.iter().cloned().fold(f64::INFINITY, f64::min) / image_width,
                 ),
@@ -148,11 +131,7 @@ pub fn transform(
                 ),
             };
             texts.push(det.text.clone());
-            helper_words.push(MerchantWordInput {
-                confidence: det.confidence,
-                has_bbox: true,
-            });
-            spatial_words.push(WordInput {
+            words.push(OcrWord {
                 text: det.text.clone(),
                 bbox,
                 confidence: det.confidence,
@@ -164,28 +143,20 @@ pub fn transform(
         } else {
             sum_center_y / group.len() as f64
         };
-        full_text_lines.push(line_text.clone());
-        helper_lines.push(MerchantLineInput {
-            text: line_text.clone(),
-            words: helper_words,
-            height: line_height,
-            center_y,
-        });
-        spatial_lines.push(LineInput {
+        // Both line metrics are normalized against image height, so the whole
+        // document speaks one coordinate space — see `ocr_document`. They are
+        // only ever read as ratios against each other, so this cannot change a
+        // banner verdict; it removes the px-alongside-normalized hazard that
+        // this very loop already produced a bug with once (see `normalize`).
+        lines.push(OcrLine {
             text: line_text,
-            words: spatial_words,
+            words,
+            height: line_height / image_height,
+            center_y: center_y / image_height,
         });
     }
 
-    TransformedOcr {
-        full_text: full_text_lines.join("\n"),
-        helper_pages: vec![MerchantPageInput {
-            lines: helper_lines,
-        }],
-        spatial_pages: vec![PageInput {
-            lines: spatial_lines,
-        }],
-    }
+    OcrDocument { lines }
 }
 
 #[cfg(test)]
@@ -226,7 +197,7 @@ mod tests {
 
         // padding = 0 => padded dims == original dims (1000x1200).
         let out = transform(dets, 1000, 1200, 0);
-        let full_text = &out.full_text;
+        let full_text = out.full_text();
 
         assert!(
             !full_text.contains("Bottom of Baske"),
@@ -245,26 +216,21 @@ mod tests {
             "item row not grouped: {full_text}"
         );
 
-        // One page each; spatial word bboxes are normalized into the unit interval.
-        assert_eq!(out.helper_pages.len(), 1);
-        assert_eq!(out.spatial_pages.len(), 1);
-        let bbox = &out.spatial_pages[0].lines[0].words[0].bbox;
+        // Word bboxes are normalized into the unit interval.
+        let bbox = &out.lines[0].words[0].bbox;
         for v in [bbox.left, bbox.top, bbox.right, bbox.bottom] {
             assert!((0.0..=1.0).contains(&v), "bbox coord {v} outside [0,1]");
         }
         assert!(bbox.left <= bbox.right && bbox.top <= bbox.bottom);
     }
 
-    /// Empty input yields empty text and one empty page of each shape (so the
-    /// parser always sees a well-formed, single-page document).
+    /// Empty input yields an empty document, not a malformed one.
     #[test]
-    fn empty_detections_yield_one_empty_page_each() {
+    fn empty_detections_yield_an_empty_document() {
         let out = transform(Vec::new(), 1000, 1200, 50);
-        assert!(out.full_text.is_empty());
-        assert_eq!(out.helper_pages.len(), 1);
-        assert_eq!(out.spatial_pages.len(), 1);
-        assert!(out.helper_pages[0].lines.is_empty());
-        assert!(out.spatial_pages[0].lines.is_empty());
+        assert!(out.full_text().is_empty());
+        assert!(out.lines.is_empty());
+        assert!(!out.has_useful_bbox_data());
     }
 
     /// Padding is subtracted before normalization: coordinates in padded space are
@@ -279,11 +245,31 @@ mod tests {
             200,
             50,
         );
-        assert_eq!(out.full_text, "HELLO");
-        let bbox = &out.spatial_pages[0].lines[0].words[0].bbox;
+        assert_eq!(out.full_text(), "HELLO");
+        let bbox = &out.lines[0].words[0].bbox;
         assert!((bbox.left - 0.0).abs() < 1e-9, "left={}", bbox.left);
         assert!((bbox.right - 1.0).abs() < 1e-9, "right={}", bbox.right);
         assert!((bbox.top - 0.0).abs() < 1e-9, "top={}", bbox.top);
         assert!((bbox.bottom - 0.4).abs() < 1e-9, "bottom={}", bbox.bottom);
+    }
+
+    /// The line metrics live in the same normalized space as the boxes — the
+    /// units invariant `ocr_document` exists to hold. Same rect as above: 40px
+    /// tall, centered at y=20, on a 100px-tall de-padded image.
+    #[test]
+    fn line_metrics_are_normalized_against_image_height() {
+        let out = transform(
+            vec![rect(50.0, 50.0, 150.0, 90.0, "HELLO", 0.99)],
+            200,
+            200,
+            50,
+        );
+        let line = &out.lines[0];
+        assert!((line.height - 0.4).abs() < 1e-9, "height={}", line.height);
+        assert!(
+            (line.center_y - 0.2).abs() < 1e-9,
+            "center_y={}",
+            line.center_y
+        );
     }
 }
