@@ -2,6 +2,7 @@ use regex::Regex;
 use std::sync::OnceLock;
 
 use crate::money::Money;
+use crate::ocr_document::{OcrDocument, OcrLine, OcrWord};
 use crate::receipt_common::{ReceiptWarningKind, WEIGHT_UNIT_AT_SEP, WEIGHT_UNIT_CLASS};
 
 const SCALE: i64 = 10_000;
@@ -10,32 +11,6 @@ const PRICE_X_THRESHOLD: f64 = 0.65;
 const Y_TOLERANCE: f64 = 0.02;
 const MAX_ITEM_DISTANCE: f64 = 0.08;
 const SPATIAL_FLOAT_EPSILON: f64 = 1e-6;
-
-#[derive(Clone, Debug)]
-pub struct BboxInput {
-    pub left: f64,
-    pub top: f64,
-    pub right: f64,
-    pub bottom: f64,
-}
-
-#[derive(Clone, Debug)]
-pub struct WordInput {
-    pub text: String,
-    pub bbox: BboxInput,
-    pub confidence: f64,
-}
-
-#[derive(Clone, Debug)]
-pub struct LineInput {
-    pub text: String,
-    pub words: Vec<WordInput>,
-}
-
-#[derive(Clone, Debug)]
-pub struct PageInput {
-    pub lines: Vec<LineInput>,
-}
 
 #[derive(Clone, Debug)]
 pub struct SpatialExtractedItem {
@@ -730,10 +705,10 @@ const ANNOTATION_COLUMN_LINK: f64 = 0.5;
 /// normalized bboxes this stage works in. Rows shorter than six characters are
 /// mostly box padding; the modal height band keeps a double-width SUBTOTAL or a
 /// display banner off the estimate.
-fn glyph_pitch_normalized(pages: &[PageInput]) -> Option<f64> {
-    let mut heights: Vec<f64> = pages
+fn glyph_pitch_normalized(doc: &OcrDocument) -> Option<f64> {
+    let mut heights: Vec<f64> = doc
+        .lines
         .iter()
-        .flat_map(|page| page.lines.iter())
         .flat_map(|line| line.words.iter())
         .map(|word| word.bbox.bottom - word.bbox.top)
         .filter(|height| *height > 0.0)
@@ -745,11 +720,7 @@ fn glyph_pitch_normalized(pages: &[PageInput]) -> Option<f64> {
     let median_height = heights[heights.len() / 2];
 
     let mut pitches: Vec<f64> = Vec::new();
-    for word in pages
-        .iter()
-        .flat_map(|page| page.lines.iter())
-        .flat_map(|line| line.words.iter())
-    {
+    for word in doc.lines.iter().flat_map(|line| line.words.iter()) {
         let chars = word.text.trim().chars().count();
         let width = word.bbox.right - word.bbox.left;
         let height = word.bbox.bottom - word.bbox.top;
@@ -793,14 +764,10 @@ fn glyph_pitch_normalized(pages: &[PageInput]) -> Option<f64> {
 /// alone and returned per line of the flattened page sequence — the spatial
 /// extractor consumes it below, and `receipt_parser` withholds the same lines
 /// from the text path, which has no coordinates of its own to decide with.
-pub fn annotation_line_flags(pages: &[PageInput]) -> Vec<bool> {
-    let rows: Vec<AnnotationRow> = pages
-        .iter()
-        .flat_map(|page| page.lines.iter())
-        .map(annotation_row)
-        .collect();
+pub fn annotation_line_flags(doc: &OcrDocument) -> Vec<bool> {
+    let rows: Vec<AnnotationRow> = doc.lines.iter().map(annotation_row).collect();
     let mut flags = vec![false; rows.len()];
-    let Some(pitch) = glyph_pitch_normalized(pages) else {
+    let Some(pitch) = glyph_pitch_normalized(doc) else {
         return flags;
     };
     if pitch <= 0.0 || rows.is_empty() {
@@ -864,7 +831,7 @@ struct AnnotationRow {
     has_price: bool,
 }
 
-fn annotation_row(line: &LineInput) -> AnnotationRow {
+fn annotation_row(line: &OcrLine) -> AnnotationRow {
     let mut left_x = f64::INFINITY;
     let mut left_words: Vec<&str> = Vec::new();
     let mut has_price = false;
@@ -1015,82 +982,77 @@ fn nearest_unpriced_deposit_stub_below(
     Some((index, candidate.line_y - anchor_y))
 }
 
-fn y_center(word: &WordInput) -> f64 {
+fn y_center(word: &OcrWord) -> f64 {
     (word.bbox.top + word.bbox.bottom) / 2.0
 }
 
-fn x_center(word: &WordInput) -> f64 {
+fn x_center(word: &OcrWord) -> f64 {
     (word.bbox.left + word.bbox.right) / 2.0
 }
 
-pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome {
+pub fn extract_spatial_items(doc: &OcrDocument) -> SpatialExtractionOutcome {
     let mut items = Vec::new();
     let mut warnings = Vec::new();
-    if pages.is_empty() {
-        return SpatialExtractionOutcome { items, warnings };
-    }
 
     let mut all_lines = Vec::new();
     let mut price_candidates = Vec::new();
 
-    for page in &pages {
-        for line in &page.lines {
-            if line.words.is_empty() {
+    for line in &doc.lines {
+        if line.words.is_empty() {
+            continue;
+        }
+        let full_text = line.text.clone();
+        let line_has_price = line_has_trailing_price(&full_text);
+        let mut left_words = Vec::new();
+        let mut left_y = None;
+        for word in &line.words {
+            let x = x_center(word);
+            // PRICE_X_THRESHOLD is the description/price boundary;
+            // there's no dead zone (Costco's "2% 4L" pack-size token
+            // sits at cx≈0.6 and must count as description text).
+            if x < PRICE_X_THRESHOLD {
+                let text = word.text.as_str();
+                if text.len() <= 1 || re_digits_dots_only().is_match(text) {
+                    continue;
+                }
+                if is_section_header_text(text) && !line_has_price {
+                    continue;
+                }
+                left_words.push(text.to_string());
+                if left_y.is_none() {
+                    left_y = Some(y_center(word));
+                }
+            }
+        }
+        let line_y = left_y.unwrap_or_else(|| y_center(&line.words[0]));
+        let line_index = all_lines.len();
+        all_lines.push(ParsedLine {
+            line_y,
+            full_text: full_text.clone(),
+            left_text: left_words.join(" "),
+            is_annotation: false,
+        });
+        for word in &line.words {
+            if word.confidence < MIN_CONFIDENCE {
                 continue;
             }
-            let full_text = line.text.clone();
-            let line_has_price = line_has_trailing_price(&full_text);
-            let mut left_words = Vec::new();
-            let mut left_y = None;
-            for word in &line.words {
-                let x = x_center(word);
-                // PRICE_X_THRESHOLD is the description/price boundary;
-                // there's no dead zone (Costco's "2% 4L" pack-size token
-                // sits at cx≈0.6 and must count as description text).
-                if x < PRICE_X_THRESHOLD {
-                    let text = word.text.as_str();
-                    if text.len() <= 1 || re_digits_dots_only().is_match(text) {
-                        continue;
-                    }
-                    if is_section_header_text(text) && !line_has_price {
-                        continue;
-                    }
-                    left_words.push(text.to_string());
-                    if left_y.is_none() {
-                        left_y = Some(y_center(word));
-                    }
-                }
+            let x = x_center(word);
+            if x <= PRICE_X_THRESHOLD {
+                continue;
             }
-            let line_y = left_y.unwrap_or_else(|| y_center(&line.words[0]));
-            let line_index = all_lines.len();
-            all_lines.push(ParsedLine {
-                line_y,
-                full_text: full_text.clone(),
-                left_text: left_words.join(" "),
-                is_annotation: false,
-            });
-            for word in &line.words {
-                if word.confidence < MIN_CONFIDENCE {
-                    continue;
-                }
-                let x = x_center(word);
-                if x <= PRICE_X_THRESHOLD {
-                    continue;
-                }
-                if let Some(price_scaled) = is_price_word(&word.text) {
-                    if price_scaled != 0 {
-                        price_candidates.push(PriceCandidate {
-                            price_y: y_center(word),
-                            price_scaled,
-                            source_line_index: line_index,
-                        });
-                    }
+            if let Some(price_scaled) = is_price_word(&word.text) {
+                if price_scaled != 0 {
+                    price_candidates.push(PriceCandidate {
+                        price_y: y_center(word),
+                        price_scaled,
+                        source_line_index: line_index,
+                    });
                 }
             }
         }
     }
 
-    for (line, is_annotation) in all_lines.iter_mut().zip(annotation_line_flags(&pages)) {
+    for (line, is_annotation) in all_lines.iter_mut().zip(annotation_line_flags(doc)) {
         line.is_annotation = is_annotation;
     }
 
@@ -1704,10 +1666,8 @@ mod tests {
 
     use crate::money::Money;
 
-    use super::{
-        extract_spatial_items, footer_address_like, is_price_word, BboxInput, LineInput, PageInput,
-        WordInput,
-    };
+    use super::{extract_spatial_items, footer_address_like, is_price_word};
+    use crate::ocr_document::{Bbox, OcrDocument, OcrLine, OcrWord};
 
     #[test]
     fn address_veto_spares_item_rows_that_own_a_price() {
@@ -1752,10 +1712,10 @@ mod tests {
         assert_eq!(is_price_word("5.00- H"), Some(-50_000));
     }
 
-    fn word(text: &str, left: f64, top: f64, right: f64, bottom: f64) -> WordInput {
-        WordInput {
+    fn word(text: &str, left: f64, top: f64, right: f64, bottom: f64) -> OcrWord {
+        OcrWord {
             text: text.to_string(),
-            bbox: BboxInput {
+            bbox: Bbox {
                 left,
                 top,
                 right,
@@ -1767,38 +1727,38 @@ mod tests {
 
     #[test]
     fn keeps_short_produce_name_alignment() {
-        let page = PageInput {
+        let page = OcrDocument {
             lines: vec![
-                LineInput {
-                    text: "&& 02-Vegetable".to_string(),
-                    words: vec![word("&& 02-Vegetable", 0.15, 0.355, 0.30, 0.364)],
-                },
-                LineInput {
-                    text: "Napa".to_string(),
-                    words: vec![word("Napa", 0.06, 0.365, 0.09, 0.372)],
-                },
-                LineInput {
-                    text: "2.46 1b @ $1.29/1b 3.17".to_string(),
-                    words: vec![
+                OcrLine::new(
+                    "&& 02-Vegetable".to_string(),
+                    vec![word("&& 02-Vegetable", 0.15, 0.355, 0.30, 0.364)],
+                ),
+                OcrLine::new(
+                    "Napa".to_string(),
+                    vec![word("Napa", 0.06, 0.365, 0.09, 0.372)],
+                ),
+                OcrLine::new(
+                    "2.46 1b @ $1.29/1b 3.17".to_string(),
+                    vec![
                         word("2.46 1b @ $1.29/1b", 0.20, 0.378, 0.27, 0.386),
                         word("3.17", 0.89, 0.377, 0.92, 0.384),
                     ],
-                },
-                LineInput {
-                    text: "Soybean Sprout".to_string(),
-                    words: vec![word("Soybean Sprout", 0.12, 0.388, 0.24, 0.395)],
-                },
-                LineInput {
-                    text: "0.65 1b @ $1.58/1b 1.03".to_string(),
-                    words: vec![
+                ),
+                OcrLine::new(
+                    "Soybean Sprout".to_string(),
+                    vec![word("Soybean Sprout", 0.12, 0.388, 0.24, 0.395)],
+                ),
+                OcrLine::new(
+                    "0.65 1b @ $1.58/1b 1.03".to_string(),
+                    vec![
                         word("0.65 1b @ $1.58/1b", 0.21, 0.401, 0.28, 0.409),
                         word("1.03", 0.89, 0.400, 0.92, 0.407),
                     ],
-                },
+                ),
             ],
         };
 
-        let outcome = extract_spatial_items(vec![page]);
+        let outcome = extract_spatial_items(&page);
         let observed = outcome
             .items
             .into_iter()
@@ -1815,53 +1775,53 @@ mod tests {
         // the short-parenthetical stub check rejected it as an item line. Its
         // weight-row price $4.75 then skipped to "(SALE) STRAWBERRY" below,
         // and strawberry's own $5.00 cascaded onto the garbled "TMERE" line.
-        let page = PageInput {
+        let page = OcrDocument {
             lines: vec![
-                LineInput {
-                    text: "PRODUCE".to_string(),
-                    words: vec![word("PRODUCE", 0.05, 0.326, 0.16, 0.337)],
-                },
-                LineInput {
-                    text: "(SALE) NAPA".to_string(),
-                    words: vec![word("(SALE) NAPA", 0.05, 0.336, 0.22, 0.347)],
-                },
-                LineInput {
-                    text: "2.200 kg @ $2.16/kg W $4.75".to_string(),
-                    words: vec![
+                OcrLine::new(
+                    "PRODUCE".to_string(),
+                    vec![word("PRODUCE", 0.05, 0.326, 0.16, 0.337)],
+                ),
+                OcrLine::new(
+                    "(SALE) NAPA".to_string(),
+                    vec![word("(SALE) NAPA", 0.05, 0.336, 0.22, 0.347)],
+                ),
+                OcrLine::new(
+                    "2.200 kg @ $2.16/kg W $4.75".to_string(),
+                    vec![
                         word("2.200 kg @ $2.16/kg", 0.06, 0.345, 0.36, 0.359),
                         word("W $4.75", 0.72, 0.345, 0.83, 0.359),
                     ],
-                },
-                LineInput {
-                    text: "(SALE) STRAWBERRY".to_string(),
-                    words: vec![word("(SALE) STRAWBERRY", 0.06, 0.376, 0.31, 0.387)],
-                },
-                LineInput {
-                    text: "594143 2 @2/$5.00 W $5.00".to_string(),
-                    words: vec![
+                ),
+                OcrLine::new(
+                    "(SALE) STRAWBERRY".to_string(),
+                    vec![word("(SALE) STRAWBERRY", 0.06, 0.376, 0.31, 0.387)],
+                ),
+                OcrLine::new(
+                    "594143 2 @2/$5.00 W $5.00".to_string(),
+                    vec![
                         word("594143 2 @2/$5.00", 0.06, 0.385, 0.36, 0.398),
                         word("W $5.00", 0.72, 0.385, 0.83, 0.398),
                     ],
-                },
-                LineInput {
-                    text: "DELI".to_string(),
-                    words: vec![word("DELI", 0.05, 0.414, 0.13, 0.426)],
-                },
-                LineInput {
-                    text: "T&T PRESERVED DUCK EGGS W $5.99".to_string(),
-                    words: vec![
+                ),
+                OcrLine::new(
+                    "DELI".to_string(),
+                    vec![word("DELI", 0.05, 0.414, 0.13, 0.426)],
+                ),
+                OcrLine::new(
+                    "T&T PRESERVED DUCK EGGS W $5.99".to_string(),
+                    vec![
                         word("T&T PRESERVED DUCK EGGS", 0.06, 0.424, 0.41, 0.436),
                         word("W $5.99", 0.72, 0.424, 0.83, 0.436),
                     ],
-                },
-                LineInput {
-                    text: "TMERE".to_string(),
-                    words: vec![word("TMERE", 0.06, 0.434, 0.27, 0.448)],
-                },
+                ),
+                OcrLine::new(
+                    "TMERE".to_string(),
+                    vec![word("TMERE", 0.06, 0.434, 0.27, 0.448)],
+                ),
             ],
         };
 
-        let outcome = extract_spatial_items(vec![page]);
+        let outcome = extract_spatial_items(&page);
         let observed = outcome
             .items
             .into_iter()
@@ -1895,16 +1855,16 @@ mod tests {
         // four gross/tare/net weighings (each priced), and a banana qty row
         // that absorbed the melon's 5.99 during line grouping (its own math
         // says 1.775 x 1.52 = 2.70).
-        fn row(text: &str, y: f64, price: Option<&str>) -> LineInput {
+        fn row(text: &str, y: f64, price: Option<&str>) -> OcrLine {
             let mut words = vec![word(text, 0.06, y, 0.45, y + 0.012)];
             let mut full = text.to_string();
             if let Some(p) = price {
                 words.push(word(p, 0.80, y, 0.90, y + 0.012));
                 full = format!("{text} {p}");
             }
-            LineInput { text: full, words }
+            OcrLine::new(full, words)
         }
-        let page = PageInput {
+        let page = OcrDocument {
             lines: vec![
                 row("4011 BANANA MRJ", 0.300, Some("2.70")),
                 row("1.775 kg @ $1.52/kg", 0.317, Some("5.99")),
@@ -1927,7 +1887,7 @@ mod tests {
             ],
         };
 
-        let outcome = extract_spatial_items(vec![page]);
+        let outcome = extract_spatial_items(&page);
         let observed = outcome
             .items
             .into_iter()
@@ -1965,40 +1925,40 @@ mod tests {
         // code "458" plus the "2%" fat suffix dragged the alpha-ratio below 0.5
         // so both MILK lines were dropped, while "1346909 KS ORG 2% 4L" (6-digit
         // code, stripped) survived. Stripping the short code restores them.
-        let page = PageInput {
+        let page = OcrDocument {
             lines: vec![
-                LineInput {
-                    text: "458 MILK 2% 6.09".to_string(),
-                    words: vec![
+                OcrLine::new(
+                    "458 MILK 2% 6.09".to_string(),
+                    vec![
                         word("458 MILK 2%", 0.30, 0.200, 0.54, 0.212),
                         word("6.09", 0.82, 0.200, 0.90, 0.212),
                     ],
-                },
-                LineInput {
-                    text: "458 MILK 2% 6.09".to_string(),
-                    words: vec![
+                ),
+                OcrLine::new(
+                    "458 MILK 2% 6.09".to_string(),
+                    vec![
                         word("458 MILK 2%", 0.30, 0.220, 0.54, 0.232),
                         word("6.09", 0.82, 0.220, 0.90, 0.232),
                     ],
-                },
-                LineInput {
-                    text: "1346909 KS ORG 2% 4L 10.29".to_string(),
-                    words: vec![
+                ),
+                OcrLine::new(
+                    "1346909 KS ORG 2% 4L 10.29".to_string(),
+                    vec![
                         word("1346909 KS ORG 2% 4L", 0.30, 0.240, 0.58, 0.252),
                         word("10.29", 0.82, 0.240, 0.90, 0.252),
                     ],
-                },
-                LineInput {
-                    text: "TOTAL 26.47".to_string(),
-                    words: vec![
+                ),
+                OcrLine::new(
+                    "TOTAL 26.47".to_string(),
+                    vec![
                         word("TOTAL", 0.09, 0.500, 0.18, 0.512),
                         word("26.47", 0.82, 0.500, 0.90, 0.512),
                     ],
-                },
+                ),
             ],
         };
 
-        let outcome = extract_spatial_items(vec![page]);
+        let outcome = extract_spatial_items(&page);
         let milk_count = outcome
             .items
             .iter()
@@ -2013,41 +1973,41 @@ mod tests {
 
     #[test]
     fn prefers_item_above_onsale_price() {
-        let page = PageInput {
+        let page = OcrDocument {
             lines: vec![
-                LineInput {
-                    text: "*S & B Wasabi".to_string(),
-                    words: vec![word("*S & B Wasabi", 0.08, 0.100, 0.260, 0.112)],
-                },
-                LineInput {
-                    text: "(E)ON SALE 1.98".to_string(),
-                    words: vec![
+                OcrLine::new(
+                    "*S & B Wasabi".to_string(),
+                    vec![word("*S & B Wasabi", 0.08, 0.100, 0.260, 0.112)],
+                ),
+                OcrLine::new(
+                    "(E)ON SALE 1.98".to_string(),
+                    vec![
                         word("(E)ON SALE", 0.09, 0.120, 0.210, 0.132),
                         word("1.98", 0.88, 0.120, 0.93, 0.132),
                     ],
-                },
-                LineInput {
-                    text: "2 @ $0.99 4.59".to_string(),
-                    words: vec![
+                ),
+                OcrLine::new(
+                    "2 @ $0.99 4.59".to_string(),
+                    vec![
                         word("2 @ $0.99", 0.22, 0.140, 0.320, 0.152),
                         word("4.59", 0.88, 0.140, 0.93, 0.152),
                     ],
-                },
-                LineInput {
-                    text: "Hot Kid Honey Flavour Bal".to_string(),
-                    words: vec![word("Hot Kid Honey Flavour Bal", 0.08, 0.160, 0.360, 0.172)],
-                },
-                LineInput {
-                    text: "TOTAL 6.57".to_string(),
-                    words: vec![
+                ),
+                OcrLine::new(
+                    "Hot Kid Honey Flavour Bal".to_string(),
+                    vec![word("Hot Kid Honey Flavour Bal", 0.08, 0.160, 0.360, 0.172)],
+                ),
+                OcrLine::new(
+                    "TOTAL 6.57".to_string(),
+                    vec![
                         word("TOTAL", 0.09, 0.500, 0.180, 0.512),
                         word("6.57", 0.88, 0.500, 0.93, 0.512),
                     ],
-                },
+                ),
             ],
         };
 
-        let outcome = extract_spatial_items(vec![page]);
+        let outcome = extract_spatial_items(&page);
         let observed = outcome
             .items
             .into_iter()
@@ -2068,30 +2028,30 @@ mod tests {
 
     #[test]
     fn quantity_price_row_with_ea_suffix_uses_item_above() {
-        let page = PageInput {
+        let page = OcrDocument {
             lines: vec![
-                LineInput {
-                    text: "FF SHEPHERDS PURSE FILLING".to_string(),
-                    words: vec![word("FF SHEPHERDS PURSE FILLING", 0.05, 0.700, 0.40, 0.712)],
-                },
-                LineInput {
-                    text: "2 @ $3.49ea. W $6.98".to_string(),
-                    words: vec![
+                OcrLine::new(
+                    "FF SHEPHERDS PURSE FILLING".to_string(),
+                    vec![word("FF SHEPHERDS PURSE FILLING", 0.05, 0.700, 0.40, 0.712)],
+                ),
+                OcrLine::new(
+                    "2 @ $3.49ea. W $6.98".to_string(),
+                    vec![
                         word("2 @ $3.49ea.", 0.07, 0.723, 0.23, 0.735),
                         word("W $6.98", 0.88, 0.723, 0.95, 0.735),
                     ],
-                },
-                LineInput {
-                    text: "TOTAL 6.98".to_string(),
-                    words: vec![
+                ),
+                OcrLine::new(
+                    "TOTAL 6.98".to_string(),
+                    vec![
                         word("TOTAL", 0.10, 0.900, 0.18, 0.912),
                         word("6.98", 0.88, 0.900, 0.93, 0.912),
                     ],
-                },
+                ),
             ],
         };
 
-        let outcome = extract_spatial_items(vec![page]);
+        let outcome = extract_spatial_items(&page);
         let observed = outcome
             .items
             .into_iter()
@@ -2109,45 +2069,45 @@ mod tests {
 
     #[test]
     fn skips_receipt_metadata_when_quantity_row_needs_item_context() {
-        let page = PageInput {
+        let page = OcrDocument {
             lines: vec![
-                LineInput {
-                    text: "WS# P6 Cashier6".to_string(),
-                    words: vec![word("WS# P6 Cashier6", 0.05, 0.100, 0.22, 0.112)],
-                },
-                LineInput {
-                    text: "*S & B Wasabi".to_string(),
-                    words: vec![word("*S & B Wasabi", 0.08, 0.140, 0.260, 0.152)],
-                },
-                LineInput {
-                    text: "(E)ON SALE 1.98".to_string(),
-                    words: vec![
+                OcrLine::new(
+                    "WS# P6 Cashier6".to_string(),
+                    vec![word("WS# P6 Cashier6", 0.05, 0.100, 0.22, 0.112)],
+                ),
+                OcrLine::new(
+                    "*S & B Wasabi".to_string(),
+                    vec![word("*S & B Wasabi", 0.08, 0.140, 0.260, 0.152)],
+                ),
+                OcrLine::new(
+                    "(E)ON SALE 1.98".to_string(),
+                    vec![
                         word("(E)ON SALE", 0.09, 0.160, 0.210, 0.172),
                         word("1.98", 0.88, 0.160, 0.93, 0.172),
                     ],
-                },
-                LineInput {
-                    text: "2 @ $0.99 4.59".to_string(),
-                    words: vec![
+                ),
+                OcrLine::new(
+                    "2 @ $0.99 4.59".to_string(),
+                    vec![
                         word("2 @ $0.99", 0.22, 0.180, 0.320, 0.192),
                         word("4.59", 0.88, 0.180, 0.93, 0.192),
                     ],
-                },
-                LineInput {
-                    text: "Hot Kid Honey Flavour Bal".to_string(),
-                    words: vec![word("Hot Kid Honey Flavour Bal", 0.08, 0.200, 0.360, 0.212)],
-                },
-                LineInput {
-                    text: "TOTAL 6.57".to_string(),
-                    words: vec![
+                ),
+                OcrLine::new(
+                    "Hot Kid Honey Flavour Bal".to_string(),
+                    vec![word("Hot Kid Honey Flavour Bal", 0.08, 0.200, 0.360, 0.212)],
+                ),
+                OcrLine::new(
+                    "TOTAL 6.57".to_string(),
+                    vec![
                         word("TOTAL", 0.09, 0.500, 0.180, 0.512),
                         word("6.57", 0.88, 0.500, 0.93, 0.512),
                     ],
-                },
+                ),
             ],
         };
 
-        let outcome = extract_spatial_items(vec![page]);
+        let outcome = extract_spatial_items(&page);
         let observed = outcome
             .items
             .into_iter()
@@ -2170,15 +2130,12 @@ mod tests {
     // Prices are ×10000 fixed-point (3.17 -> 31_700); the desktop asserts on Decimal.
     // The Rust spatial extractor takes no rule layers (categorization is a later stage).
 
-    fn line(text: &str, words: Vec<WordInput>) -> LineInput {
-        LineInput {
-            text: text.to_string(),
-            words,
-        }
+    fn line(text: &str, words: Vec<OcrWord>) -> OcrLine {
+        OcrLine::new(text, words)
     }
 
-    fn pairs_of(lines: Vec<LineInput>) -> Vec<(String, Money)> {
-        extract_spatial_items(vec![PageInput { lines }])
+    fn pairs_of(lines: Vec<OcrLine>) -> Vec<(String, Money)> {
+        extract_spatial_items(&OcrDocument { lines })
             .items
             .into_iter()
             .map(|item| (item.description, item.price))

@@ -26,6 +26,7 @@ pub mod merchant_match;
 pub(crate) mod merchant_vocab;
 pub mod money;
 pub(crate) mod ocr_confusion;
+pub mod ocr_document;
 pub(crate) mod ocr_line_grouping;
 pub mod ocr_transform;
 pub mod process;
@@ -44,10 +45,8 @@ pub(crate) mod spatial;
 // and `rules`, but whose defining modules are `pub(crate)`. Re-exported here so
 // callers can name what they are already required to pass.
 //
-// The nine below are the whole set — `unnameable_types` fails the build's
-// warning list if that stops being true. Note that seven of them are the OCR
-// input structs; Phase 2 of `beanbeaver_core_refactor_plan.md` collapses those
-// into one document type, and this block is the single place that then changes.
+// The two below are the whole set — `unnameable_types` fails the build's warning
+// list if that stops being true. It used to be nine, seven of them the OCR input
+// structs; Phase 2 of `beanbeaver_core_refactor_plan.md` collapsed those into
+// `ocr_document`, which is a `pub mod` and needs no re-export.
 pub use merchant_vocab::{Expansion, MerchantVocab};
-pub use receipt_parse_helpers::{MerchantLineInput, MerchantPageInput, MerchantWordInput};
-pub use receipt_spatial::{BboxInput, LineInput, PageInput, WordInput};

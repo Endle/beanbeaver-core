@@ -393,9 +393,7 @@ pub fn process_receipt_with_options(
     let ocr = transform(detections, padded_width, padded_height, padding);
 
     let parsed = parse_receipt(
-        &ocr.full_text,
-        &ocr.helper_pages,
-        &ocr.spatial_pages,
+        &ocr,
         rule_layers,
         image_filename,
         &merchants,

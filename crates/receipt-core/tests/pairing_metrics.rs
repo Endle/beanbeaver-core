@@ -116,9 +116,7 @@ fn run_dir(root: &Path, overrides: &[&str], label: &str) {
         let (dets, w, h) = detections_from_ocr(&raw);
         let ocr = transform(dets, w, h, PADDING);
         let p = parse_receipt(
-            &ocr.full_text,
-            &ocr.helper_pages,
-            &ocr.spatial_pages,
+            &ocr,
             &layers,
             &format!("{stem}.jpg"),
             &merchants,

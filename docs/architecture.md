@@ -141,6 +141,23 @@ consistent with the `resize_and_pad` that actually ran — a coupling the type
 system cannot check, and much of why `scan::process_image` is one shared
 function rather than a few lines repeated at each call site.
 
+### OCR document (inside `receipt-core`)
+
+```text
+OcrDocument { lines: [OcrLine { text, words: [OcrWord { text, bbox, confidence }], height, center_y }] }
+```
+
+What `ocr_transform` produces and `receipt_parser` consumes. Everything in it is
+normalized to `[0,1]` against the **de-padded** image, which is the other half of
+the coordinate-space contract above: pixels stop at `transform`, and nothing
+downstream of it needs the image dimensions again.
+
+One document, not three views of one. It used to be `full_text` plus a merchant
+page list plus a spatial page list, built in a single loop and passed as three
+positional parameters — so the parser had to check at runtime that the line
+counts still agreed before it could index one by the other. `full_text()` is now
+a method over the same lines, and that check is gone because it cannot fail.
+
 ### Parse result
 
 `ParsedReceiptData`: merchant (+ `MerchantMatch`), date, total/tax/subtotal, items (description, price, qty, category key, tags), warnings, tenders, raw text.
