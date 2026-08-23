@@ -1,17 +1,17 @@
 use std::collections::HashSet;
 
+use crate::categories;
+use crate::common::ReceiptWarningKind;
 use crate::date::Date;
+use crate::fields;
 use crate::money::Money;
-use crate::receipt_categories;
-use crate::receipt_common::ReceiptWarningKind;
-use crate::receipt_fields;
-use crate::receipt_parse_helpers;
-use crate::receipt_spatial;
-use crate::receipt_text;
+use crate::parse_helpers;
+use crate::spatial;
+use crate::text;
 
 #[derive(Clone, Debug)]
 pub struct ParserRuleLayers {
-    pub category_rules: receipt_categories::CategoryRuleLayers,
+    pub category_rules: categories::CategoryRuleLayers,
     pub account_mapping: Vec<(String, String)>,
     /// Per-merchant abbreviation tables, applied before classification so that
     /// a chain's fixed-width shorthand (`KS LIQ LNDRY`) can reach keywords that
@@ -115,7 +115,7 @@ fn resolve_account_target(
 
 fn categorize_description(description: &str, rule_layers: &ParserRuleLayers) -> Option<String> {
     let category_key =
-        receipt_categories::classify_item_key(description, &rule_layers.category_rules, None);
+        categories::classify_item_key(description, &rule_layers.category_rules, None);
     resolve_account_target(category_key.as_deref(), rule_layers, None)
 }
 
@@ -123,7 +123,7 @@ fn categorize_description(description: &str, rule_layers: &ParserRuleLayers) -> 
 /// sits upstream of the single beancount account `categorize_description`
 /// resolves. Classified from the same source string so the two agree.
 fn item_tags(description: &str, rule_layers: &ParserRuleLayers) -> Vec<String> {
-    receipt_categories::classify_item_tags(description, &rule_layers.category_rules)
+    categories::classify_item_tags(description, &rule_layers.category_rules)
 }
 
 /// Assemble one parsed item, applying the merchant's abbreviation vocabulary.
@@ -185,7 +185,7 @@ fn build_item(
         None => description,
     };
 
-    let account = receipt_categories::resolve_account_target(
+    let account = categories::resolve_account_target(
         category.as_deref(),
         &rule_layers.category_rules.account_mapping,
         None,
@@ -220,7 +220,7 @@ pub fn parse_receipt(
 
     // Rows standing in a print-grid column that never carries a price annotate
     // the item above them rather than being one (see
-    // `receipt_spatial::annotation_line_flags`). The verdict is geometric, so
+    // `spatial::annotation_line_flags`). The verdict is geometric, so
     // it has to be taken here: the text path below sees only strings, and the
     // chains this catches — Food Basics' `Saving 4.72` — word their annotations
     // in a vocabulary no keyword list has met yet.
@@ -234,7 +234,7 @@ pub fn parse_receipt(
     // unrepresentable. The `get` is not that check returning by another name —
     // it is bounds safety for the one way a hand-built document could still
     // break the 1:1 property, a line whose own text contains a newline.
-    let annotation_flags = receipt_spatial::annotation_line_flags(doc);
+    let annotation_flags = spatial::annotation_line_flags(doc);
     let item_lines: Vec<String> = full_text
         .lines()
         .enumerate()
@@ -244,7 +244,7 @@ pub fn parse_receipt(
         .map(str::to_string)
         .collect();
 
-    let merchant_match = receipt_parse_helpers::extract_merchant_match(
+    let merchant_match = parse_helpers::extract_merchant_match(
         &lines,
         full_text,
         doc,
@@ -257,15 +257,15 @@ pub fn parse_receipt(
     let vocab = merchant_match.canonical.as_deref().and_then(|canonical| {
         crate::merchant_vocab::for_merchant(canonical, &rule_layers.merchant_vocab)
     });
-    let parsed_date = receipt_fields::extract_date(&lines, full_text, current_year);
+    let parsed_date = fields::extract_date(&lines, full_text, current_year);
     let date = parsed_date;
     let date_is_placeholder = date.is_none();
-    // `receipt_fields` still returns raw i64 cents; convert once, here, so
+    // `fields` still returns raw i64 cents; convert once, here, so
     // nothing below this line carries an untyped amount.
-    let total_cents = Money::from_cents(receipt_fields::extract_total(&lines));
+    let total_cents = Money::from_cents(fields::extract_total(&lines));
     let tax_cents =
-        receipt_fields::extract_tax_reconciled(&lines, total_cents.cents()).map(Money::from_cents);
-    let subtotal_cents = receipt_fields::extract_subtotal(&lines).map(Money::from_cents);
+        fields::extract_tax_reconciled(&lines, total_cents.cents()).map(Money::from_cents);
+    let subtotal_cents = fields::extract_subtotal(&lines).map(Money::from_cents);
 
     let mut summary_amounts = HashSet::new();
     if total_cents != Money::ZERO {
@@ -279,14 +279,13 @@ pub fn parse_receipt(
     }
 
     let spatial_layout =
-        doc.has_useful_bbox_data() && receipt_parse_helpers::is_spatial_layout_receipt(full_text);
+        doc.has_useful_bbox_data() && parse_helpers::is_spatial_layout_receipt(full_text);
 
     let (items, mut warnings): (Vec<ParsedReceiptItem>, Vec<ParsedReceiptWarning>) =
         if spatial_layout {
-            let spatial_outcome = receipt_spatial::extract_spatial_items(doc);
+            let spatial_outcome = spatial::extract_spatial_items(doc);
             if spatial_outcome.items.is_empty() {
-                let (items, warnings) =
-                    receipt_text::extract_text_items(&item_lines, &summary_amounts);
+                let (items, warnings) = text::extract_text_items(&item_lines, &summary_amounts);
                 (
                     items
                         .into_iter()
@@ -338,7 +337,7 @@ pub fn parse_receipt(
                 )
             }
         } else {
-            let (items, warnings) = receipt_text::extract_text_items(&item_lines, &summary_amounts);
+            let (items, warnings) = text::extract_text_items(&item_lines, &summary_amounts);
             (
                 items
                     .into_iter()
@@ -378,7 +377,7 @@ pub fn parse_receipt(
         .collect();
 
     // Postings that overshoot the receipt total cannot balance, and until now
-    // nothing said so. `receipt_formatter` closes an *undershoot* with an
+    // nothing said so. `formatter` closes an *undershoot* with an
     // `Expenses:FIXME` remainder — the ordinary "we missed an item" case, 26 of
     // 125 corpus receipts — but has no answer for the other direction and
     // silently emits a transaction beancount will reject. Overshoot is always a
@@ -500,12 +499,11 @@ pub fn parse_receipt(
     //
     // Deliberately *only* a report. Which side is wrong is not recoverable from
     // the arithmetic (see `ReceiptWarningKind::TenderMismatch`), so the total
-    // stands as parsed and `receipt_formatter` keeps the entry balanced by
+    // stands as parsed and `formatter` keeps the entry balanced by
     // falling back to a single payment posting.
-    let tender_lines = receipt_fields::extract_tenders(&lines);
-    if !receipt_fields::tenders_reconcile(&lines, &tender_lines, total_cents.cents()) {
-        let net_cents =
-            Money::from_cents(receipt_fields::tendered_net_cents(&lines, &tender_lines));
+    let tender_lines = fields::extract_tenders(&lines);
+    if !fields::tenders_reconcile(&lines, &tender_lines, total_cents.cents()) {
+        let net_cents = Money::from_cents(fields::tendered_net_cents(&lines, &tender_lines));
         warnings.push(ParsedReceiptWarning {
             kind: ReceiptWarningKind::TenderMismatch,
             message: format!(
@@ -563,8 +561,8 @@ pub fn parse_receipt(
 #[cfg(test)]
 mod tests {
     use super::{is_unsigned_discount_line, item_tags};
+    use crate::common::ReceiptWarningKind;
     use crate::money::Money;
-    use crate::receipt_common::ReceiptWarningKind;
     use crate::rules::default_parser_rule_layers;
 
     #[test]
@@ -789,7 +787,7 @@ mod tests {
     #[test]
     fn does_not_warn_when_postings_merely_undershoot() {
         // The ordinary "we missed an item" case — 26 of 125 corpus receipts.
-        // `receipt_formatter` closes it with an `Expenses:FIXME` remainder, so
+        // `formatter` closes it with an `Expenses:FIXME` remainder, so
         // the transaction balances and there is nothing to report.
         let parsed = parse_text(
             "NOFRILLS\n\

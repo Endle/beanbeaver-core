@@ -3,7 +3,7 @@
 use regex::Regex;
 use std::sync::OnceLock;
 
-use crate::receipt_common::{WEIGHT_UNIT_AT_SEP, WEIGHT_UNIT_CLASS};
+use crate::common::{WEIGHT_UNIT_AT_SEP, WEIGHT_UNIT_CLASS};
 
 // Canadian grocery receipts mark items with one or more trailing single-letter
 // tax flags right after the price: H (HST), G (GST), P (PST), T (TAX),

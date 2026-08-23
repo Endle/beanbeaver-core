@@ -14,19 +14,19 @@
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+use receipt_core::common::ReceiptWarningKind as CoreWarningKind;
 use receipt_core::date::Date;
 use receipt_core::merchant_match::{
     MerchantMatch as CoreMerchantMatch, MerchantMatchStatus as CoreStatus,
 };
 use receipt_core::money::Money;
 use receipt_core::ocr_transform::RawDetection;
+use receipt_core::parser::{
+    ParsedReceiptData, ParsedReceiptItem, ParsedReceiptTender, ParsedReceiptWarning,
+};
 use receipt_core::process::{
     process_receipt_with_options, reformat_parsed_receipt, FieldConfidence, ProcessOptions,
     ProcessedReceipt, ReceiptCorrections,
-};
-use receipt_core::receipt_common::ReceiptWarningKind as CoreWarningKind;
-use receipt_core::receipt_parser::{
-    ParsedReceiptData, ParsedReceiptItem, ParsedReceiptTender, ParsedReceiptWarning,
 };
 use receipt_core::rules::RuleBook as CoreRuleBook;
 use scan::{process_image_timed, Engine as OcrEngine, ScanTimings as CoreScanTimings};
@@ -233,7 +233,7 @@ impl From<FieldConfidence> for FieldConfidences {
 }
 
 /// What a parser finding *is*, mirroring
-/// [`receipt_core::receipt_common::ReceiptWarningKind`] one-for-one.
+/// [`receipt_core::common::ReceiptWarningKind`] one-for-one.
 ///
 /// Carries no severity on purpose: the parser reports, the client ranks. A
 /// client is expected to `switch` with a fallback arm — variants are additive

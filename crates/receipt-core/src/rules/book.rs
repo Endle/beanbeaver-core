@@ -15,12 +15,12 @@
 use std::sync::OnceLock;
 
 use super::corpus;
-use crate::merchant_match::MerchantFamily;
-use crate::receipt_categories::{
+use crate::categories::{
     classify_item_key, classify_item_tags, list_item_categories, resolve_account_target,
     sorted_matches_for_debug, TagNode,
 };
-use crate::receipt_parser::ParserRuleLayers;
+use crate::merchant_match::MerchantFamily;
+use crate::parser::ParserRuleLayers;
 
 /// One item-classifier rule, as it exists *after* layering — priorities already
 /// boosted, account already resolved. This is a view of the engine's own
@@ -309,12 +309,12 @@ mod tests {
             let explained = book.explain(description);
             assert_eq!(
                 explained.category_key,
-                crate::receipt_categories::classify_item_key(description, layers, None),
+                crate::categories::classify_item_key(description, layers, None),
                 "category disagreed for {description:?}"
             );
             assert_eq!(
                 explained.tags,
-                crate::receipt_categories::classify_item_tags(description, layers),
+                crate::categories::classify_item_tags(description, layers),
                 "tags disagreed for {description:?}"
             );
             let winners: Vec<_> = explained

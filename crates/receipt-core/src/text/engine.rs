@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 use super::patterns::*;
 use super::types::*;
-use crate::receipt_common::ReceiptWarningKind;
+use crate::common::ReceiptWarningKind;
 
 pub(crate) fn normalize_decimal_spacing(text: &str) -> String {
     let bytes = text.as_bytes();

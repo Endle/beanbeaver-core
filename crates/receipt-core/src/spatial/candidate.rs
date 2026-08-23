@@ -1,5 +1,12 @@
+//! Which row a price belongs to, when several are eligible.
+//!
+//! Its own file because it is the one choice in this module worth
+//! testing in isolation: the inputs are five booleans and a y, and the
+//! tie-breaks between them are what a mis-paired price usually turns out
+//! to be.
+
 #[derive(Clone, Debug)]
-pub struct SpatialLineCandidate {
+pub(crate) struct SpatialLineCandidate {
     line_y: f64,
     is_used: bool,
     is_valid_item_line: bool,
@@ -27,7 +34,7 @@ impl SpatialLineCandidate {
 
 const SPATIAL_FLOAT_EPSILON: f64 = 1e-6;
 
-pub fn select_spatial_item_line(
+pub(crate) fn select_spatial_item_line(
     price_y: f64,
     y_tolerance: f64,
     max_item_distance: f64,

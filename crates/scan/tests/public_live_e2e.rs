@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ocr_paddle::engine::OcrEngine;
-use receipt_core::receipt_categories::resolve_account_target;
+use receipt_core::categories::resolve_account_target;
 use receipt_core::rules::default_parser_rule_layers;
 use scan::process_image;
 use serde_json::Value;

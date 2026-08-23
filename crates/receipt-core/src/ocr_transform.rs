@@ -3,7 +3,7 @@
 //!
 //! Input: raw PaddleOCR detections (padded-image pixel coordinates). Output: one
 //! [`OcrDocument`] — the line/word grouping, normalized to `[0,1]` against the
-//! de-padded image, that `receipt_parser::parse_receipt` consumes.
+//! de-padded image, that `parser::parse_receipt` consumes.
 
 use crate::detection_normalization::{
     deskew, filter_bob_markers, filter_low_quality, sort_reading_order, Detection,
