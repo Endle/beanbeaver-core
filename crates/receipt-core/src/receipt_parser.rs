@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::money::Money;
 use crate::receipt_categories;
 use crate::receipt_common::ReceiptWarningKind;
 use crate::receipt_fields;
@@ -20,7 +21,7 @@ pub struct ParserRuleLayers {
 #[derive(Clone, Debug)]
 pub struct ParsedReceiptItem {
     pub description: String,
-    pub price: String,
+    pub price: Money,
     pub quantity: i32,
     /// The winning rule's declared tag path (`grocery/dairy`), or `None`.
     pub category: Option<String>,
@@ -45,7 +46,7 @@ pub struct ParsedReceiptWarning {
 
 #[derive(Clone, Debug)]
 pub struct ParsedReceiptTender {
-    pub amount: String,
+    pub amount: Money,
     pub account: Option<String>,
     pub kind: String,
     pub raw_label: String,
@@ -61,10 +62,10 @@ pub struct ParsedReceiptData {
     pub merchant_match: crate::merchant_match::MerchantMatch,
     pub date: Option<(i32, u32, u32)>,
     pub date_is_placeholder: bool,
-    pub total: String,
+    pub total: Money,
     pub items: Vec<ParsedReceiptItem>,
-    pub tax: Option<String>,
-    pub subtotal: Option<String>,
+    pub tax: Option<Money>,
+    pub subtotal: Option<Money>,
     pub raw_text: String,
     pub image_filename: String,
     pub warnings: Vec<ParsedReceiptWarning>,
@@ -84,20 +85,6 @@ fn is_unsigned_discount_line(description: &str) -> bool {
         return false;
     }
     upper.contains("SAVINGS")
-}
-
-fn cents_to_fixed(value: i64) -> String {
-    let sign = if value < 0 { "-" } else { "" };
-    let abs = value.abs();
-    format!("{sign}{}.{:02}", abs / 100, abs % 100)
-}
-
-fn scaled_to_fixed(value: i64, scale: i64) -> String {
-    let sign = if value < 0 { "-" } else { "" };
-    let abs = value.abs();
-    let whole = abs / scale;
-    let frac = abs % scale;
-    format!("{sign}{whole}.{:04}", frac)
 }
 
 fn resolve_account_target(
@@ -149,7 +136,7 @@ fn item_tags(description: &str, rule_layers: &ParserRuleLayers) -> Vec<String> {
 /// resolved — every expansion is a no-op and this is exactly the old behavior.
 fn build_item(
     description: String,
-    price: String,
+    price: Money,
     quantity: i32,
     category_source: &str,
     rule_layers: &ParserRuleLayers,
@@ -270,12 +257,15 @@ pub fn parse_receipt(
     let parsed_date = receipt_fields::extract_date(&lines, full_text, current_year);
     let date = parsed_date.map(|value| (value.year, value.month, value.day));
     let date_is_placeholder = date.is_none();
-    let total_cents = receipt_fields::extract_total(&lines);
-    let tax_cents = receipt_fields::extract_tax_reconciled(&lines, total_cents);
-    let subtotal_cents = receipt_fields::extract_subtotal(&lines);
+    // `receipt_fields` still returns raw i64 cents; convert once, here, so
+    // nothing below this line carries an untyped amount.
+    let total_cents = Money::from_cents(receipt_fields::extract_total(&lines));
+    let tax_cents =
+        receipt_fields::extract_tax_reconciled(&lines, total_cents.cents()).map(Money::from_cents);
+    let subtotal_cents = receipt_fields::extract_subtotal(&lines).map(Money::from_cents);
 
     let mut summary_amounts = HashSet::new();
-    if total_cents != 0 {
+    if total_cents != Money::ZERO {
         summary_amounts.insert(total_cents);
     }
     if let Some(tax_cents) = tax_cents {
@@ -301,7 +291,7 @@ pub fn parse_receipt(
                         .map(|item| {
                             build_item(
                                 item.description.clone(),
-                                cents_to_fixed(item.price_cents),
+                                item.price,
                                 item.quantity,
                                 &item.category_source,
                                 rule_layers,
@@ -326,7 +316,7 @@ pub fn parse_receipt(
                         .map(|item| {
                             build_item(
                                 item.description.clone(),
-                                scaled_to_fixed(item.price_scaled, 10_000),
+                                item.price,
                                 1,
                                 &item.description,
                                 rule_layers,
@@ -353,7 +343,7 @@ pub fn parse_receipt(
                     .map(|item| {
                         build_item(
                             item.description.clone(),
-                            cents_to_fixed(item.price_cents),
+                            item.price,
                             item.quantity,
                             &item.category_source,
                             rule_layers,
@@ -378,8 +368,8 @@ pub fn parse_receipt(
     let items: Vec<ParsedReceiptItem> = items
         .into_iter()
         .map(|mut item| {
-            if !item.price.starts_with('-') && is_unsigned_discount_line(&item.description) {
-                item.price = format!("-{}", item.price);
+            if !item.price.is_negative() && is_unsigned_discount_line(&item.description) {
+                item.price = -item.price;
             }
             item
         })
@@ -401,19 +391,14 @@ pub fn parse_receipt(
     //
     // Items alone are enough to know a total was expected. A genuinely zero
     // receipt has nothing to post, so it never reaches here with items in hand.
-    if total_cents == 0 && !items.is_empty() {
+    if total_cents == Money::ZERO && !items.is_empty() {
         warnings.push(ParsedReceiptWarning {
             kind: ReceiptWarningKind::ImplausibleSummary,
             message: format!(
                 "no receipt total could be read, but {} item{} parsed totalling {} — the entry cannot be trusted to balance",
                 items.len(),
                 if items.len() == 1 { " was" } else { "s were" },
-                cents_to_fixed(
-                    items
-                        .iter()
-                        .map(|item| crate::receipt_formatter::decimal_to_cents(&item.price))
-                        .sum::<i64>()
-                ),
+                items.iter().map(|item| item.price).sum::<Money>(),
             ),
             after_item_index: None,
         });
@@ -430,33 +415,30 @@ pub fn parse_receipt(
     // real fix is in grouping. Zero is excluded: a genuinely untaxed receipt
     // prints 0.00 for both, and that is a fact rather than a fault.
     if let (Some(subtotal), Some(tax)) = (subtotal_cents, tax_cents) {
-        if subtotal == tax && subtotal != 0 {
+        if subtotal == tax && subtotal != Money::ZERO {
             warnings.push(ParsedReceiptWarning {
                 kind: ReceiptWarningKind::ImplausibleSummary,
                 message: format!(
                     "subtotal and tax both read {} — they cannot both be right, so one of the summary amounts is misread",
-                    cents_to_fixed(subtotal),
+                    subtotal,
                 ),
                 after_item_index: None,
             });
         }
     }
 
-    if total_cents > 0 {
-        let posted_cents = items
-            .iter()
-            .map(|item| crate::receipt_formatter::decimal_to_cents(&item.price))
-            .sum::<i64>()
-            + tax_cents.unwrap_or(0);
+    if total_cents > Money::ZERO {
+        let posted_cents =
+            items.iter().map(|item| item.price).sum::<Money>() + tax_cents.unwrap_or(Money::ZERO);
         if posted_cents > total_cents {
             warnings.push(ParsedReceiptWarning {
                 kind: ReceiptWarningKind::TotalMismatch,
                 message: format!(
                     "items{} total {} but the receipt total is {} — {} too much, so this transaction will not balance",
                     if tax_cents.is_some() { " and tax" } else { "" },
-                    cents_to_fixed(posted_cents),
-                    cents_to_fixed(total_cents),
-                    cents_to_fixed(posted_cents - total_cents),
+                    posted_cents,
+                    total_cents,
+                    posted_cents - total_cents,
                 ),
                 after_item_index: None,
             });
@@ -484,10 +466,10 @@ pub fn parse_receipt(
         // disagree is what removes the entire sub-dollar noise band — every
         // 9c/10c/15c/20c case in the corpus lands in the third bucket.
         if let Some(subtotal_cents) = subtotal_cents {
-            let items_cents = posted_cents - tax_cents.unwrap_or(0);
+            let items_cents = posted_cents - tax_cents.unwrap_or(Money::ZERO);
             let item_block_delta = items_cents - subtotal_cents;
-            if item_block_delta != 0 && posted_cents != total_cents {
-                let (verb, amount) = if item_block_delta < 0 {
+            if item_block_delta != Money::ZERO && posted_cents != total_cents {
+                let (verb, amount) = if item_block_delta < Money::ZERO {
                     ("short of", -item_block_delta)
                 } else {
                     ("more than", item_block_delta)
@@ -496,11 +478,11 @@ pub fn parse_receipt(
                     kind: ReceiptWarningKind::SubtotalMismatch,
                     message: format!(
                         "items total {}, {} the receipt's subtotal of {} by {} — a line was probably {}",
-                        cents_to_fixed(items_cents),
+                        items_cents,
                         verb,
-                        cents_to_fixed(subtotal_cents),
-                        cents_to_fixed(amount),
-                        if item_block_delta < 0 { "missed" } else { "counted twice" },
+                        subtotal_cents,
+                        amount,
+                        if item_block_delta < Money::ZERO { "missed" } else { "counted twice" },
                     ),
                     after_item_index: None,
                 });
@@ -519,15 +501,16 @@ pub fn parse_receipt(
     // stands as parsed and `receipt_formatter` keeps the entry balanced by
     // falling back to a single payment posting.
     let tender_lines = receipt_fields::extract_tenders(&lines);
-    if !receipt_fields::tenders_reconcile(&lines, &tender_lines, total_cents) {
-        let net_cents = receipt_fields::tendered_net_cents(&lines, &tender_lines);
+    if !receipt_fields::tenders_reconcile(&lines, &tender_lines, total_cents.cents()) {
+        let net_cents =
+            Money::from_cents(receipt_fields::tendered_net_cents(&lines, &tender_lines));
         warnings.push(ParsedReceiptWarning {
             kind: ReceiptWarningKind::TenderMismatch,
             message: format!(
                 "payment lines account for {} but the receipt total is {} — {} unaccounted for, so one of the two is misread",
-                cents_to_fixed(net_cents),
-                cents_to_fixed(total_cents),
-                cents_to_fixed((net_cents - total_cents).abs()),
+                net_cents,
+                total_cents,
+                (net_cents - total_cents).abs(),
             ),
             after_item_index: None,
         });
@@ -552,7 +535,7 @@ pub fn parse_receipt(
     let tenders = tender_lines
         .into_iter()
         .map(|tender| ParsedReceiptTender {
-            amount: cents_to_fixed(tender.amount_cents),
+            amount: Money::from_cents(tender.amount_cents),
             account: None,
             kind: tender.kind.to_string(),
             raw_label: tender.raw_label,
@@ -564,10 +547,10 @@ pub fn parse_receipt(
         merchant_match,
         date,
         date_is_placeholder,
-        total: cents_to_fixed(total_cents),
+        total: total_cents,
         items,
-        tax: tax_cents.map(cents_to_fixed),
-        subtotal: subtotal_cents.map(cents_to_fixed),
+        tax: tax_cents,
+        subtotal: subtotal_cents,
         raw_text: full_text.to_string(),
         image_filename: image_filename.to_string(),
         warnings,
@@ -577,7 +560,8 @@ pub fn parse_receipt(
 
 #[cfg(test)]
 mod tests {
-    use super::{cents_to_fixed, is_unsigned_discount_line, item_tags};
+    use super::{is_unsigned_discount_line, item_tags};
+    use crate::money::Money;
     use crate::receipt_common::ReceiptWarningKind;
     use crate::rules::default_parser_rule_layers;
 
@@ -635,7 +619,8 @@ mod tests {
         );
 
         assert_eq!(
-            parsed.total, "0.00",
+            parsed.total,
+            Money::from_decimal_str("0.00"),
             "fixture must reach the zero-total path"
         );
         assert!(!parsed.items.is_empty(), "fixture must parse items");
@@ -720,7 +705,7 @@ mod tests {
              TOTAL 26.25\n",
         );
 
-        assert_eq!(parsed.total, "26.25");
+        assert_eq!(parsed.total, Money::from_decimal_str("26.25"));
         let balance: Vec<_> = parsed
             .warnings
             .iter()
@@ -732,16 +717,16 @@ mod tests {
         // numbers copied from one scan: the text path reaches a different item
         // set than the spatial one, and a warning that misreports the amounts
         // would be worse than no warning at all.
-        let posted: i64 = parsed
-            .items
-            .iter()
-            .map(|item| crate::receipt_formatter::decimal_to_cents(&item.price))
-            .sum();
+        let posted: i64 = parsed.items.iter().map(|item| item.price.cents()).sum();
         assert!(posted > 2_625, "fixture should overshoot, posted {posted}");
         assert!(
-            balance[0].message.contains(&cents_to_fixed(posted))
+            balance[0]
+                .message
+                .contains(&Money::from_cents(posted).to_string())
                 && balance[0].message.contains("26.25")
-                && balance[0].message.contains(&cents_to_fixed(posted - 2_625)),
+                && balance[0]
+                    .message
+                    .contains(&Money::from_cents(posted - 2_625).to_string()),
             "message should name the posted total, the receipt total and the gap: {}",
             balance[0].message
         );
@@ -803,7 +788,7 @@ mod tests {
              TOTAL 26.25\n",
         );
 
-        assert_eq!(parsed.total, "26.25");
+        assert_eq!(parsed.total, Money::from_decimal_str("26.25"));
         assert!(
             !parsed
                 .warnings
@@ -916,7 +901,7 @@ mod tests {
             .iter()
             .find(|i| i.description.contains("TPD/"))
             .expect("the discount line is an item");
-        assert_eq!(discount.price, "-4.00");
+        assert_eq!(discount.price, Money::from_decimal_str("-4.00"));
         assert_eq!(discount.tags, vec!["discount"]);
         assert_eq!(discount.account.as_deref(), Some("Expenses:Discount"));
     }

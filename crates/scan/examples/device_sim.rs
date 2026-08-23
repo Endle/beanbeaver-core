@@ -27,6 +27,7 @@
 //! Compares against a sibling `<stem>.expected.json` when present (same schema
 //! as tests/test_e2e_receipts.py: merchant / date / total / critical_items).
 
+use receipt_core::money::Money;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -560,7 +561,7 @@ fn run_attrib(engine: &mut OcrEngine, path: &Path) {
                     .unwrap_or_default();
                 let price = ci.get("price").and_then(Value::as_str).unwrap_or_default();
                 let parser_ok = d.items.iter().any(|it| {
-                    item_desc_matches(&it.description, desc) && price_matches(price, &it.price)
+                    item_desc_matches(&it.description, desc) && price_matches(price, it.price)
                 });
                 if parser_ok {
                     continue;
@@ -611,7 +612,7 @@ fn run_attrib(engine: &mut OcrEngine, path: &Path) {
 
         // ---- total ----
         if let Some(exp) = expected.get("total").and_then(Value::as_str) {
-            if !price_matches(exp, &d.total) {
+            if !price_matches(exp, d.total) {
                 total_fail += 1;
                 let key = digits(exp);
                 let cause = match desk
@@ -1305,7 +1306,7 @@ fn score(
     let total_ok = expected
         .get("total")
         .and_then(Value::as_str)
-        .map_or(true, |t| price_matches(t, &d.total));
+        .map_or(true, |t| price_matches(t, d.total));
 
     // Opt-in arithmetic/shape checks. `line_item_count` is the only one that
     // can see a line the parser invented or dropped — `critical_items` is a
@@ -1317,15 +1318,11 @@ fn score(
     let subtotal_ok = expected
         .get("subtotal")
         .and_then(Value::as_str)
-        .map(|want| {
-            d.subtotal
-                .as_deref()
-                .is_some_and(|a| price_matches(want, a))
-        });
+        .map(|want| d.subtotal.is_some_and(|a| price_matches(want, a)));
     let tax_ok = expected
         .get("tax")
         .and_then(Value::as_str)
-        .map(|want| d.tax.as_deref().is_some_and(|a| price_matches(want, a)));
+        .map(|want| d.tax.is_some_and(|a| price_matches(want, a)));
 
     let mut items_ok = 0;
     let mut items_total = 0;
@@ -1354,11 +1351,11 @@ fn score(
                 .iter()
                 .filter(|it| item_desc_matches(&it.description, desc))
                 .collect();
-            let ok = matched.iter().any(|it| price_matches(price, &it.price))
+            let ok = matched.iter().any(|it| price_matches(price, it.price))
                 && category.map_or(true, |cat| {
                     matched
                         .iter()
-                        .filter(|it| price_matches(price, &it.price))
+                        .filter(|it| price_matches(price, it.price))
                         .any(|it| {
                             it.category
                                 .as_deref()
@@ -1382,7 +1379,7 @@ fn score(
         name: name.to_string(),
         merchant: d.merchant.clone(),
         date: fmt_date(d.date),
-        total_got: d.total.clone(),
+        total_got: d.total.to_string(),
         merchant_ok,
         date_ok,
         total_ok,
@@ -1430,11 +1427,12 @@ fn merchant_matches(expected: &str, actual: &str) -> bool {
     (maxlen - levenshtein(e.as_bytes(), a.as_bytes())) as f64 / maxlen as f64 >= 0.85
 }
 
-fn price_matches(expected: &str, actual: &str) -> bool {
-    match (expected.parse::<f64>(), actual.parse::<f64>()) {
-        (Ok(e), Ok(a)) => (e - a).abs() < 0.005,
-        _ => expected == actual,
-    }
+/// Exact. This was float-tolerant (`|e - a| < 0.005`) for as long as the
+/// spatial path rendered `"6.9700"` where the fixture said `"6.97"`. `Money`
+/// removed the second format, and the scorecard is byte-identical with the
+/// tolerance gone — which is the evidence that only one format is emitted now.
+fn price_matches(expected: &str, actual: Money) -> bool {
+    Money::from_decimal_str(expected) == actual
 }
 
 fn normalize_item(s: &str) -> String {

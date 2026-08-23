@@ -7,6 +7,7 @@
 //! (`ocr_helpers.transform_paddleocr_result` + `ocr_result_parser.parse_receipt`
 //! + `formatter.format_parsed_receipt`).
 
+use crate::money::Money;
 use std::borrow::Cow;
 
 use crate::merchant_match::{MerchantFamily, MerchantMatch, MerchantMatchStatus};
@@ -92,51 +93,6 @@ pub struct ReceiptCorrections {
 /// matching Python's `Decimal.__format__(".2f")` that the formatter glue applies
 /// to item prices, total, and tax. Inputs are well-formed fixed-point strings
 /// (e.g. "12.34" from cents, "1.2345" from the scaled spatial path).
-fn to_fixed_2(value: &str) -> String {
-    let negative = value.starts_with('-');
-    let digits = value.trim_start_matches('-');
-    let (int_part, frac_part) = match digits.split_once('.') {
-        Some((i, f)) => (i, f),
-        None => (digits, ""),
-    };
-
-    // Build an integer at the source scale, then round to scale 2.
-    let int_value: i128 = int_part.parse().unwrap_or(0);
-    let scale = frac_part.len();
-    let frac_value: i128 = if frac_part.is_empty() {
-        0
-    } else {
-        frac_part.parse().unwrap_or(0)
-    };
-    let scale_pow = 10_i128.pow(scale as u32);
-    let total = int_value * scale_pow + frac_value;
-
-    let rounded_hundredths: i128 = if scale <= 2 {
-        total * 10_i128.pow((2 - scale) as u32)
-    } else {
-        let divisor = 10_i128.pow((scale - 2) as u32);
-        let q = total / divisor;
-        let r = total % divisor;
-        let half = divisor / 2;
-        if r > half || (r == half && q % 2 != 0) {
-            q + 1
-        } else {
-            q
-        }
-    };
-
-    let sign = if negative && rounded_hundredths != 0 {
-        "-"
-    } else {
-        ""
-    };
-    format!(
-        "{sign}{}.{:02}",
-        rounded_hundredths / 100,
-        rounded_hundredths % 100
-    )
-}
-
 fn date_iso(parsed: &ParsedReceiptData, today: (i32, u32, u32)) -> String {
     match parsed.date {
         Some((y, m, d)) => format!("{y:04}-{m:02}-{d:02}"),
@@ -144,14 +100,6 @@ fn date_iso(parsed: &ParsedReceiptData, today: (i32, u32, u32)) -> String {
         // first day of the current (reference) month.
         None => format!("{:04}-{:02}-01", today.0, today.1),
     }
-}
-
-fn parse_money_cents(value: &str) -> Option<i64> {
-    let fixed = to_fixed_2(value);
-    let neg = fixed.starts_with('-');
-    let digits = fixed.trim_start_matches('-').replace('.', "");
-    let cents: i64 = digits.parse().ok()?;
-    Some(if neg { -cents } else { cents })
 }
 
 /// Compute review-oriented confidences from a parsed receipt.
@@ -175,18 +123,10 @@ pub fn field_confidence(parsed: &ParsedReceiptData) -> FieldConfidence {
         0.0
     };
 
-    let total = match parse_money_cents(&parsed.total) {
+    let total = match Some(parsed.total.cents()) {
         Some(total_cents) if total_cents != 0 || !parsed.items.is_empty() => {
-            let items_sum: i64 = parsed
-                .items
-                .iter()
-                .filter_map(|it| parse_money_cents(&it.price))
-                .sum();
-            let tax_cents = parsed
-                .tax
-                .as_deref()
-                .and_then(parse_money_cents)
-                .unwrap_or(0);
+            let items_sum: i64 = parsed.items.iter().map(|it| it.price.cents()).sum();
+            let tax_cents = parsed.tax.map(Money::cents).unwrap_or(0);
             let combined = items_sum + tax_cents;
             if total_cents == 0 {
                 0.5
@@ -345,8 +285,8 @@ fn format_from_parsed(
         merchant: merchant.clone(),
         date_iso: date_iso_str.clone(),
         date_is_placeholder,
-        total: to_fixed_2(&parsed.total),
-        tax: parsed.tax.as_deref().map(to_fixed_2),
+        total: parsed.total,
+        tax: parsed.tax,
         image_filename: parsed.image_filename.clone(),
         raw_text: parsed.raw_text.clone(),
         items: parsed
@@ -355,7 +295,7 @@ fn format_from_parsed(
             .zip(&item_accounts)
             .map(|(item, account)| FormatterItemInput {
                 description: item.description.clone(),
-                price: to_fixed_2(&item.price),
+                price: item.price,
                 quantity: item.quantity,
                 posting_account: account.clone(),
             })
@@ -375,7 +315,7 @@ fn format_from_parsed(
             .tenders
             .iter()
             .map(|tender| FormatterTenderInput {
-                amount: to_fixed_2(&tender.amount),
+                amount: tender.amount,
                 account: tender.account.clone(),
                 kind: tender.kind.clone(),
             })
@@ -580,18 +520,6 @@ pub fn override_item_account(items: &mut [ParsedReceiptItem], index: usize, acco
 mod tests {
     use super::*;
     use crate::merchant_match::{MerchantMatch, MerchantMatchStatus};
-
-    #[test]
-    fn rounds_half_even_like_python_decimal() {
-        assert_eq!(to_fixed_2("12.34"), "12.34");
-        assert_eq!(to_fixed_2("1.2345"), "1.23"); // 4->5 at third place rounds down to even
-        assert_eq!(to_fixed_2("1.2355"), "1.24"); // half rounds to even (4)
-        assert_eq!(to_fixed_2("1.2350"), "1.24"); // exactly half -> even
-        assert_eq!(to_fixed_2("1.2250"), "1.22"); // exactly half -> even
-        assert_eq!(to_fixed_2("0.005"), "0.00"); // half -> even (0)
-        assert_eq!(to_fixed_2("-5.00"), "-5.00");
-        assert_eq!(to_fixed_2("3"), "3.00");
-    }
 
     fn sample_parsed() -> ParsedReceiptData {
         ParsedReceiptData {

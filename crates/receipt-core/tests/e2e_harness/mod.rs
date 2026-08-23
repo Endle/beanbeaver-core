@@ -12,6 +12,7 @@
 
 #![allow(dead_code)] // each test binary uses only the entry point it needs
 
+use receipt_core::money::Money;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -67,12 +68,13 @@ fn merchant_matches(expected: &str, actual: &str) -> bool {
     (maxlen - levenshtein(e.as_bytes(), a.as_bytes())) as f64 / maxlen as f64 >= 0.85
 }
 
-/// Decimal-equal (expected "6.97" vs parsed "6.9700").
-fn price_matches(expected: &str, actual: &str) -> bool {
-    match (expected.parse::<f64>(), actual.parse::<f64>()) {
-        (Ok(e), Ok(a)) => (e - a).abs() < 0.005,
-        _ => expected == actual,
-    }
+/// Exact. This used to be float-tolerant (`|e - a| < 0.005`) because the
+/// spatial path rendered `"6.9700"` where the fixture said `"6.97"`. `Money`
+/// removed the second format, so the tolerance has nothing left to absorb and
+/// its removal is the proof of that: if this ever needs loosening again,
+/// something has started emitting two formats.
+fn price_matches(expected: &str, actual: Money) -> bool {
+    Money::from_decimal_str(expected) == actual
 }
 
 /// Case-insensitive substring either way (the Python cached item/desc match).
@@ -347,7 +349,7 @@ pub fn run_cached_corpus_in(
 
         // total (exact/decimal) — always checked
         if let Some(t) = expected.get("total").and_then(Value::as_str) {
-            if !price_matches(t, &parsed.total) {
+            if !price_matches(t, parsed.total) {
                 failed.insert("total");
                 if !known.contains("total") {
                     case_fail.push(format!("total expected '{t}', got '{}'", parsed.total));
@@ -363,7 +365,7 @@ pub fn run_cached_corpus_in(
             let Some(want) = expected.get(key).and_then(Value::as_str) else {
                 continue;
             };
-            let ok = actual.as_deref().is_some_and(|a| price_matches(want, a));
+            let ok = actual.is_some_and(|a| price_matches(want, a));
             if !ok {
                 failed.insert(key);
                 if !known.contains(key) {
@@ -428,11 +430,11 @@ pub fn run_cached_corpus_in(
                     .iter()
                     .filter(|it| item_desc_matches(&it.description, desc))
                     .collect();
-                let price_ok = matched.iter().any(|it| price_matches(price, &it.price));
+                let price_ok = matched.iter().any(|it| price_matches(price, it.price));
                 let cat_ok = want_cat.map_or(true, |c| {
                     matched
                         .iter()
-                        .filter(|it| price_matches(price, &it.price))
+                        .filter(|it| price_matches(price, it.price))
                         .any(|it| {
                             it.category
                                 .as_deref()
@@ -446,7 +448,7 @@ pub fn run_cached_corpus_in(
                         .map(|it| {
                             (
                                 it.description.as_str(),
-                                it.price.as_str(),
+                                it.price.to_string(),
                                 it.category.as_deref(),
                             )
                         })
@@ -500,7 +502,7 @@ pub fn run_cached_corpus_in(
                 let entry_failed = match got {
                     None => true,
                     Some(t) => {
-                        !price_matches(want_amount, &t.amount)
+                        !price_matches(want_amount, t.amount)
                             || want_kind.is_some_and(|k| k != t.kind)
                     }
                 };

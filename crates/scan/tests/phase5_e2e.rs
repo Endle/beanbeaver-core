@@ -24,6 +24,7 @@
 //! can't satisfy are tracked append-only in `KNOWN_ON_DEVICE_GAPS` — the public
 //! `expected.json` is the desktop baseline and is never weakened here.
 
+use receipt_core::money::Money;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -106,11 +107,8 @@ fn merchant_matches(expected: &str, actual: &str) -> bool {
 }
 
 /// Decimal-equal (expected "6.97" vs on-device "6.9700").
-fn price_matches(expected: &str, actual: &str) -> bool {
-    match (expected.parse::<f64>(), actual.parse::<f64>()) {
-        (Ok(e), Ok(a)) => (e - a).abs() < 0.005,
-        _ => expected == actual,
-    }
+fn price_matches(expected: &str, actual: Money) -> bool {
+    Money::from_decimal_str(expected) == actual
 }
 
 /// Case-insensitive substring either way.
@@ -225,7 +223,7 @@ fn phase5_on_device_vs_expected() {
         }
 
         if let Some(t) = expected.get("total").and_then(Value::as_str) {
-            if !price_matches(t, &d.total) {
+            if !price_matches(t, d.total) {
                 if KNOWN_ON_DEVICE_GAPS.contains(&(name.as_str(), "@total")) {
                     known_gaps += 1;
                     eprintln!("  ~ {name}: known gap @total ('{t}' vs '{}')", d.total);
@@ -268,11 +266,11 @@ fn phase5_on_device_vs_expected() {
                     .iter()
                     .filter(|it| item_desc_matches(&it.description, desc))
                     .collect();
-                let item_ok = matched.iter().any(|it| price_matches(price, &it.price))
+                let item_ok = matched.iter().any(|it| price_matches(price, it.price))
                     && category.is_none_or(|cat| {
                         matched
                             .iter()
-                            .filter(|it| price_matches(price, &it.price))
+                            .filter(|it| price_matches(price, it.price))
                             .any(|it| {
                                 it.category
                                     .as_deref()
@@ -295,7 +293,7 @@ fn phase5_on_device_vs_expected() {
                 }
                 let got: Vec<_> = matched
                     .iter()
-                    .map(|it| (it.description.as_str(), it.price.as_str()))
+                    .map(|it| (it.description.as_str(), it.price.to_string()))
                     .collect();
                 fail(format!(
                     "item '{desc}' (price {price}, cat {category:?}) unmatched; candidates {got:?}"

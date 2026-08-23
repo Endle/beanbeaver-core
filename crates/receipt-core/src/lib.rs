@@ -23,6 +23,7 @@
 pub(crate) mod detection_normalization;
 pub mod merchant_match;
 pub(crate) mod merchant_vocab;
+pub mod money;
 pub(crate) mod ocr_confusion;
 pub(crate) mod ocr_line_grouping;
 pub mod ocr_transform;

@@ -27,6 +27,7 @@
 //! `cargo test -p ocr-paddle` stays green without `models/` provisioned. CI
 //! downloads them from the `ocr-models-v2` release first.
 
+use receipt_core::money::Money;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -121,11 +122,8 @@ fn merchant_matches_hard(expected: &str, actual: &str) -> bool {
 }
 
 /// Decimal-equal (expected "6.97" vs on-device "6.9700").
-fn price_matches(expected: &str, actual: &str) -> bool {
-    match (expected.parse::<f64>(), actual.parse::<f64>()) {
-        (Ok(e), Ok(a)) => (e - a).abs() < 0.005,
-        _ => expected == actual,
-    }
+fn price_matches(expected: &str, actual: Money) -> bool {
+    Money::from_decimal_str(expected) == actual
 }
 
 /// Uppercase, collapse letter-O / digit-0, strip a leading item code, drop spaces.
@@ -308,7 +306,7 @@ fn public_live_e2e() {
                 d.merchant
             );
             assert!(
-                price_matches(t, &d.total),
+                price_matches(t, d.total),
                 "{name}: HARD total expected '{t}', got '{}'",
                 d.total
             );
@@ -331,7 +329,7 @@ fn public_live_e2e() {
             }
         }
         if let Some(t) = expected.get("total").and_then(Value::as_str) {
-            if !hard && !price_matches(t, &d.total) {
+            if !hard && !price_matches(t, d.total) {
                 warn(format!("total expected '{t}', got '{}'", d.total));
             }
         }
@@ -348,11 +346,11 @@ fn public_live_e2e() {
                     .iter()
                     .filter(|it| item_desc_matches(&it.description, desc))
                     .collect();
-                let price_ok = matched.iter().any(|it| price_matches(price, &it.price));
+                let price_ok = matched.iter().any(|it| price_matches(price, it.price));
                 let cat_ok = want_cat.is_none_or(|c| {
                     matched
                         .iter()
-                        .filter(|it| price_matches(price, &it.price))
+                        .filter(|it| price_matches(price, it.price))
                         .any(|it| {
                             it.category
                                 .as_deref()

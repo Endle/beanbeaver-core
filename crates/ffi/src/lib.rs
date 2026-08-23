@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use receipt_core::merchant_match::{
     MerchantMatch as CoreMerchantMatch, MerchantMatchStatus as CoreStatus,
 };
+use receipt_core::money::Money;
 use receipt_core::ocr_transform::RawDetection;
 use receipt_core::process::{
     process_receipt_with_options, reformat_parsed_receipt, FieldConfidence, ProcessOptions,
@@ -877,15 +878,16 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
         merchant_match: d.merchant_match.into(),
         date: d.date.map(|(y, m, day)| format!("{y:04}-{m:02}-{day:02}")),
         date_is_placeholder: d.date_is_placeholder,
-        total: d.total,
-        tax: d.tax,
-        subtotal: d.subtotal,
+        // The FFI seam is the only place money becomes text.
+        total: d.total.to_string(),
+        tax: d.tax.map(|m| m.to_string()),
+        subtotal: d.subtotal.map(|m| m.to_string()),
         items: d
             .items
             .into_iter()
             .map(|i| ReceiptItem {
                 description: i.description,
-                price: i.price,
+                price: i.price.to_string(),
                 quantity: i.quantity,
                 account: i.account,
                 tags: i
@@ -909,7 +911,7 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
             .tenders
             .into_iter()
             .map(|t| ReceiptTender {
-                amount: t.amount,
+                amount: t.amount.to_string(),
                 account: t.account,
                 kind: t.kind,
                 raw_label: t.raw_label,
@@ -996,13 +998,13 @@ fn receipt_result_to_parsed(r: &ReceiptResult) -> ParsedReceiptData {
         },
         date,
         date_is_placeholder: r.date_is_placeholder,
-        total: r.total.clone(),
+        total: Money::from_decimal_str(&r.total),
         items: r
             .items
             .iter()
             .map(|i| ParsedReceiptItem {
                 description: i.description.clone(),
-                price: i.price.clone(),
+                price: Money::from_decimal_str(&i.price),
                 quantity: i.quantity,
                 // The round-trip keeps the most specific tag path as the
                 // category: it is the one that claimed the account, and the
@@ -1012,8 +1014,8 @@ fn receipt_result_to_parsed(r: &ReceiptResult) -> ParsedReceiptData {
                 tags: i.tags.iter().map(|t| t.path.clone()).collect(),
             })
             .collect(),
-        tax: r.tax.clone(),
-        subtotal: r.subtotal.clone(),
+        tax: r.tax.as_deref().map(Money::from_decimal_str),
+        subtotal: r.subtotal.as_deref().map(Money::from_decimal_str),
         raw_text: r.raw_text.clone(),
         image_filename,
         warnings: r
@@ -1036,7 +1038,7 @@ fn receipt_result_to_parsed(r: &ReceiptResult) -> ParsedReceiptData {
             .tenders
             .iter()
             .map(|t| ParsedReceiptTender {
-                amount: t.amount.clone(),
+                amount: Money::from_decimal_str(&t.amount),
                 account: t.account.clone(),
                 kind: t.kind.clone(),
                 raw_label: t.raw_label.clone(),
