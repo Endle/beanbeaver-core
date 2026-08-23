@@ -19,6 +19,7 @@
 //! [`process_image`] rather than re-implement the composition — a second copy
 //! could drift and the simulator would stop simulating.
 
+use receipt_core::date::Date;
 use std::time::Instant;
 
 use image::RgbImage;
@@ -63,7 +64,7 @@ pub fn process_image(
     engine: &mut OcrEngine,
     img: &RgbImage,
     image_filename: &str,
-    today: (i32, u32, u32),
+    today: Date,
     credit_card_account: &str,
     currency: &str,
     tax_account: &str,
@@ -89,7 +90,7 @@ pub fn process_image_timed(
     engine: &mut OcrEngine,
     img: &RgbImage,
     image_filename: &str,
-    today: (i32, u32, u32),
+    today: Date,
     credit_card_account: &str,
     currency: &str,
     tax_account: &str,
@@ -173,7 +174,7 @@ mod tests {
             &mut engine,
             &img,
             "costco_20260218_redact",
-            (2026, 2, 18),
+            Date::new(2026, 2, 18).unwrap(),
             "Liabilities:CreditCard:PENDING",
             "CAD",
             "Expenses:Tax:HST",

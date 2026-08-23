@@ -338,7 +338,7 @@ pub fn run_cached_corpus_in(
 
         // date (exact)
         if let Some(dt) = expected.get("date").and_then(Value::as_str) {
-            let actual = parsed.date.map(|(y, m, d)| format!("{y:04}-{m:02}-{d:02}"));
+            let actual = parsed.date.map(|d| d.to_string());
             if actual.as_deref() != Some(dt) {
                 failed.insert("date");
                 if !known.contains("date") {

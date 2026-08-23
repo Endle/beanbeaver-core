@@ -27,6 +27,7 @@
 //! Compares against a sibling `<stem>.expected.json` when present (same schema
 //! as tests/test_e2e_receipts.py: merchant / date / total / critical_items).
 
+use receipt_core::date::Date;
 use receipt_core::money::Money;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -49,7 +50,7 @@ const OCR_IMAGE_PADDING: i64 = 50;
 fn main() {
     let mut path: Option<PathBuf> = None;
     let mut models = PathBuf::from("models");
-    let mut today = (2026u16, 6u8, 21u8);
+    let mut today = Date::new(2026, 6, 21).expect("default reference date");
     let mut dump = false;
     let mut cached = false;
     let mut detcmp = false;
@@ -124,7 +125,6 @@ fn main() {
         .account_mapping
         .into_iter()
         .collect();
-    let today = (today.0 as i32, today.1 as u32, today.2 as u32);
 
     if detcmp {
         run_detcmp(engine.as_mut().expect("engine for detcmp"), &path);
@@ -187,7 +187,7 @@ fn print_usage() {
 
 /// One self-describing header per run, so a printed scorecard records exactly what
 /// produced it (build profile, OCR source, det model, resize, EP, date).
-fn print_config_header(cached: bool, models: &Path, today: (i32, u32, u32)) {
+fn print_config_header(cached: bool, models: &Path, today: Date) {
     println!("\n=== device_sim ===");
     if cfg!(debug_assertions) {
         println!(
@@ -488,7 +488,7 @@ fn run_attrib(engine: &mut OcrEngine, path: &Path) {
         .collect();
     jpgs.sort();
 
-    let today = (2026i32, 6u32, 21u32);
+    let today = Date::new(2026, 6, 21).expect("reference date");
     let verbose = std::env::var("ATTRIB_V").is_ok();
     let (mut date_c, mut total_c, mut item_c) = (
         CauseCounts::default(),
@@ -686,7 +686,7 @@ fn find_model(dir: &Path, suffix: &str) -> PathBuf {
 fn extract(
     engine: &mut Option<OcrEngine>,
     cached: bool,
-    today: (i32, u32, u32),
+    today: Date,
     jpg: &Path,
 ) -> Option<(ProcessedReceipt, Option<ScanTimings>)> {
     let name = jpg.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
@@ -758,7 +758,7 @@ fn run_single(
     engine: &mut Option<OcrEngine>,
     cached: bool,
     mapping: &HashMap<String, String>,
-    today: (i32, u32, u32),
+    today: Date,
     jpg: &Path,
     dump: bool,
 ) -> Option<(FixtureScore, Option<ScanTimings>)> {
@@ -822,7 +822,7 @@ fn run_corpus(
     engine: &mut Option<OcrEngine>,
     cached: bool,
     mapping: &HashMap<String, String>,
-    today: (i32, u32, u32),
+    today: Date,
     dir: &Path,
     dump: bool,
     by_merchant: bool,
@@ -1016,7 +1016,7 @@ fn merchant_group_key(m: &str) -> String {
 fn run_reccached(
     engine: &mut OcrEngine,
     mapping: &HashMap<String, String>,
-    today: (i32, u32, u32),
+    today: Date,
     dir: &Path,
 ) {
     let mut jpgs: Vec<PathBuf> = std::fs::read_dir(dir)
@@ -1459,21 +1459,17 @@ fn category_matches(expected: &str, actual: &str, mapping: &HashMap<String, Stri
             == resolve_account_target(Some(actual), mapping, Some(actual))
 }
 
-fn fmt_ymd((y, m, d): (i32, u32, u32)) -> String {
-    format!("{y:04}-{m:02}-{d:02}")
+fn fmt_ymd(d: Date) -> String {
+    d.to_string()
 }
 
-fn fmt_date(d: Option<(i32, u32, u32)>) -> String {
+fn fmt_date(d: Option<Date>) -> String {
     d.map(fmt_ymd).unwrap_or_else(|| "no-date".into())
 }
 
-fn parse_today(s: &str) -> (u16, u8, u8) {
-    let p: Vec<&str> = s.split('-').collect();
-    (
-        p[0].parse().unwrap(),
-        p[1].parse().unwrap(),
-        p[2].parse().unwrap(),
-    )
+fn parse_today(s: &str) -> Date {
+    Date::parse_iso(s)
+        .unwrap_or_else(|| panic!("--today must be a real YYYY-MM-DD date (got {s:?})"))
 }
 
 fn pct(a: usize, b: usize) -> f64 {
