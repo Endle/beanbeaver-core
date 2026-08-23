@@ -2,13 +2,13 @@
 //!
 //! Dates moved through this crate as bare `(i32, u32, u32)` tuples in five
 //! signatures plus `ParsedReceiptData.date`, alongside a separate `SimpleDate`
-//! struct inside `receipt_fields`. A tuple offers no protection against
+//! struct inside `fields`. A tuple offers no protection against
 //! day/month transposition, which is the live failure mode for ambiguous North
 //! American receipt dates — `03/04/2026` is March 4th or April 3rd depending on
 //! the merchant, and nothing in `(i32, u32, u32)` says which slot is which.
 //!
 //! Validation lives in [`Date::new`], which is the only way to build one, so an
-//! impossible date cannot exist. That is the same check `receipt_fields`'
+//! impossible date cannot exist. That is the same check `fields`'
 //! `safe_date` performed, moved here and made unavoidable: the year range
 //! rejects digit runs that are really SKUs or barcodes (LCBO's Baby Duck SKU
 //! `00001123` parsed as `0000-11-23`), and the day is checked against the

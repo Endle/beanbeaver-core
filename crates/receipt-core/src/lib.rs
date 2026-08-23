@@ -20,8 +20,12 @@
 //! signature should not have been public.
 #![warn(unnameable_types)]
 
+pub mod categories;
+pub mod common;
 pub mod date;
 pub(crate) mod detection_normalization;
+pub(crate) mod fields;
+pub(crate) mod formatter;
 pub mod merchant_match;
 pub(crate) mod merchant_vocab;
 pub mod money;
@@ -29,19 +33,14 @@ pub(crate) mod ocr_confusion;
 pub mod ocr_document;
 pub(crate) mod ocr_line_grouping;
 pub mod ocr_transform;
+pub(crate) mod parse_helpers;
+pub mod parser;
 pub mod process;
-pub mod receipt_categories;
-pub mod receipt_common;
-pub(crate) mod receipt_fields;
-pub(crate) mod receipt_formatter;
-pub(crate) mod receipt_parse_helpers;
-pub mod receipt_parser;
-pub(crate) mod receipt_spatial;
-pub(crate) mod receipt_text;
 pub mod rules;
 pub(crate) mod spatial;
+pub(crate) mod text;
 
-// Types that appear in the public signatures of `ocr_transform`, `receipt_parser`
+// Types that appear in the public signatures of `ocr_transform`, `parser`
 // and `rules`, but whose defining modules are `pub(crate)`. Re-exported here so
 // callers can name what they are already required to pass.
 //

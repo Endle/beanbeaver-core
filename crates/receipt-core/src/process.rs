@@ -1,8 +1,8 @@
 //! Single high-level entry point for the on-device pipeline:
 //! raw OCR detections -> structured receipt + beancount text, with no Python.
 //!
-//! Chains `ocr_transform::transform` -> `receipt_parser::parse_receipt` ->
-//! `receipt_formatter::format_parsed_receipt`, loading rules from the bundled
+//! Chains `ocr_transform::transform` -> `parser::parse_receipt` ->
+//! `formatter::format_parsed_receipt`, loading rules from the bundled
 //! defaults. This mirrors the desktop flow
 //! (`ocr_helpers.transform_paddleocr_result` + `ocr_result_parser.parse_receipt`
 //! + `formatter.format_parsed_receipt`).
@@ -11,16 +11,14 @@ use crate::date::Date;
 use crate::money::Money;
 use std::borrow::Cow;
 
-use crate::merchant_match::{MerchantFamily, MerchantMatch, MerchantMatchStatus};
-use crate::ocr_transform::{transform, RawDetection};
-use crate::receipt_common::ReceiptWarningKind;
-use crate::receipt_formatter::{
+use crate::common::ReceiptWarningKind;
+use crate::formatter::{
     format_parsed_receipt, FormatterItemInput, FormatterReceiptInput, FormatterTenderInput,
     FormatterWarningInput,
 };
-use crate::receipt_parser::{
-    parse_receipt, ParsedReceiptData, ParsedReceiptItem, ParserRuleLayers,
-};
+use crate::merchant_match::{MerchantFamily, MerchantMatch, MerchantMatchStatus};
+use crate::ocr_transform::{transform, RawDetection};
+use crate::parser::{parse_receipt, ParsedReceiptData, ParsedReceiptItem, ParserRuleLayers};
 use crate::rules::RuleBook;
 
 const DEFAULT_ITEM_ACCOUNT: &str = "Expenses:FIXME";
@@ -76,7 +74,7 @@ pub struct ProcessedReceipt {
     /// override document added. Carried on the result so a consumer can label
     /// an item's tags without rebuilding the rule book — and so the labels
     /// always match the rules that actually ran.
-    pub tag_vocabulary: Vec<crate::receipt_categories::TagNode>,
+    pub tag_vocabulary: Vec<crate::categories::TagNode>,
 }
 
 /// User corrections applied when regenerating beancount without re-running OCR.
@@ -309,12 +307,12 @@ fn format_from_parsed(
     };
 
     let beancount = format_parsed_receipt(&formatter_input, credit_card_account, image_sha256);
-    let beanbeaver_id = crate::receipt_formatter::beanbeaver_id(
+    let beanbeaver_id = crate::formatter::beanbeaver_id(
         &formatter_input.date_iso,
         formatter_input.date_is_placeholder,
         image_sha256,
     );
-    let document_relpath = crate::receipt_formatter::beanbeaver_document_relpath(
+    let document_relpath = crate::formatter::beanbeaver_document_relpath(
         &formatter_input.date_iso,
         formatter_input.date_is_placeholder,
         &formatter_input.merchant,
@@ -607,7 +605,7 @@ mod tests {
     fn reformat_preserves_tenders_and_raw_text() {
         let mut parsed = sample_parsed();
         parsed.raw_text = "COSTCO\n**** 1234\nTOTAL 10.00".into();
-        parsed.tenders = vec![crate::receipt_parser::ParsedReceiptTender {
+        parsed.tenders = vec![crate::parser::ParsedReceiptTender {
             amount: "10.00".into(),
             account: None,
             kind: "card".into(),

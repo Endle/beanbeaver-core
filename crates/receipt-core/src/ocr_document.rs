@@ -49,7 +49,7 @@ pub struct OcrLine {
     pub words: Vec<OcrWord>,
     /// Tallest word-box height on this line, normalized against image height. A
     /// large-font store banner sits well above body-text height, which is what
-    /// drives the size-prior in `receipt_parse_helpers`.
+    /// drives the size-prior in `parse_helpers`.
     pub height: f64,
     /// Line center Y, normalized against image height. Restricts the banner
     /// search to the receipt top.

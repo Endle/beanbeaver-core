@@ -10,12 +10,10 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
+use crate::categories::{build_rule_layers, BuildClassifierConfig, BuildRuleEntry, TagNode};
 use crate::merchant_match::MerchantFamily;
 use crate::merchant_vocab::{Expansion, MerchantVocab};
-use crate::receipt_categories::{
-    build_rule_layers, BuildClassifierConfig, BuildRuleEntry, TagNode,
-};
-use crate::receipt_parser::ParserRuleLayers;
+use crate::parser::ParserRuleLayers;
 
 pub(crate) const DEFAULT_ITEM_CLASSIFIER_TOML: &str =
     include_str!("../../../../rules/default_item_classifier.toml");
@@ -373,9 +371,7 @@ pub fn parser_rule_layers_with_overrides(
 
 /// Wrap built category rules with the flattened account mapping and the bundled
 /// merchant vocabulary. Shared by both loaders above so they cannot drift.
-fn finish_layers(
-    category_rules: crate::receipt_categories::CategoryRuleLayers,
-) -> ParserRuleLayers {
+fn finish_layers(category_rules: crate::categories::CategoryRuleLayers) -> ParserRuleLayers {
     let account_mapping = category_rules
         .account_mapping
         .iter()

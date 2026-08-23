@@ -10,8 +10,8 @@ use std::sync::OnceLock;
 /// work out what happened. So **this enum carries no severity, and must not
 /// grow one.** Rank these in the client.
 ///
-/// Lives in `receipt_common` because all three producing layers
-/// (`receipt_spatial`, `receipt_text`, `receipt_parser`) need it, and the kind
+/// Lives in `common` because all three producing layers
+/// (`spatial`, `text`, `parser`) need it, and the kind
 /// has to survive the trip up through each of their own warning structs
 /// unchanged.
 ///
@@ -87,8 +87,8 @@ pub enum ReceiptWarningKind {
 /// which is what keeps it from swallowing plain numbers.
 ///
 /// Lives here because three modules ask "is this a weight row?" —
-/// [`parse_quantity_modifier`] below, `receipt_spatial`'s pairing gate, and
-/// `receipt_text`'s extractor. They had three copies of the alternation, and a
+/// [`parse_quantity_modifier`] below, `spatial`'s pairing gate, and
+/// `text`'s extractor. They had three copies of the alternation, and a
 /// receipt only has to hit the one that was not updated to lose an item.
 pub(crate) const WEIGHT_UNIT_CLASS: &str = r"(?:[lI1][bk6]|k[g9])";
 

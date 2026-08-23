@@ -36,9 +36,9 @@ use ocr_paddle::db_postprocess::{boxes_from_bitmap, DbConfig};
 use ocr_paddle::detect::Detector;
 use ocr_paddle::engine::OcrEngine;
 use ocr_paddle::prep::resize_and_pad;
+use receipt_core::categories::resolve_account_target;
 use receipt_core::ocr_transform::RawDetection;
 use receipt_core::process::{process_receipt, ProcessedReceipt};
-use receipt_core::receipt_categories::resolve_account_target;
 use receipt_core::rules::default_parser_rule_layers;
 use scan::{process_image, process_image_timed, ScanTimings};
 use serde_json::Value;
@@ -1280,7 +1280,7 @@ impl FixtureScore {
 fn score(
     name: &str,
     expected: &Value,
-    d: &receipt_core::receipt_parser::ParsedReceiptData,
+    d: &receipt_core::parser::ParsedReceiptData,
     mapping: &HashMap<String, String>,
 ) -> FixtureScore {
     let merchant_ok = match expected.get("merchant").and_then(Value::as_str) {

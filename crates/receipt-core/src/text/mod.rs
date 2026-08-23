@@ -3,7 +3,7 @@
 //! Split for maintainability. [`extract_text_items`] is the entry point;
 //! [`types::ParsedTextItem`] and [`types::TextParserWarning`] are its return
 //! types, named through `types` because nothing outside this module refers to
-//! them by name — `receipt_parser` binds them positionally.
+//! them by name — `parser` binds them positionally.
 
 mod engine;
 mod patterns;

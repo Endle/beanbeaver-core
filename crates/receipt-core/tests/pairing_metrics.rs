@@ -22,7 +22,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use receipt_core::ocr_transform::{transform, RawDetection};
-use receipt_core::receipt_parser::parse_receipt;
+use receipt_core::parser::parse_receipt;
 use receipt_core::rules::{
     default_known_merchants, default_merchant_families, parser_rule_layers_with_overrides,
 };

@@ -828,11 +828,11 @@ fn trim_tender_label(line: &str) -> String {
 ///   digit, which is exactly the LCBO case where a $66.60 gift card read as
 ///   $65.60.
 ///
-/// Callers now get the lines plus the arithmetic and decide: `receipt_parser`
-/// raises [`ReceiptWarningKind::TenderMismatch`], and `receipt_formatter` falls
+/// Callers now get the lines plus the arithmetic and decide: `parser`
+/// raises [`ReceiptWarningKind::TenderMismatch`], and `formatter` falls
 /// back to the single-payment posting so the ledger still balances.
 ///
-/// [`ReceiptWarningKind::TenderMismatch`]: crate::receipt_common::ReceiptWarningKind::TenderMismatch
+/// [`ReceiptWarningKind::TenderMismatch`]: crate::common::ReceiptWarningKind::TenderMismatch
 pub fn extract_tenders(lines: &[String]) -> Vec<TenderLine> {
     let mut tenders: Vec<TenderLine> = Vec::new();
     let mut consumed_next = false;

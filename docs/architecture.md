@@ -50,13 +50,13 @@ Pure Rust. No ONNX, no image I/O beyond types.
 |-------------|----------------|
 | `ocr_transform` | Raw detections → full text + spatial/helper pages |
 | `ocr_line_grouping` / `detection_normalization` | Geometry cleanup before parse |
-| `receipt_parser` | Orchestrates field + item extraction |
-| `receipt_fields` | Merchant, date, tax, total, tenders |
-| `receipt_text` | Line-oriented item extraction (dense grocery layouts) |
-| `receipt_spatial` | BBox/column-aware item extraction |
-| `receipt_categories` + `rules` | Classifier TOML → tags/accounts |
+| `parser` | Orchestrates field + item extraction |
+| `fields` | Merchant, date, tax, total, tenders |
+| `text` | Line-oriented item extraction (dense grocery layouts) |
+| `spatial` | BBox/column-aware item extraction |
+| `categories` + `rules` | Classifier TOML → tags/accounts |
 | `merchant_match` | Fuzzy family resolution (Exact / Corrected / Suggested / Unknown) |
-| `receipt_formatter` | Beancount text + `beanbeaver-id` / `document:` metadata |
+| `formatter` | Beancount text + `beanbeaver-id` / `document:` metadata |
 | `process` | Single entry: detections → `ProcessedReceipt` |
 
 **Dual item paths:** spatial vs text. The parser chooses/merges based on layout quality; both are covered by cached E2E fixtures. Prefer table-driven TOML for merchant quirks over hard-coded branches when possible.
@@ -147,7 +147,7 @@ function rather than a few lines repeated at each call site.
 OcrDocument { lines: [OcrLine { text, words: [OcrWord { text, bbox, confidence }], height, center_y }] }
 ```
 
-What `ocr_transform` produces and `receipt_parser` consumes. Everything in it is
+What `ocr_transform` produces and `parser` consumes. Everything in it is
 normalized to `[0,1]` against the **de-padded** image, which is the other half of
 the coordinate-space contract above: pixels stop at `transform`, and nothing
 downstream of it needs the image dimensions again.

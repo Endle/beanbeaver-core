@@ -1,5 +1,5 @@
+use crate::common::ReceiptWarningKind;
 use crate::money::Money;
-use crate::receipt_common::ReceiptWarningKind;
 
 #[derive(Clone, Debug)]
 pub struct FormatterItemInput {
@@ -61,7 +61,7 @@ fn pending_account_for_kind(kind: &str) -> &'static str {
 /// legacy shape).
 ///
 /// The reconciliation guard lives here, in the one place that owes beancount a
-/// balanced entry, rather than upstream in `receipt_fields::extract_tenders`
+/// balanced entry, rather than upstream in `fields::extract_tenders`
 /// where it used to sit. That matters because the two layers want opposite
 /// things from a tender block that doesn't add up: the parser wants to *report*
 /// it (`ReceiptWarningKind::TenderMismatch`), and this function must not
@@ -145,7 +145,7 @@ pub struct EnrichedMatchInput {
     pub match_details: String,
 }
 
-/// Shared with `receipt_parser`'s balance check on purpose: that warning exists
+/// Shared with `parser`'s balance check on purpose: that warning exists
 /// to predict whether the postings this module emits will balance, so the two
 /// must read a price string exactly the same way.
 fn format_postings_aligned(

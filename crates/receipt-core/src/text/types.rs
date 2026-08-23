@@ -1,7 +1,7 @@
 //! Public and private types for text-line item extraction.
 
+use crate::common::ReceiptWarningKind;
 use crate::money::Money;
-use crate::receipt_common::ReceiptWarningKind;
 
 #[derive(Clone, Debug)]
 pub struct ParsedTextItem {

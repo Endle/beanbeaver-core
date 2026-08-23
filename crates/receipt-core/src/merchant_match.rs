@@ -20,7 +20,7 @@
 //!     the raw text — the UI can show it in grey without trusting it.
 //!
 //! This generalizes the former hardcoded per-merchant branches
-//! (Costco/FreshCo/Foody Mart) in `receipt_parse_helpers::extract_merchant`.
+//! (Costco/FreshCo/Foody Mart) in `parse_helpers::extract_merchant`.
 
 use std::cmp::Reverse;
 
