@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::date::Date;
 use crate::money::Money;
 use crate::receipt_categories;
 use crate::receipt_common::ReceiptWarningKind;
@@ -60,7 +61,7 @@ pub struct ParsedReceiptData {
     /// Full merchant resolution (raw OCR text, canonical family, confidence),
     /// for consumers that want to surface the correction to the user.
     pub merchant_match: crate::merchant_match::MerchantMatch,
-    pub date: Option<(i32, u32, u32)>,
+    pub date: Option<Date>,
     pub date_is_placeholder: bool,
     pub total: Money,
     pub items: Vec<ParsedReceiptItem>,
@@ -255,7 +256,7 @@ pub fn parse_receipt(
         crate::merchant_vocab::for_merchant(canonical, &rule_layers.merchant_vocab)
     });
     let parsed_date = receipt_fields::extract_date(&lines, full_text, current_year);
-    let date = parsed_date.map(|value| (value.year, value.month, value.day));
+    let date = parsed_date;
     let date_is_placeholder = date.is_none();
     // `receipt_fields` still returns raw i64 cents; convert once, here, so
     // nothing below this line carries an untyped amount.

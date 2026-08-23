@@ -24,6 +24,7 @@
 //! can't satisfy are tracked append-only in `KNOWN_ON_DEVICE_GAPS` — the public
 //! `expected.json` is the desktop baseline and is never weakened here.
 
+use receipt_core::date::Date;
 use receipt_core::money::Money;
 use std::collections::HashMap;
 use std::fs;
@@ -188,7 +189,7 @@ fn phase5_on_device_vs_expected() {
             &mut engine,
             &img,
             &format!("{name}.jpg"),
-            (2026, 6, 21),
+            Date::new(2026, 6, 21).unwrap(),
             "Liabilities:CreditCard",
             "CAD",
             "Expenses:Tax:HST",
@@ -216,7 +217,7 @@ fn phase5_on_device_vs_expected() {
         }
 
         if let Some(dt) = expected.get("date").and_then(Value::as_str) {
-            let actual = d.date.map(|(y, m, day)| format!("{y:04}-{m:02}-{day:02}"));
+            let actual = d.date.map(|d| d.to_string());
             if actual.as_deref() != Some(dt) {
                 fail(format!("date expected '{dt}', got {actual:?}"));
             }
@@ -305,7 +306,7 @@ fn phase5_on_device_vs_expected() {
             "✓ {name}  ({} / {} / {})",
             d.merchant,
             d.date
-                .map(|(y, m, dd)| format!("{y:04}-{m:02}-{dd:02}"))
+                .map(|d| d.to_string())
                 .unwrap_or_else(|| "no-date".into()),
             d.total
         );

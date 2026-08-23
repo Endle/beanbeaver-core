@@ -27,6 +27,7 @@
 //! `cargo test -p ocr-paddle` stays green without `models/` provisioned. CI
 //! downloads them from the `ocr-models-v2` release first.
 
+use receipt_core::date::Date;
 use receipt_core::money::Money;
 use std::collections::HashMap;
 use std::fs;
@@ -40,7 +41,9 @@ use scan::process_image;
 use serde_json::Value;
 
 /// Reference "today"; the corpus uses explicit full dates, so this is inert.
-const TODAY: (i32, u32, u32) = (2026, 7, 2);
+fn today() -> Date {
+    Date::new(2026, 7, 2).expect("fixed reference date")
+}
 const CREDIT_CARD_ACCOUNT: &str = "Liabilities:CreditCard";
 
 /// Fixed fixtures that **must** hard-pass merchant + total on live OCR
@@ -257,7 +260,7 @@ fn public_live_e2e() {
             &mut engine,
             &img,
             &format!("{name}.jpg"),
-            TODAY,
+            today(),
             CREDIT_CARD_ACCOUNT,
             "CAD",
             "Expenses:Tax:HST",
@@ -274,7 +277,7 @@ fn public_live_e2e() {
         eprintln!(
             "✓ {name} ran: merchant={:?} date={:?} total={:?} items={}",
             d.merchant,
-            d.date.map(|(y, m, dd)| format!("{y:04}-{m:02}-{dd:02}")),
+            d.date.map(|d| d.to_string()),
             d.total,
             d.items.len(),
         );
@@ -323,7 +326,7 @@ fn public_live_e2e() {
             }
         }
         if let Some(dt) = expected.get("date").and_then(Value::as_str) {
-            let actual = d.date.map(|(y, m, dd)| format!("{y:04}-{m:02}-{dd:02}"));
+            let actual = d.date.map(|d| d.to_string());
             if actual.as_deref() != Some(dt) {
                 warn(format!("date expected '{dt}', got {actual:?}"));
             }

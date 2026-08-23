@@ -14,6 +14,7 @@
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+use receipt_core::date::Date;
 use receipt_core::merchant_match::{
     MerchantMatch as CoreMerchantMatch, MerchantMatchStatus as CoreStatus,
 };
@@ -531,6 +532,21 @@ pub enum ScanError {
     Parse { msg: String },
 }
 
+/// `DateYmd` is the FFI contract and stays a plain record, so it can carry a
+/// date that does not exist. Convert once, here, and fail loudly rather than
+/// letting an impossible `today` reach the placeholder-date path — where it
+/// used to be formatted straight into beancount output. Reuses
+/// `ScanError::Parse` deliberately: a new variant would be an additive FFI
+/// change, which is free for the apps but breaks mobile-util's batch_e2e build.
+fn today_date(today: &DateYmd) -> Result<Date, ScanError> {
+    Date::new(today.year, today.month, today.day).ok_or_else(|| ScanError::Parse {
+        msg: format!(
+            "today is not a real date: {:04}-{:02}-{:02}",
+            today.year, today.month, today.day
+        ),
+    })
+}
+
 impl fmt::Display for ScanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -643,7 +659,7 @@ impl OcrSession {
                 &mut engine,
                 &img,
                 "receipt.jpg",
-                (today.year, today.month, today.day),
+                today_date(&today)?,
                 &credit_card_account,
                 &currency,
                 &tax_account,
@@ -693,7 +709,7 @@ impl OcrSession {
             prepared.height() as i64,
             OCR_IMAGE_PADDING as i64,
             "receipt.jpg",
-            (today.year, today.month, today.day),
+            today_date(&today)?,
             &credit_card_account,
             &currency,
             &tax_account,
@@ -762,7 +778,7 @@ pub fn parse_detections(
         padded_height,
         padding,
         &image_filename,
-        (today.year, today.month, today.day),
+        today_date(&today)?,
         &credit_card_account,
         &currency,
         &tax_account,
@@ -806,7 +822,7 @@ pub fn reformat_receipt(
     let opts = to_process_options(&options);
     let processed = reformat_parsed_receipt(
         &parsed,
-        (today.year, today.month, today.day),
+        today_date(&today)?,
         &credit_card_account,
         &currency,
         &tax_account,
@@ -876,7 +892,7 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
     ReceiptResult {
         merchant: d.merchant,
         merchant_match: d.merchant_match.into(),
-        date: d.date.map(|(y, m, day)| format!("{y:04}-{m:02}-{day:02}")),
+        date: d.date.map(|d| d.to_string()),
         date_is_placeholder: d.date_is_placeholder,
         // The FFI seam is the only place money becomes text.
         total: d.total.to_string(),
@@ -976,13 +992,9 @@ fn receipt_result_to_parsed(r: &ReceiptResult) -> ParsedReceiptData {
         MerchantMatchStatus::Suggested => CoreStatus::Suggested,
         MerchantMatchStatus::Unknown => CoreStatus::Unknown,
     };
-    let date = r.date.as_ref().and_then(|iso| {
-        let mut parts = iso.split('-');
-        let y: i32 = parts.next()?.parse().ok()?;
-        let m: u32 = parts.next()?.parse().ok()?;
-        let d: u32 = parts.next()?.parse().ok()?;
-        Some((y, m, d))
-    });
+    // Round-trips this crate's own `Date::to_string`, which is always
+    // zero-padded, so `parse_iso`'s strictness costs nothing here.
+    let date = r.date.as_deref().and_then(Date::parse_iso);
     let image_filename = if r.image_filename.is_empty() {
         "receipt.jpg".into()
     } else {

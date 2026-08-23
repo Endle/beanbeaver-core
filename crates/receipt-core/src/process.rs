@@ -7,6 +7,7 @@
 //! (`ocr_helpers.transform_paddleocr_result` + `ocr_result_parser.parse_receipt`
 //! + `formatter.format_parsed_receipt`).
 
+use crate::date::Date;
 use crate::money::Money;
 use std::borrow::Cow;
 
@@ -93,12 +94,12 @@ pub struct ReceiptCorrections {
 /// matching Python's `Decimal.__format__(".2f")` that the formatter glue applies
 /// to item prices, total, and tax. Inputs are well-formed fixed-point strings
 /// (e.g. "12.34" from cents, "1.2345" from the scaled spatial path).
-fn date_iso(parsed: &ParsedReceiptData, today: (i32, u32, u32)) -> String {
+fn date_iso(parsed: &ParsedReceiptData, today: Date) -> String {
     match parsed.date {
-        Some((y, m, d)) => format!("{y:04}-{m:02}-{d:02}"),
+        Some(d) => d.to_string(),
         // Placeholder mirrors `date_utils.placeholder_receipt_date()`:
         // first day of the current (reference) month.
-        None => format!("{:04}-{:02}-01", today.0, today.1),
+        None => format!("{:04}-{:02}-01", today.year(), today.month()),
     }
 }
 
@@ -195,7 +196,7 @@ fn resolve_rule_book(options: &ProcessOptions) -> Result<Cow<'static, RuleBook>,
 }
 
 /// Parse and calendar-validate an ISO `YYYY-MM-DD` date string.
-fn parse_iso_ymd(iso: &str) -> Result<(i32, u32, u32), String> {
+fn parse_iso_ymd(iso: &str) -> Result<Date, String> {
     let iso = iso.trim();
     let mut parts = iso.split('-');
     let (Some(ys), Some(ms), Some(ds), None) =
@@ -220,34 +221,19 @@ fn parse_iso_ymd(iso: &str) -> Result<(i32, u32, u32), String> {
     if !(1..=12).contains(&m) {
         return Err(format!("date_iso month out of range (got {iso:?})"));
     }
-    let max_day = days_in_month(y, m);
-    if d < 1 || d > max_day {
-        return Err(format!("date_iso day out of range (got {iso:?})"));
-    }
-    Ok((y, m, d))
-}
-
-fn days_in_month(year: i32, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => {
-            let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-            if leap {
-                29
-            } else {
-                28
-            }
-        }
-        _ => 0,
-    }
+    // `Date::new` owns the calendar rules now, including the 1990..=2100 band
+    // this function did not previously apply. That band is the parser's own
+    // (a year outside it on a receipt is a product code, not a date), so a
+    // correction is now held to the same standard as a parse -- an explicit
+    // error rather than a silently accepted impossible date.
+    Date::new(y, m, d).ok_or_else(|| format!("date_iso is not a real date (got {iso:?})"))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn format_from_parsed(
     parsed: &ParsedReceiptData,
     _rule_layers: &ParserRuleLayers,
-    today: (i32, u32, u32),
+    today: Date,
     credit_card_account: &str,
     currency: &str,
     tax_account: &str,
@@ -348,7 +334,7 @@ pub fn process_receipt(
     padding: i64,
     image_filename: &str,
     known_merchants: Option<Vec<String>>,
-    today: (i32, u32, u32),
+    today: Date,
     credit_card_account: &str,
     currency: &str,
     tax_account: &str,
@@ -383,7 +369,7 @@ pub fn process_receipt_with_options(
     padded_height: i64,
     padding: i64,
     image_filename: &str,
-    today: (i32, u32, u32),
+    today: Date,
     credit_card_account: &str,
     currency: &str,
     tax_account: &str,
@@ -414,7 +400,7 @@ pub fn process_receipt_with_options(
         image_filename,
         &merchants,
         &merchant_families,
-        today.0,
+        today.year(),
     );
 
     let confidence = field_confidence(&parsed);
@@ -448,7 +434,7 @@ pub fn process_receipt_with_options(
 #[allow(clippy::too_many_arguments)]
 pub fn reformat_parsed_receipt(
     parsed: &ParsedReceiptData,
-    today: (i32, u32, u32),
+    today: Date,
     credit_card_account: &str,
     currency: &str,
     tax_account: &str,
@@ -474,8 +460,7 @@ pub fn reformat_parsed_receipt(
         };
     }
     if let Some(iso) = &corrections.date_iso {
-        let (y, m, d) = parse_iso_ymd(iso)?;
-        parsed_out.date = Some((y, m, d));
+        parsed_out.date = Some(parse_iso_ymd(iso)?);
         parsed_out.date_is_placeholder = false;
     }
     // Item account overrides are applied only when formatting beancount
@@ -530,7 +515,7 @@ mod tests {
                 status: MerchantMatchStatus::Exact,
                 score: 1.0,
             },
-            date: Some((2026, 2, 18)),
+            date: Date::new(2026, 2, 18),
             date_is_placeholder: false,
             total: "10.00".into(),
             items: vec![ParsedReceiptItem {
@@ -570,7 +555,7 @@ mod tests {
         };
         let out = reformat_parsed_receipt(
             &parsed,
-            (2026, 7, 1),
+            Date::new(2026, 7, 1).unwrap(),
             "Liabilities:CreditCard",
             "CAD",
             "Expenses:Tax:HST",
@@ -580,7 +565,7 @@ mod tests {
         )
         .expect("reformat");
         assert_eq!(out.parsed.merchant, "Costco Wholesale");
-        assert_eq!(out.parsed.date, Some((2026, 3, 1)));
+        assert_eq!(out.parsed.date, Date::new(2026, 3, 1));
         assert!(!out.parsed.date_is_placeholder);
         assert!(out.beancount.contains("Costco Wholesale"));
         assert!(out.beancount.contains("2026-03-01"));
@@ -608,7 +593,7 @@ mod tests {
         };
         let err = reformat_parsed_receipt(
             &parsed,
-            (2026, 7, 1),
+            Date::new(2026, 7, 1).unwrap(),
             "Liabilities:CreditCard",
             "CAD",
             "Expenses:Tax:HST",
@@ -633,7 +618,7 @@ mod tests {
         let corrections = ReceiptCorrections::default();
         let out = reformat_parsed_receipt(
             &parsed,
-            (2026, 7, 1),
+            Date::new(2026, 7, 1).unwrap(),
             "Liabilities:CreditCard",
             "CAD",
             "Expenses:Tax:HST",
@@ -663,7 +648,7 @@ mod tests {
             100,
             0,
             "x.jpg",
-            (2026, 1, 1),
+            Date::new(2026, 1, 1).unwrap(),
             "Liabilities:CreditCard",
             "CAD",
             "Expenses:Tax:HST",

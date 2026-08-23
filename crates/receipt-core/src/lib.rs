@@ -20,6 +20,7 @@
 //! signature should not have been public.
 #![warn(unnameable_types)]
 
+pub mod date;
 pub(crate) mod detection_normalization;
 pub mod merchant_match;
 pub(crate) mod merchant_vocab;

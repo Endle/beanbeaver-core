@@ -1,22 +1,16 @@
+use crate::date::Date;
 use regex::Regex;
 use std::cmp::Ordering;
 use std::sync::OnceLock;
 
 use crate::ocr_confusion;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SimpleDate {
-    pub year: i32,
-    pub month: u32,
-    pub day: u32,
-}
-
 #[derive(Clone, Debug)]
 struct RankedDateCandidate {
     score: i32,
     line_index: usize,
     start: usize,
-    date: SimpleDate,
+    date: Date,
 }
 
 /// Marks a line as date context, which is what lets `extract_date` consider the
@@ -1094,7 +1088,7 @@ mod tests {
         // Jin Lian Food / Clover format: "22-May-2026 3:22:42p.m."
         let lines = vec!["22-May-2026 3:22:42p.m.".to_string()];
         let parsed = extract_date(&lines, "", 2026).expect("date should parse");
-        assert_eq!((parsed.year, parsed.month, parsed.day), (2026, 5, 22));
+        assert_eq!(parsed.ymd(), (2026, 5, 22));
     }
 
     #[test]
@@ -1102,7 +1096,7 @@ mod tests {
         // Clover also prints an abbreviation period: "02-Apr.-2026 2:27:39p.m."
         let lines = vec!["02-Apr.-2026 2:27:39p.m.".to_string()];
         let parsed = extract_date(&lines, "", 2026).expect("date should parse");
-        assert_eq!((parsed.year, parsed.month, parsed.day), (2026, 4, 2));
+        assert_eq!(parsed.ymd(), (2026, 4, 2));
     }
 
     #[test]
@@ -1115,7 +1109,7 @@ mod tests {
             let parsed = extract_date(&lines, "", 2026)
                 .unwrap_or_else(|| panic!("date should parse for label {label:?}"));
             assert_eq!(
-                (parsed.year, parsed.month, parsed.day),
+                parsed.ymd(),
                 (2026, 8, 2),
                 "label {label:?} should read 26/08/02 as year-first"
             );
@@ -1128,7 +1122,7 @@ mod tests {
         // date context and the year-first reading stays gated.
         let lines = vec!["UPDATED: 26/08/02".to_string()];
         let parsed = extract_date(&lines, "", 2026).expect("date should parse");
-        assert_ne!((parsed.year, parsed.month, parsed.day), (2026, 8, 2));
+        assert_ne!(parsed.ymd(), (2026, 8, 2));
     }
 
     #[test]
@@ -1693,41 +1687,7 @@ fn to_four_digit_year(year: i32) -> i32 {
     }
 }
 
-fn is_leap_year(year: i32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
-}
-
-fn safe_date(year: i32, month: i32, day: i32) -> Option<SimpleDate> {
-    // A digit run that decodes to an implausible year is an SKU or barcode,
-    // not a date (LCBO's Baby Duck SKU "00001123" parsed as 0000-11-23).
-    if !(1990..=2100).contains(&year) {
-        return None;
-    }
-    if !(1..=12).contains(&month) || day < 1 {
-        return None;
-    }
-    let max_day = match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if is_leap_year(year) => 29,
-        2 => 28,
-        _ => return None,
-    };
-    if day > max_day {
-        return None;
-    }
-    Some(SimpleDate {
-        year,
-        month: month as u32,
-        day: day as u32,
-    })
-}
-
-fn numeric_date_candidates(
-    part1: &str,
-    part2: &str,
-    part3: &str,
-) -> Vec<(SimpleDate, &'static str)> {
+fn numeric_date_candidates(part1: &str, part2: &str, part3: &str) -> Vec<(Date, &'static str)> {
     let a = match part1.parse::<i32>() {
         Ok(value) => value,
         Err(_) => return Vec::new(),
@@ -1743,7 +1703,10 @@ fn numeric_date_candidates(
 
     let mut candidates = Vec::new();
     let mut add = |year: i32, month: i32, day: i32, kind: &'static str| {
-        if let Some(parsed) = safe_date(year, month, day) {
+        let (Ok(month), Ok(day)) = (u32::try_from(month), u32::try_from(day)) else {
+            return;
+        };
+        if let Some(parsed) = Date::new(year, month, day) {
             candidates.push((parsed, kind));
         }
     };
@@ -1805,7 +1768,7 @@ fn compare_ranked_candidates(left: &RankedDateCandidate, right: &RankedDateCandi
         .then_with(|| left.start.cmp(&right.start))
 }
 
-pub fn extract_date(lines: &[String], full_text: &str, current_year: i32) -> Option<SimpleDate> {
+pub fn extract_date(lines: &[String], full_text: &str, current_year: i32) -> Option<Date> {
     if lines.is_empty() && full_text.is_empty() {
         return None;
     }
@@ -1855,7 +1818,7 @@ pub fn extract_date(lines: &[String], full_text: &str, current_year: i32) -> Opt
                     base += 3;
                 }
                 ranked_candidates.push(RankedDateCandidate {
-                    score: base + hint_bonus + year_score(candidate_date.year, current_year),
+                    score: base + hint_bonus + year_score(candidate_date.year(), current_year),
                     line_index,
                     start,
                     date: candidate_date,
@@ -1869,9 +1832,11 @@ pub fn extract_date(lines: &[String], full_text: &str, current_year: i32) -> Opt
             let day = captures.get(4).and_then(|m| m.as_str().parse::<i32>().ok());
             let start = captures.get(2).map(|m| m.start()).unwrap_or(0);
             if let (Some(year), Some(month), Some(day)) = (year, month, day) {
-                if let Some(compact_date) = safe_date(year, month, day) {
+                if let Some(compact_date) =
+                    Date::new(year, u32::try_from(month).ok()?, u32::try_from(day).ok()?)
+                {
                     ranked_candidates.push(RankedDateCandidate {
-                        score: 30 + hint_bonus + year_score(compact_date.year, current_year),
+                        score: 30 + hint_bonus + year_score(compact_date.year(), current_year),
                         line_index,
                         start,
                         date: compact_date,
@@ -1888,9 +1853,11 @@ pub fn extract_date(lines: &[String], full_text: &str, current_year: i32) -> Opt
             let year = captures.get(3).and_then(|m| m.as_str().parse::<i32>().ok());
             let start = captures.get(1).map(|m| m.start()).unwrap_or(0);
             if let (Some(month), Some(day), Some(year)) = (month, day, year) {
-                if let Some(parsed) = safe_date(year, month, day) {
+                if let Some(parsed) =
+                    Date::new(year, u32::try_from(month).ok()?, u32::try_from(day).ok()?)
+                {
                     ranked_candidates.push(RankedDateCandidate {
-                        score: 26 + hint_bonus + year_score(parsed.year, current_year),
+                        score: 26 + hint_bonus + year_score(parsed.year(), current_year),
                         line_index,
                         start,
                         date: parsed,
@@ -1907,9 +1874,11 @@ pub fn extract_date(lines: &[String], full_text: &str, current_year: i32) -> Opt
             let year = captures.get(3).and_then(|m| m.as_str().parse::<i32>().ok());
             let start = captures.get(1).map(|m| m.start()).unwrap_or(0);
             if let (Some(month), Some(day), Some(year)) = (month, day, year) {
-                if let Some(parsed) = safe_date(year, month, day) {
+                if let Some(parsed) =
+                    Date::new(year, u32::try_from(month).ok()?, u32::try_from(day).ok()?)
+                {
                     ranked_candidates.push(RankedDateCandidate {
-                        score: 26 + hint_bonus + year_score(parsed.year, current_year),
+                        score: 26 + hint_bonus + year_score(parsed.year(), current_year),
                         line_index,
                         start,
                         date: parsed,
