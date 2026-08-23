@@ -126,14 +126,14 @@ fn run_dir(root: &Path, overrides: &[&str], label: &str) {
             TODAY_YEAR,
         );
 
-        let sum: f64 = p
-            .items
-            .iter()
-            .filter_map(|i| i.price.parse::<f64>().ok())
-            .sum();
-        let subtotal = p.subtotal.as_deref().and_then(|s| s.parse::<f64>().ok());
-        let tax = p.tax.as_deref().and_then(|s| s.parse::<f64>().ok());
-        let total = p.total.parse::<f64>().ok();
+        // Kept in f64 with the original 0.02 tolerance: this is a reporting
+        // metric, and switching it to exact integer arithmetic would change what
+        // it counts. That is a separate decision from the Money refactor.
+        let dollars = |m: receipt_core::money::Money| m.cents() as f64 / 100.0;
+        let sum: f64 = p.items.iter().map(|i| dollars(i.price)).sum();
+        let subtotal = p.subtotal.map(dollars);
+        let tax = p.tax.map(dollars);
+        let total = Some(dollars(p.total));
 
         // Does the item column reconcile with the printed subtotal?
         let s_ok = match subtotal {
@@ -171,7 +171,9 @@ fn run_dir(root: &Path, overrides: &[&str], label: &str) {
             stem,
             p.items.len(),
             sum,
-            p.subtotal.clone().unwrap_or_else(|| "-".into()),
+            p.subtotal
+                .map(|m| m.to_string())
+                .unwrap_or_else(|| "-".into()),
             p.total,
             flag(s_ok),
             flag(t_ok),

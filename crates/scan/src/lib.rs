@@ -201,6 +201,6 @@ mod tests {
             "merchant: {}",
             p.merchant
         );
-        assert_eq!(p.total, "221.97");
+        assert_eq!(p.total.to_string(), "221.97");
     }
 }

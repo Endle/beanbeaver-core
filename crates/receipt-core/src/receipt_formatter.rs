@@ -1,9 +1,10 @@
+use crate::money::Money;
 use crate::receipt_common::ReceiptWarningKind;
 
 #[derive(Clone, Debug)]
 pub struct FormatterItemInput {
     pub description: String,
-    pub price: String,
+    pub price: Money,
     pub quantity: i32,
     pub posting_account: String,
 }
@@ -17,7 +18,7 @@ pub struct FormatterWarningInput {
 
 #[derive(Clone, Debug)]
 pub struct FormatterTenderInput {
-    pub amount: String,
+    pub amount: Money,
     pub account: Option<String>,
     pub kind: String,
 }
@@ -27,8 +28,8 @@ pub struct FormatterReceiptInput {
     pub merchant: String,
     pub date_iso: String,
     pub date_is_placeholder: bool,
-    pub total: String,
-    pub tax: Option<String>,
+    pub total: Money,
+    pub tax: Option<Money>,
     /// Only the staged-draft path ever read this; see
     /// [`format_draft_beancount`]. Unreachable at HEAD.
     #[allow(dead_code, reason = "unreachable staged-draft/matching path")]
@@ -82,12 +83,12 @@ fn build_payment_postings(
     let tender_cents: i64 = receipt
         .tenders
         .iter()
-        .map(|tender| decimal_to_cents(&tender.amount))
+        .map(|tender| tender.amount.cents())
         .sum();
     if receipt.tenders.is_empty() || tender_cents != total_cents {
         return vec![(
             fallback_account.to_string(),
-            format!("{} {currency}", cents_to_fixed(-total_cents)),
+            format!("{} {currency}", Money::from_cents(-total_cents)),
             card_comment,
         )];
     }
@@ -102,7 +103,7 @@ fn build_payment_postings(
                 .filter(|value| !value.trim().is_empty())
                 .map(str::to_string)
                 .unwrap_or_else(|| pending_account_for_kind(&tender.kind).to_string());
-            let amount_cents = decimal_to_cents(&tender.amount);
+            let amount_cents = tender.amount.cents();
             let comment = if tender.kind == "card" {
                 card_comment.clone()
             } else {
@@ -110,7 +111,7 @@ fn build_payment_postings(
             };
             (
                 account,
-                format!("{} {currency}", cents_to_fixed(-amount_cents)),
+                format!("{} {currency}", Money::from_cents(-amount_cents)),
                 comment,
             )
         })
@@ -147,36 +148,6 @@ pub struct EnrichedMatchInput {
 /// Shared with `receipt_parser`'s balance check on purpose: that warning exists
 /// to predict whether the postings this module emits will balance, so the two
 /// must read a price string exactly the same way.
-pub(crate) fn decimal_to_cents(value: &str) -> i64 {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return 0;
-    }
-
-    let negative = trimmed.starts_with('-');
-    let unsigned = trimmed.trim_start_matches('-');
-    let mut parts = unsigned.splitn(2, '.');
-    let whole = parts.next().unwrap_or("0").parse::<i64>().unwrap_or(0);
-    let frac_raw = parts.next().unwrap_or("0");
-    let mut frac = frac_raw.chars().take(2).collect::<String>();
-    while frac.len() < 2 {
-        frac.push('0');
-    }
-    let frac_value = frac.parse::<i64>().unwrap_or(0);
-    let value = whole * 100 + frac_value;
-    if negative {
-        -value
-    } else {
-        value
-    }
-}
-
-fn cents_to_fixed(value: i64) -> String {
-    let sign = if value < 0 { "-" } else { "" };
-    let abs = value.abs();
-    format!("{sign}{}.{:02}", abs / 100, abs % 100)
-}
-
 fn format_postings_aligned(
     postings: &[(String, String, Option<String>)],
     indent: &str,
@@ -311,8 +282,8 @@ pub fn format_parsed_receipt(
     image_sha256: Option<&str>,
 ) -> String {
     let currency = &receipt.currency;
-    let total_cents = decimal_to_cents(&receipt.total);
-    let tax_cents = receipt.tax.as_deref().map(decimal_to_cents);
+    let total_cents = receipt.total.cents();
+    let tax_cents = receipt.tax.map(Money::cents);
     let mut lines = Vec::new();
 
     lines.push("; === PARSED RECEIPT - AWAITING CC MATCH ===".to_string());
@@ -326,11 +297,11 @@ pub fn format_parsed_receipt(
     } else {
         lines.push(format!("; @date: {}", receipt.date_iso));
     }
-    lines.push(format!("; @total: {}", cents_to_fixed(total_cents)));
+    lines.push(format!("; @total: {}", Money::from_cents(total_cents)));
     lines.push(format!("; @items: {}", receipt.items.len()));
     if let Some(tax_cents) = tax_cents {
         if tax_cents != 0 {
-            lines.push(format!("; @tax: {}", cents_to_fixed(tax_cents)));
+            lines.push(format!("; @tax: {}", Money::from_cents(tax_cents)));
         }
     }
     lines.push(String::new());
@@ -376,20 +347,17 @@ pub fn format_parsed_receipt(
         };
         postings.push((
             item.posting_account.clone(),
-            format!(
-                "{} {currency}",
-                cents_to_fixed(decimal_to_cents(&item.price))
-            ),
+            format!("{} {currency}", item.price),
             comment,
         ));
-        item_total_cents += decimal_to_cents(&item.price);
+        item_total_cents += item.price.cents();
     }
 
     if let Some(tax_cents) = tax_cents {
         if tax_cents != 0 {
             postings.push((
                 receipt.tax_account.clone(),
-                format!("{} {currency}", cents_to_fixed(tax_cents)),
+                format!("{} {currency}", Money::from_cents(tax_cents)),
                 None,
             ));
             item_total_cents += tax_cents;
@@ -401,7 +369,7 @@ pub fn format_parsed_receipt(
         if diff > 0 {
             postings.push((
                 "Expenses:FIXME".to_string(),
-                format!("{} {currency}", cents_to_fixed(diff)),
+                format!("{} {currency}", Money::from_cents(diff)),
                 Some("FIXME: unaccounted amount".to_string()),
             ));
         }
@@ -450,8 +418,8 @@ pub fn format_draft_beancount(
     credit_card_account: &str,
 ) -> String {
     let currency = &receipt.currency;
-    let total_cents = decimal_to_cents(&receipt.total);
-    let tax_cents = receipt.tax.as_deref().map(decimal_to_cents);
+    let total_cents = receipt.total.cents();
+    let tax_cents = receipt.tax.map(Money::cents);
     let mut lines = Vec::new();
 
     lines.push("; === DRAFT - REVIEW NEEDED ===".to_string());
@@ -485,20 +453,17 @@ pub fn format_draft_beancount(
         };
         postings.push((
             item.posting_account.clone(),
-            format!(
-                "{} {currency}",
-                cents_to_fixed(decimal_to_cents(&item.price))
-            ),
+            format!("{} {currency}", item.price),
             comment,
         ));
-        item_total_cents += decimal_to_cents(&item.price);
+        item_total_cents += item.price.cents();
     }
 
     if let Some(tax_cents) = tax_cents {
         if tax_cents != 0 {
             postings.push((
                 receipt.tax_account.clone(),
-                format!("{} {currency}", cents_to_fixed(tax_cents)),
+                format!("{} {currency}", Money::from_cents(tax_cents)),
                 None,
             ));
             item_total_cents += tax_cents;
@@ -510,14 +475,14 @@ pub fn format_draft_beancount(
         if diff > 0 {
             postings.push((
                 "Expenses:FIXME".to_string(),
-                format!("{} {currency}", cents_to_fixed(diff)),
+                format!("{} {currency}", Money::from_cents(diff)),
                 Some("FIXME: unaccounted amount".to_string()),
             ));
         } else if diff < 0 {
             lines.push(format!(
                 "  ; WARNING: items total ({}) exceeds receipt total ({})",
-                cents_to_fixed(item_total_cents),
-                cents_to_fixed(total_cents)
+                Money::from_cents(item_total_cents),
+                Money::from_cents(total_cents)
             ));
         }
     }
@@ -647,8 +612,8 @@ pub fn format_enriched_transaction(
     document: Option<&str>,
 ) -> String {
     let currency = &receipt.currency;
-    let receipt_total_cents = decimal_to_cents(&receipt.total);
-    let tax_cents = receipt.tax.as_deref().map(decimal_to_cents);
+    let receipt_total_cents = receipt.total.cents();
+    let tax_cents = receipt.tax.map(Money::cents);
     let mut lines = Vec::new();
 
     lines.push("; === ENRICHED TRANSACTION - REVIEW NEEDED ===".to_string());
@@ -688,7 +653,7 @@ pub fn format_enriched_transaction(
         let Some(number) = posting.number.as_deref() else {
             continue;
         };
-        let number_cents = decimal_to_cents(number);
+        let number_cents = Money::from_decimal_str(number).cents();
         if number_cents < 0 {
             cc_account = Some(posting.account.clone());
             cc_amount_cents = Some(number_cents);
@@ -708,7 +673,7 @@ pub fn format_enriched_transaction(
             .unwrap_or_else(|| "Liabilities:CreditCard:FIXME".to_string());
         let mut card_used = false;
         for tender in &receipt.tenders {
-            let amount_cents = decimal_to_cents(&tender.amount);
+            let amount_cents = tender.amount.cents();
             let (account, comment) = if tender.kind == "card" && !card_used {
                 card_used = true;
                 (resolved_card_account.clone(), None)
@@ -723,7 +688,7 @@ pub fn format_enriched_transaction(
             };
             postings.push((
                 account,
-                format!("{} {currency}", cents_to_fixed(-amount_cents)),
+                format!("{} {currency}", Money::from_cents(-amount_cents)),
                 comment,
             ));
         }
@@ -731,13 +696,13 @@ pub fn format_enriched_transaction(
     {
         postings.push((
             cc_account,
-            format!("{} {currency}", cents_to_fixed(cc_amount_cents)),
+            format!("{} {currency}", Money::from_cents(cc_amount_cents)),
             None,
         ));
     } else {
         postings.push((
             "Liabilities:CreditCard:FIXME".to_string(),
-            format!("{} {currency}", cents_to_fixed(-receipt_total_cents)),
+            format!("{} {currency}", Money::from_cents(-receipt_total_cents)),
             None,
         ));
     }
@@ -752,20 +717,17 @@ pub fn format_enriched_transaction(
         };
         postings.push((
             item.posting_account.clone(),
-            format!(
-                "{} {currency}",
-                cents_to_fixed(decimal_to_cents(&item.price))
-            ),
+            format!("{} {currency}", item.price),
             comment,
         ));
-        items_total_cents += decimal_to_cents(&item.price);
+        items_total_cents += item.price.cents();
     }
 
     if let Some(tax_cents) = tax_cents {
         if tax_cents != 0 {
             postings.push((
                 receipt.tax_account.clone(),
-                format!("{} {currency}", cents_to_fixed(tax_cents)),
+                format!("{} {currency}", Money::from_cents(tax_cents)),
                 None,
             ));
             items_total_cents += tax_cents;
@@ -786,14 +748,14 @@ pub fn format_enriched_transaction(
         if diff > 1 {
             postings.push((
                 expense_base.clone(),
-                format!("{} {currency}", cents_to_fixed(diff)),
+                format!("{} {currency}", Money::from_cents(diff)),
                 Some("remaining/unitemized".to_string()),
             ));
         } else if diff < -1 {
             lines.push(format!(
                 "  ; WARNING: items total ({}) exceeds transaction ({})",
-                cents_to_fixed(items_total_cents),
-                cents_to_fixed(expected_total_cents)
+                Money::from_cents(items_total_cents),
+                Money::from_cents(expected_total_cents)
             ));
         }
     }
@@ -823,7 +785,7 @@ mod tests {
     fn item(description: &str, price: &str, quantity: i32, account: &str) -> FormatterItemInput {
         FormatterItemInput {
             description: description.to_string(),
-            price: price.to_string(),
+            price: Money::from_decimal_str(price),
             quantity,
             posting_account: account.to_string(),
         }
@@ -835,7 +797,7 @@ mod tests {
             merchant: "COSTCO".to_string(),
             date_iso: "2026-02-18".to_string(),
             date_is_placeholder: false,
-            total: "20.00".to_string(),
+            total: Money::from_decimal_str("20.00"),
             tax: None,
             image_filename: "costco.jpg".to_string(),
             raw_text: String::new(),
@@ -853,7 +815,7 @@ mod tests {
     #[test]
     fn parsed_receipt_renders_metadata_postings_and_fixme() {
         let mut r = base();
-        r.tax = Some("1.00".to_string());
+        r.tax = Some(Money::from_decimal_str("1.00"));
         r.raw_text = "COSTCO\n**** 1234".to_string();
         r.items = vec![item(
             "COKE ZERO",
@@ -965,12 +927,12 @@ mod tests {
         r.raw_text = "**** 9999".to_string();
         r.tenders = vec![
             FormatterTenderInput {
-                amount: "15.00".to_string(),
+                amount: Money::from_decimal_str("15.00"),
                 account: None,
                 kind: "card".to_string(),
             },
             FormatterTenderInput {
-                amount: "5.00".to_string(),
+                amount: Money::from_decimal_str("5.00"),
                 account: Some("Assets:GiftCards:Costco".to_string()),
                 kind: "gift_card".to_string(),
             },
@@ -997,15 +959,15 @@ mod tests {
     #[test]
     fn parsed_receipt_falls_back_when_tenders_do_not_account_for_the_total() {
         let mut r = base();
-        r.total = "96.65".to_string();
+        r.total = Money::from_decimal_str("96.65");
         r.tenders = vec![
             FormatterTenderInput {
-                amount: "30.05".to_string(),
+                amount: Money::from_decimal_str("30.05"),
                 account: None,
                 kind: "gift_card".to_string(),
             },
             FormatterTenderInput {
-                amount: "65.60".to_string(),
+                amount: Money::from_decimal_str("65.60"),
                 account: None,
                 kind: "gift_card".to_string(),
             },
@@ -1022,7 +984,7 @@ mod tests {
     fn parsed_receipt_falls_back_on_a_one_cent_tender_gap() {
         let mut r = base();
         r.tenders = vec![FormatterTenderInput {
-            amount: "19.99".to_string(),
+            amount: Money::from_decimal_str("19.99"),
             account: None,
             kind: "cash".to_string(),
         }];
@@ -1036,7 +998,7 @@ mod tests {
     fn parsed_receipt_uses_pending_account_for_unassigned_gift_card() {
         let mut r = base();
         r.tenders = vec![FormatterTenderInput {
-            amount: "20.00".to_string(),
+            amount: Money::from_decimal_str("20.00"),
             account: None,
             kind: "gift_card".to_string(),
         }];
@@ -1083,7 +1045,7 @@ mod tests {
     #[test]
     fn enriched_transaction_reuses_match_and_itemizes() {
         let mut r = base();
-        r.tax = Some("1.00".to_string());
+        r.tax = Some(Money::from_decimal_str("1.00"));
         r.items = vec![item(
             "COKE ZERO",
             "17.19",

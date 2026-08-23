@@ -332,25 +332,6 @@ fn parse_decimal_scaled(value: &str, scale: i64) -> Option<i64> {
     Some(if negative { -scaled } else { scaled })
 }
 
-pub fn parse_scaled_4(value: &str) -> Option<i64> {
-    parse_decimal_scaled(value, 10_000)
-}
-
-fn format_scaled_decimal(value: i64, scale: i64) -> String {
-    let sign = if value < 0 { "-" } else { "" };
-    let abs = value.abs();
-    let digits = scale.to_string().len() - 1;
-    let whole = abs / scale;
-    let frac = abs % scale;
-    let frac_text = format!("{frac:0digits$}");
-    let frac_trimmed = frac_text.trim_end_matches('0');
-    if frac_trimmed.is_empty() {
-        format!("{sign}{whole}")
-    } else {
-        format!("{sign}{whole}.{frac_trimmed}")
-    }
-}
-
 fn collapse_internal_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -597,8 +578,4 @@ pub fn clean_description(description: &str) -> String {
         .replace_all(&cleaned, " ")
         .trim()
         .to_string()
-}
-
-pub fn format_scaled_4(value: i64) -> String {
-    format_scaled_decimal(value, 10_000)
 }

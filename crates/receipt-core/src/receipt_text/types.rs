@@ -1,12 +1,13 @@
 //! Public and private types for text-line item extraction.
 
+use crate::money::Money;
 use crate::receipt_common::ReceiptWarningKind;
 
 #[derive(Clone, Debug)]
 pub struct ParsedTextItem {
     pub description: String,
     pub category_source: String,
-    pub price_cents: i64,
+    pub price: Money,
     pub quantity: i32,
 }
 
@@ -29,7 +30,7 @@ pub(crate) struct MalformedTrailingPriceCandidate {
 
 #[derive(Clone, Debug)]
 pub(crate) struct CandidatePriceOption {
-    pub(crate) price_cents: i64,
+    pub(crate) price: Money,
     pub(crate) score: usize,
 }
 
@@ -43,9 +44,9 @@ pub(crate) enum DeferredTextOutcome {
 #[derive(Clone, Debug)]
 pub(crate) struct QuantityModifier {
     pub(crate) quantity: i32,
-    pub(crate) unit_price_cents: Option<i64>,
+    pub(crate) unit_price: Option<Money>,
     pub(crate) weight_text: Option<String>,
-    pub(crate) deal_price_cents: Option<i64>,
+    pub(crate) deal_price: Option<Money>,
     pub(crate) pattern_type: QuantityPatternType,
 }
 
@@ -59,11 +60,11 @@ pub(crate) enum QuantityPatternType {
 #[derive(Clone, Debug)]
 pub(crate) struct ReconciliationState {
     pub(crate) score: usize,
-    pub(crate) prices: Vec<i64>,
+    pub(crate) prices: Vec<Money>,
     pub(crate) ambiguous: bool,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct ReconciledMalformedPrices {
-    pub(crate) prices: Vec<i64>,
+    pub(crate) prices: Vec<Money>,
 }

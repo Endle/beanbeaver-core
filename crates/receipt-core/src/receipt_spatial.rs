@@ -1,6 +1,7 @@
 use regex::Regex;
 use std::sync::OnceLock;
 
+use crate::money::Money;
 use crate::receipt_common::{ReceiptWarningKind, WEIGHT_UNIT_AT_SEP, WEIGHT_UNIT_CLASS};
 
 const SCALE: i64 = 10_000;
@@ -39,7 +40,7 @@ pub struct PageInput {
 #[derive(Clone, Debug)]
 pub struct SpatialExtractedItem {
     pub description: String,
-    pub price_scaled: i64,
+    pub price: Money,
 }
 
 #[derive(Clone, Debug)]
@@ -436,18 +437,6 @@ fn parse_scaled_decimal(token: &str) -> Option<i64> {
     let whole_value = whole.parse::<i64>().ok()?;
     let frac_value = frac.parse::<i64>().ok()?;
     Some(whole_value * SCALE + frac_value * 100)
-}
-
-fn format_scaled_currency(value: i64) -> String {
-    let abs_value = value.abs();
-    let cents = abs_value / 100;
-    let dollars = cents / 100;
-    let rem = cents % 100;
-    if value < 0 {
-        format!("-{dollars}.{rem:02}")
-    } else {
-        format!("{dollars}.{rem:02}")
-    }
 }
 
 fn alpha_ratio(value: &str) -> f64 {
@@ -1587,7 +1576,7 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
                     used_line_indices[index] = true;
                     items.push(SpatialExtractedItem {
                         description,
-                        price_scaled: price_candidate.price_scaled,
+                        price: Money::from_scaled_4(price_candidate.price_scaled),
                     });
                     found_item = true;
                 }
@@ -1606,7 +1595,7 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
                 used_line_indices[price_candidate.source_line_index] = true;
                 items.push(SpatialExtractedItem {
                     description,
-                    price_scaled: price_candidate.price_scaled,
+                    price: Money::from_scaled_4(price_candidate.price_scaled),
                 });
                 found_item = true;
             }
@@ -1667,7 +1656,7 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
                     used_line_indices[index] = true;
                     items.push(SpatialExtractedItem {
                         description,
-                        price_scaled: price_candidate.price_scaled,
+                        price: Money::from_scaled_4(price_candidate.price_scaled),
                     });
                     found_item = true;
                     break;
@@ -1687,7 +1676,7 @@ pub fn extract_spatial_items(pages: Vec<PageInput>) -> SpatialExtractionOutcome 
             }
             let mut message = format!(
                 "maybe missed item near price {}",
-                format_scaled_currency(price_candidate.price_scaled)
+                Money::from_scaled_4(price_candidate.price_scaled)
             );
             if !context_text.is_empty() {
                 message.push_str(&format!(" (context: \"{}\")", context_text));
@@ -1712,6 +1701,8 @@ mod tests {
     // Word bounding boxes below are real OCR-derived, normalized coordinates;
     // some (e.g. 0.318) land near a math constant (1/π) purely by coincidence.
     #![allow(clippy::approx_constant)]
+
+    use crate::money::Money;
 
     use super::{
         extract_spatial_items, footer_address_like, is_price_word, BboxInput, LineInput, PageInput,
@@ -1811,11 +1802,11 @@ mod tests {
         let observed = outcome
             .items
             .into_iter()
-            .map(|item| (item.description, item.price_scaled))
+            .map(|item| (item.description, item.price))
             .collect::<Vec<_>>();
 
-        assert!(observed.contains(&("Napa".to_string(), 31_700)));
-        assert!(observed.contains(&("Soybean Sprout".to_string(), 10_300)));
+        assert!(observed.contains(&("Napa".to_string(), Money::from_cents(317))));
+        assert!(observed.contains(&("Soybean Sprout".to_string(), Money::from_cents(103))));
     }
 
     #[test]
@@ -1874,19 +1865,22 @@ mod tests {
         let observed = outcome
             .items
             .into_iter()
-            .map(|item| (item.description, item.price_scaled))
+            .map(|item| (item.description, item.price))
             .collect::<Vec<_>>();
 
         assert!(
-            observed.contains(&("NAPA".to_string(), 47_500)),
+            observed.contains(&("NAPA".to_string(), Money::from_cents(475))),
             "{observed:?}"
         );
         assert!(
-            observed.contains(&("STRAWBERRY".to_string(), 50_000)),
+            observed.contains(&("STRAWBERRY".to_string(), Money::from_cents(500))),
             "{observed:?}"
         );
         assert!(
-            observed.contains(&("T&T PRESERVED DUCK EGGS".to_string(), 59_900)),
+            observed.contains(&(
+                "T&T PRESERVED DUCK EGGS".to_string(),
+                Money::from_cents(599)
+            )),
             "{observed:?}"
         );
         assert!(
@@ -1937,23 +1931,26 @@ mod tests {
         let observed = outcome
             .items
             .into_iter()
-            .map(|item| (item.description, item.price_scaled))
+            .map(|item| (item.description, item.price))
             .collect::<Vec<_>>();
 
-        let has = |needle: &str, price: i64| {
+        let has = |needle: &str, price: Money| {
             observed
                 .iter()
                 .any(|(desc, p)| desc.contains(needle) && *p == price)
         };
-        assert!(has("BANANA", 27_000), "{observed:?}");
-        assert!(has("WMELON RED SOLS", 59_900), "{observed:?}");
-        for price in [42_800, 45_000, 48_100, 44_300] {
+        assert!(has("BANANA", Money::from_cents(270)), "{observed:?}");
+        assert!(
+            has("WMELON RED SOLS", Money::from_cents(599)),
+            "{observed:?}"
+        );
+        for price in [428, 450, 481, 443].map(Money::from_cents) {
             assert!(
                 has("CHERRIES RED", price),
                 "missing CHERRIES RED {price}: {observed:?}"
             );
         }
-        assert!(has("PEACH YELLOW", 19_600), "{observed:?}");
+        assert!(has("PEACH YELLOW", Money::from_cents(196)), "{observed:?}");
         assert!(
             !observed
                 .iter()
@@ -2005,7 +2002,7 @@ mod tests {
         let milk_count = outcome
             .items
             .iter()
-            .filter(|item| item.price_scaled == 60_900)
+            .filter(|item| item.price == Money::from_cents(609))
             .count();
         assert_eq!(
             milk_count, 2,
@@ -2054,14 +2051,17 @@ mod tests {
         let observed = outcome
             .items
             .into_iter()
-            .map(|item| (item.description, item.price_scaled))
+            .map(|item| (item.description, item.price))
             .collect::<Vec<_>>();
 
         assert_eq!(
             observed,
             vec![
-                ("S & B Wasabi".to_string(), 19_800),
-                ("Hot Kid Honey Flavour Bal".to_string(), 45_900),
+                ("S & B Wasabi".to_string(), Money::from_cents(198)),
+                (
+                    "Hot Kid Honey Flavour Bal".to_string(),
+                    Money::from_cents(459)
+                ),
             ]
         );
     }
@@ -2095,12 +2095,15 @@ mod tests {
         let observed = outcome
             .items
             .into_iter()
-            .map(|item| (item.description, item.price_scaled))
+            .map(|item| (item.description, item.price))
             .collect::<Vec<_>>();
 
         assert_eq!(
             observed,
-            vec![("FF SHEPHERDS PURSE FILLING".to_string(), 69_800)]
+            vec![(
+                "FF SHEPHERDS PURSE FILLING".to_string(),
+                Money::from_cents(698)
+            )]
         );
     }
 
@@ -2148,14 +2151,17 @@ mod tests {
         let observed = outcome
             .items
             .into_iter()
-            .map(|item| (item.description, item.price_scaled))
+            .map(|item| (item.description, item.price))
             .collect::<Vec<_>>();
 
         assert_eq!(
             observed,
             vec![
-                ("S & B Wasabi".to_string(), 19_800),
-                ("Hot Kid Honey Flavour Bal".to_string(), 45_900),
+                ("S & B Wasabi".to_string(), Money::from_cents(198)),
+                (
+                    "Hot Kid Honey Flavour Bal".to_string(),
+                    Money::from_cents(459)
+                ),
             ]
         );
     }
@@ -2171,11 +2177,11 @@ mod tests {
         }
     }
 
-    fn pairs_of(lines: Vec<LineInput>) -> Vec<(String, i64)> {
+    fn pairs_of(lines: Vec<LineInput>) -> Vec<(String, Money)> {
         extract_spatial_items(vec![PageInput { lines }])
             .items
             .into_iter()
-            .map(|item| (item.description, item.price_scaled))
+            .map(|item| (item.description, item.price))
             .collect()
     }
 
@@ -2228,13 +2234,16 @@ mod tests {
             ),
         ];
         let pairs = pairs_of(lines);
-        assert!(pairs.contains(&("26-L.IQUOR COORS LIGHT 6 PK HQ".to_string(), 157_900)));
+        assert!(pairs.contains(&(
+            "26-L.IQUOR COORS LIGHT 6 PK HQ".to_string(),
+            Money::from_cents(1579)
+        )));
         assert!(pairs
             .iter()
-            .any(|(d, p)| d.contains("COORS PINEAPPLE") && *p == 31_900));
+            .any(|(d, p)| d.contains("COORS PINEAPPLE") && *p == Money::from_cents(319)));
         assert!(!pairs
             .iter()
-            .any(|(d, p)| d.contains("COORS PINEAPPLE") && *p == 6_000));
+            .any(|(d, p)| d.contains("COORS PINEAPPLE") && *p == Money::from_cents(60)));
     }
 
     /// A quantity total ("3@$0.10 2.79") must attach to the multi-buy item, not
@@ -2293,8 +2302,10 @@ mod tests {
         let pairs = pairs_of(lines);
         assert!(pairs
             .iter()
-            .any(|(d, p)| d.contains("GROW CIDER") && *p == 27_900));
-        assert!(!pairs.iter().any(|(d, p)| d == "DEPOSIT 1" && *p == 27_900));
+            .any(|(d, p)| d.contains("GROW CIDER") && *p == Money::from_cents(279)));
+        assert!(!pairs
+            .iter()
+            .any(|(d, p)| d == "DEPOSIT 1" && *p == Money::from_cents(279)));
     }
 
     /// A duplicate code row that repeats the previous item's price must lend that
@@ -2335,8 +2346,8 @@ mod tests {
             ),
         ];
         let pairs = pairs_of(lines);
-        assert!(pairs.contains(&("CANTALOUPE".to_string(), 19_900)));
-        assert!(pairs.contains(&("BLACKBERRIES 60Z".to_string(), 19_900)));
+        assert!(pairs.contains(&("CANTALOUPE".to_string(), Money::from_cents(199))));
+        assert!(pairs.contains(&("BLACKBERRIES 60Z".to_string(), Money::from_cents(199))));
     }
 
     /// Two rows whose price is embedded in an OCR-garbled trailing word
@@ -2372,7 +2383,7 @@ mod tests {
         let pairs = pairs_of(lines);
         let seafood = pairs
             .iter()
-            .filter(|(d, p)| d.contains("SEAFOOD CNTR") && *p == 149_900)
+            .filter(|(d, p)| d.contains("SEAFOOD CNTR") && *p == Money::from_cents(1499))
             .count();
         assert_eq!(seafood, 2);
     }

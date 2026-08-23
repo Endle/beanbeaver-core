@@ -1,5 +1,6 @@
 //! Helpers and the main [`extract_text_items`] entry point.
 
+use crate::money::Money;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -55,7 +56,7 @@ pub(crate) fn normalize_decimal_spacing(text: &str) -> String {
     out
 }
 
-fn parse_cents(token: &str) -> Option<i64> {
+fn parse_cents(token: &str) -> Option<Money> {
     let trimmed = token.trim();
     let (whole, frac) = trimmed.split_once('.')?;
     if whole.is_empty() || frac.len() != 2 {
@@ -66,18 +67,7 @@ fn parse_cents(token: &str) -> Option<i64> {
     }
     let dollars = whole.parse::<i64>().ok()?;
     let cents = frac.parse::<i64>().ok()?;
-    Some(dollars * 100 + cents)
-}
-
-fn format_cents(value: i64) -> String {
-    let abs_value = value.abs();
-    let dollars = abs_value / 100;
-    let cents = abs_value % 100;
-    if value < 0 {
-        format!("-{dollars}.{cents:02}")
-    } else {
-        format!("{dollars}.{cents:02}")
-    }
+    Some(Money::from_cents(dollars * 100 + cents))
 }
 
 fn alpha_ratio(value: &str) -> f64 {
@@ -219,9 +209,9 @@ fn parse_quantity_modifier(line: &str) -> Option<QuantityModifier> {
         let unit_price_cents = parse_cents(captures.get(2)?.as_str())?;
         return Some(QuantityModifier {
             quantity,
-            unit_price_cents: Some(unit_price_cents),
+            unit_price: Some(unit_price_cents),
             weight_text: None,
-            deal_price_cents: None,
+            deal_price: None,
             pattern_type: QuantityPatternType::CountAtPrice,
         });
     }
@@ -232,9 +222,9 @@ fn parse_quantity_modifier(line: &str) -> Option<QuantityModifier> {
     {
         return Some(QuantityModifier {
             quantity: 1,
-            unit_price_cents: captures.get(2).and_then(|m| parse_cents(m.as_str())),
+            unit_price: captures.get(2).and_then(|m| parse_cents(m.as_str())),
             weight_text: Some(captures.get(1)?.as_str().to_string()),
-            deal_price_cents: None,
+            deal_price: None,
             pattern_type: QuantityPatternType::WeightAtPrice,
         });
     }
@@ -244,9 +234,11 @@ fn parse_quantity_modifier(line: &str) -> Option<QuantityModifier> {
         let deal_price_cents = parse_cents(captures.get(2)?.as_str())?;
         return Some(QuantityModifier {
             quantity,
-            unit_price_cents: Some(deal_price_cents / i64::from(quantity)),
+            unit_price: Some(Money::from_cents(
+                deal_price_cents.cents() / i64::from(quantity),
+            )),
             weight_text: None,
-            deal_price_cents: Some(deal_price_cents),
+            deal_price: Some(deal_price_cents),
             pattern_type: QuantityPatternType::MultiForPrice,
         });
     }
@@ -254,18 +246,19 @@ fn parse_quantity_modifier(line: &str) -> Option<QuantityModifier> {
     None
 }
 
-fn validate_quantity_price(total_price_cents: i64, modifier: &QuantityModifier) -> bool {
+fn validate_quantity_price(total_price: Money, modifier: &QuantityModifier) -> bool {
     let tolerance = 2i64;
     match modifier.pattern_type {
         QuantityPatternType::CountAtPrice => modifier
-            .unit_price_cents
+            .unit_price
             .map(|unit| {
-                (unit * i64::from(modifier.quantity) - total_price_cents).abs() <= tolerance
+                (unit.cents() * i64::from(modifier.quantity) - total_price.cents()).abs()
+                    <= tolerance
             })
             .unwrap_or(false),
         QuantityPatternType::MultiForPrice => modifier
-            .deal_price_cents
-            .map(|deal| (deal - total_price_cents).abs() <= tolerance)
+            .deal_price
+            .map(|deal| (deal.cents() - total_price.cents()).abs() <= tolerance)
             .unwrap_or(false),
         QuantityPatternType::WeightAtPrice => {
             // When both the weight and the per-unit rate are readable, the
@@ -273,15 +266,15 @@ fn validate_quantity_price(total_price_cents: i64, modifier: &QuantityModifier) 
             // reconcile is another item's drifted price, not this row's total.
             // When either is unreadable, keep the historical benefit of the
             // doubt (always-own-total).
-            let computed = modifier.unit_price_cents.and_then(|unit| {
+            let computed = modifier.unit_price.and_then(|unit| {
                 modifier
                     .weight_text
                     .as_deref()
                     .and_then(|weight| weight.parse::<f64>().ok())
-                    .map(|weight| (weight * unit as f64).round() as i64)
+                    .map(|weight| (weight * unit.cents() as f64).round() as i64)
             });
             match computed {
-                Some(own_total) => (own_total - total_price_cents).abs() <= 3,
+                Some(own_total) => (own_total - total_price.cents()).abs() <= 3,
                 None => true,
             }
         }
@@ -303,7 +296,7 @@ fn count_price_drift_evidence(lines: &[String]) -> usize {
             // counter labels ("Meat 4.19") are items, not headers.
             if let Some((cents, _, price_start)) = extract_trailing_price_cents(line) {
                 let head = line[..price_start].trim();
-                if cents > 0
+                if cents > Money::ZERO
                     && !head.is_empty()
                     && is_section_header_text(head)
                     && !is_generic_counter_label(head)
@@ -314,7 +307,7 @@ fn count_price_drift_evidence(lines: &[String]) -> usize {
             if !looks_like_quantity_expression(line) {
                 return false;
             }
-            let prices: Vec<i64> = re_find_prices()
+            let prices: Vec<Money> = re_find_prices()
                 .captures_iter(line)
                 .filter_map(|caps| caps.get(1).and_then(|m| parse_cents(m.as_str())))
                 .collect();
@@ -328,7 +321,7 @@ fn count_price_drift_evidence(lines: &[String]) -> usize {
             let Some(orphan) = trailing else {
                 return false;
             };
-            orphan > 0
+            orphan > Money::ZERO
                 && !parse_quantity_modifier(line)
                     .map(|modifier| validate_quantity_price(orphan, &modifier))
                     .unwrap_or(false)
@@ -458,7 +451,7 @@ fn looks_like_quantity_expression(text: &str) -> bool {
         || re_parenthetical_offer_prefix().is_match(&normalized)
 }
 
-pub(crate) fn extract_trailing_price_cents(line: &str) -> Option<(i64, bool, usize)> {
+pub(crate) fn extract_trailing_price_cents(line: &str) -> Option<(Money, bool, usize)> {
     let captures = re_trailing_price().captures(line)?;
     let cents = parse_cents(captures.get(1)?.as_str())?;
     let trailing_minus = captures.get(2).map(|m| m.as_str() == "-").unwrap_or(false);
@@ -654,7 +647,7 @@ fn levenshtein_distance(left: &str, right: &str) -> usize {
 fn malformed_candidate_price_options(
     candidate: &MalformedTrailingPriceCandidate,
 ) -> Vec<CandidatePriceOption> {
-    let mut best_by_price: HashMap<i64, usize> = HashMap::new();
+    let mut best_by_price: HashMap<Money, usize> = HashMap::new();
 
     for cents in 0..=99i64 {
         let fraction = format!("{cents:02}");
@@ -662,24 +655,24 @@ fn malformed_candidate_price_options(
         if score > 2 {
             continue;
         }
-        let price_cents = candidate.whole_dollars * 100 + cents;
+        let price = Money::from_cents(candidate.whole_dollars * 100 + cents);
         best_by_price
-            .entry(price_cents)
+            .entry(price)
             .and_modify(|best_score| *best_score = (*best_score).min(score))
             .or_insert(score);
     }
 
     let mut options = best_by_price
         .into_iter()
-        .map(|(price_cents, score)| CandidatePriceOption { price_cents, score })
+        .map(|(price, score)| CandidatePriceOption { price, score })
         .collect::<Vec<_>>();
-    options.sort_by_key(|option| (option.score, option.price_cents));
+    options.sort_by_key(|option| (option.score, option.price));
     options
 }
 
 fn reconcile_malformed_price_candidates(
-    regular_total_cents: i64,
-    summary_amounts: &HashSet<i64>,
+    regular_total_cents: Money,
+    summary_amounts: &HashSet<Money>,
     candidates: &[MalformedTrailingPriceCandidate],
 ) -> Option<ReconciledMalformedPrices> {
     if candidates.is_empty() {
@@ -714,16 +707,16 @@ fn reconcile_malformed_price_candidates(
                 break;
             }
 
-            let mut next_states: HashMap<i64, ReconciliationState> = HashMap::new();
+            let mut next_states: HashMap<Money, ReconciliationState> = HashMap::new();
             for (running_total, state) in &states {
                 for option in &options {
-                    let next_total = running_total + option.price_cents;
+                    let next_total = *running_total + option.price;
                     if next_total > target {
                         continue;
                     }
                     let next_score = state.score + option.score;
                     let mut next_prices = state.prices.clone();
-                    next_prices.push(option.price_cents);
+                    next_prices.push(option.price);
 
                     match next_states.get_mut(&next_total) {
                         Some(existing) => {
@@ -791,7 +784,7 @@ fn reconcile_malformed_price_candidates(
 
 pub fn extract_text_items(
     lines: &[String],
-    summary_amounts: &HashSet<i64>,
+    summary_amounts: &HashSet<Money>,
 ) -> (Vec<ParsedTextItem>, Vec<TextParserWarning>) {
     let mut deferred = Vec::new();
     let normalized_lines: Vec<String> = lines
@@ -847,7 +840,7 @@ pub fn extract_text_items(
             is_total_line || re_tender_label().is_match(line)
         })
         .filter_map(|line| extract_trailing_price_cents(line).map(|(c, _, _)| c))
-        .filter(|c| *c > 0)
+        .filter(|c| *c > Money::ZERO)
         .max();
 
     // Receipt-level evidence that the right price column drifted one row up
@@ -885,7 +878,7 @@ pub fn extract_text_items(
         // description, pair that orphan price with that description. The qty
         // line itself is still consumed below as a modifier of the item above.
         if is_qty_line {
-            let prices: Vec<i64> = re_find_prices()
+            let prices: Vec<Money> = re_find_prices()
                 .captures_iter(line)
                 .filter_map(|caps| caps.get(1).and_then(|m| parse_cents(m.as_str())))
                 .collect();
@@ -911,7 +904,7 @@ pub fn extract_text_items(
                 let above_consumed =
                     nearest_desc_above_consumed(&normalized_lines, &used_text_lines, i);
                 let echo_is_drifted = price_drift && above_consumed;
-                if orphan_cents > 0
+                if orphan_cents > Money::ZERO
                     && above_consumed
                     && (!reconciles_as_own_total || echo_is_drifted)
                 {
@@ -955,7 +948,7 @@ pub fn extract_text_items(
                             deferred.push(DeferredTextOutcome::Item(ParsedTextItem {
                                 category_source: desc.clone(),
                                 description: desc,
-                                price_cents: orphan_cents,
+                                price: orphan_cents,
                                 quantity: 1,
                             }));
                             // If the line right after the description also
@@ -1039,7 +1032,7 @@ pub fn extract_text_items(
                     deferred.push(DeferredTextOutcome::Item(ParsedTextItem {
                         category_source: desc.clone(),
                         description: desc,
-                        price_cents,
+                        price: price_cents,
                         quantity: 1,
                     }));
                     used_text_lines[j] = true;
@@ -1269,7 +1262,7 @@ pub fn extract_text_items(
                 deferred.push(DeferredTextOutcome::Item(ParsedTextItem {
                     description: desc_clean.clone(),
                     category_source: desc_clean,
-                    price_cents,
+                    price: price_cents,
                     quantity: 1,
                 }));
                 // Only block subsequent backward walks when desc_part is a
@@ -1548,15 +1541,14 @@ pub fn extract_text_items(
                     deferred.push(DeferredTextOutcome::Item(ParsedTextItem {
                         category_source: cleaned_desc.clone(),
                         description: format!("{cleaned_desc}{description_suffix}"),
-                        price_cents,
+                        price: price_cents,
                         quantity,
                     }));
                     if let Some(idx) = found_desc_line_idx {
                         used_text_lines[idx] = true;
                     }
-                } else if price_cents > 0 {
-                    let mut message =
-                        format!("maybe missed item near price {}", format_cents(price_cents));
+                } else if price_cents > Money::ZERO {
+                    let mut message = format!("maybe missed item near price {}", price_cents);
                     let context = truncated_context(line);
                     if !context.is_empty() {
                         message.push_str(&format!(" (context: \"{context}\")"));
@@ -1600,7 +1592,7 @@ pub fn extract_text_items(
     let regular_total_cents = deferred
         .iter()
         .filter_map(|outcome| match outcome {
-            DeferredTextOutcome::Item(item) => Some(item.price_cents),
+            DeferredTextOutcome::Item(item) => Some(item.price),
             _ => None,
         })
         .sum();
@@ -1634,7 +1626,7 @@ pub fn extract_text_items(
                     items.push(ParsedTextItem {
                         description: candidate.description.clone(),
                         category_source: candidate.category_source.clone(),
-                        price_cents: recovered_price_cents,
+                        price: recovered_price_cents,
                         quantity: 1,
                     });
                     maybe_push_warning(
@@ -1644,7 +1636,7 @@ pub fn extract_text_items(
                         format!(
                             "auto-corrected malformed OCR price \"{}\" -> \"{}\" using summary reconciliation",
                             candidate.observed_token,
-                            format_cents(recovered_price_cents),
+                            recovered_price_cents,
                         ),
                     );
                 } else {
@@ -1663,22 +1655,22 @@ pub fn extract_text_items(
     }
 
     if let Some(cap_base) = total_cap_cents {
-        let discount_sum: i64 = items
+        let discount_sum: Money = items
             .iter()
-            .filter(|it| it.price_cents < 0)
-            .map(|it| -it.price_cents)
+            .filter(|it| it.price < Money::ZERO)
+            .map(|it| -it.price)
             .sum();
         let cap = cap_base + discount_sum;
         let mut kept = Vec::with_capacity(items.len());
         for it in items.into_iter() {
-            if it.price_cents > cap {
+            if it.price > cap {
                 maybe_push_warning(
                     &mut warnings,
                     kept.len(),
                     ReceiptWarningKind::DroppedImplausiblePrice,
                     format!(
                         "dropped implausible item price \"{}\" exceeding receipt total (context: \"{}\")",
-                        format_cents(it.price_cents),
+                        it.price,
                         it.description,
                     ),
                 );

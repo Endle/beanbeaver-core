@@ -1,6 +1,7 @@
 //! Unit tests for text-line item extraction.
 
 use super::extract_text_items;
+use crate::money::Money;
 use std::collections::HashSet;
 
 #[test]
@@ -21,15 +22,21 @@ fn recovers_asterisk_tax_flag_and_ocr_merged_orphan_price() {
     .iter()
     .map(|s| s.to_string())
     .collect();
-    let summary_amounts = HashSet::from([7370i64]);
+    let summary_amounts = HashSet::from([Money::from_cents(7370)]);
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let prices: Vec<i64> = items.iter().map(|it| it.price_cents).collect();
+    let prices: Vec<Money> = items.iter().map(|it| it.price).collect();
     // Both colas recovered (asterisk tolerated) plus the orphaned Natrel.
-    assert_eq!(prices.iter().filter(|&&p| p == 2596).count(), 2);
+    assert_eq!(
+        prices
+            .iter()
+            .filter(|&&p| p == Money::from_cents(2596))
+            .count(),
+        2
+    );
     assert!(
         items
             .iter()
-            .any(|it| it.description.contains("Natrel") && it.price_cents == 1119),
+            .any(|it| it.description.contains("Natrel") && it.price == Money::from_cents(1119)),
         "expected Natrel paired at 11.19, got {items:?}"
     );
 }
@@ -56,23 +63,24 @@ fn skips_compact_slash_deal_unit_rows_and_price_match_promo() {
     .iter()
     .map(|s| s.to_string())
     .collect();
-    let summary_amounts = HashSet::from([5078i64]);
+    let summary_amounts = HashSet::from([Money::from_cents(5078)]);
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let total: i64 = items.iter().map(|it| it.price_cents).sum();
+    let total: Money = items.iter().map(|it| it.price).sum();
     assert_eq!(
-        total, 5078,
+        total,
+        Money::from_cents(5078),
         "real items must sum to the $50.78 subtotal with no phantoms, got {items:?}"
     );
     assert!(
-        !items.iter().any(|it| it.price_cents == 199),
+        !items.iter().any(|it| it.price == Money::from_cents(199)),
         "compact \"1/ $1.99\" unit row must not become an item, got {items:?}"
     );
     assert!(
-        !items.iter().any(|it| it.price_cents == 644),
+        !items.iter().any(|it| it.price == Money::from_cents(644)),
         "compact \"2  1/$6.44\" unit row must not become an item, got {items:?}"
     );
     assert!(
-        !items.iter().any(|it| it.price_cents == 602),
+        !items.iter().any(|it| it.price == Money::from_cents(602)),
         "\"PRICE MATCHED & SAVED\" promo must not become an item, got {items:?}"
     );
 }
@@ -94,10 +102,13 @@ fn keeps_item_whose_description_ends_in_percent_fat() {
     .iter()
     .map(|s| s.to_string())
     .collect();
-    let summary_amounts = HashSet::from([2247i64]);
+    let summary_amounts = HashSet::from([Money::from_cents(2247)]);
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
     assert_eq!(
-        items.iter().filter(|it| it.price_cents == 609).count(),
+        items
+            .iter()
+            .filter(|it| it.price == Money::from_cents(609))
+            .count(),
         2,
         "both MILK 2% lines should parse, got {items:?}"
     );
@@ -121,11 +132,11 @@ fn emits_priced_frozen_generic_item_label() {
     .iter()
     .map(|s| s.to_string())
     .collect();
-    let summary_amounts = HashSet::from([1423i64]);
+    let summary_amounts = HashSet::from([Money::from_cents(1423)]);
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let prices: Vec<i64> = items.iter().map(|it| it.price_cents).collect();
+    let prices: Vec<Money> = items.iter().map(|it| it.price).collect();
     assert!(
-        prices.contains(&699),
+        prices.contains(&Money::from_cents(699)),
         "Frozen 6.99 should be an item: {items:?}"
     );
 }
@@ -139,15 +150,15 @@ fn recovers_unique_malformed_three_decimal_prices_via_summary_reconciliation() {
         "SUBTOTAL 16.38".to_string(),
         "TOTAL 16.38".to_string(),
     ];
-    let summary_amounts = HashSet::from([1638]);
+    let summary_amounts = HashSet::from([Money::from_cents(1638)]);
 
     let (items, warnings) = extract_text_items(&lines, &summary_amounts);
 
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].description, "2% FINE-FILT");
-    assert_eq!(items[0].price_cents, 669);
+    assert_eq!(items[0].price, Money::from_cents(669));
     assert_eq!(items[1].description, "430 XL EGGS");
-    assert_eq!(items[1].price_cents, 969);
+    assert_eq!(items[1].price, Money::from_cents(969));
     assert_eq!(warnings.len(), 2);
     assert!(warnings[0]
         .message
@@ -166,13 +177,13 @@ fn skips_reg_marker_lines_with_ocr_noise_prefix() {
         "2.96 1b @ $0.99/16 2.93".to_string(),
         "TOTAL 2.93".to_string(),
     ];
-    let summary_amounts = HashSet::from([293]);
+    let summary_amounts = HashSet::from([Money::from_cents(293)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
 
     // Should produce only one item at $2.93, not a ghost at $1.69
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0].price_cents, 293);
+    assert_eq!(items[0].price, Money::from_cents(293));
     assert!(items[0].description.contains("Sunkist Orange"));
 }
 
@@ -185,18 +196,18 @@ fn skips_reg_marker_lines_with_garbled_ocr_prefix() {
         "Fish Spape Cracker (Tomat 1.99".to_string(),
         "TOTAL 8.98".to_string(),
     ];
-    let summary_amounts = HashSet::from([898]);
+    let summary_amounts = HashSet::from([Money::from_cents(898)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
 
     // Should NOT create a ghost item at $7.99 from the REG marker line
-    let prices: Vec<i64> = items.iter().map(|i| i.price_cents).collect();
+    let prices: Vec<Money> = items.iter().map(|i| i.price).collect();
     assert!(
-        !prices.contains(&799),
+        !prices.contains(&Money::from_cents(799)),
         "REG marker line should not produce a ghost item at $7.99, got items: {:?}",
         items
             .iter()
-            .map(|i| (&i.description, i.price_cents))
+            .map(|i| (&i.description, i.price))
             .collect::<Vec<_>>()
     );
 }
@@ -227,12 +238,12 @@ fn recovers_item_with_comma_decimal_price() {
         "*Kang Shi Fu Plum Juice 50 0,99".to_string(),
         "TOTAL 0.99".to_string(),
     ];
-    let summary_amounts = HashSet::from([99]);
+    let summary_amounts = HashSet::from([Money::from_cents(99)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
 
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0].price_cents, 99);
+    assert_eq!(items[0].price, Money::from_cents(99));
     assert!(items[0].description.contains("Plum Juice"));
 }
 
@@ -257,28 +268,31 @@ fn orphan_deal_line_price_skips_qty_row_to_reach_description_below() {
         "1 @ $4.99".to_string(),
         "Sub Total 15.44".to_string(),
     ];
-    let summary_amounts = HashSet::from([1544]);
+    let summary_amounts = HashSet::from([Money::from_cents(1544)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let observed: Vec<(String, i64)> = items
+    let observed: Vec<(String, Money)> = items
         .into_iter()
-        .map(|item| (item.description, item.price_cents))
+        .map(|item| (item.description, item.price))
         .collect();
 
     assert!(
-        observed.contains(&("Fresh Corianders".to_string(), 199)),
+        observed.contains(&("Fresh Corianders".to_string(), Money::from_cents(199))),
         "{observed:?}"
     );
     assert!(
-        observed.contains(&("Searay - Tofu Fish".to_string(), 596)),
+        observed.contains(&("Searay - Tofu Fish".to_string(), Money::from_cents(596))),
         "{observed:?}"
     );
     assert!(
-        observed.contains(&("Ten Ten - Shangdong Style".to_string(), 299)),
+        observed.contains(&(
+            "Ten Ten - Shangdong Style".to_string(),
+            Money::from_cents(299)
+        )),
         "{observed:?}"
     );
     assert!(
-        observed.contains(&("Ten Ten - Pork Bun".to_string(), 499)),
+        observed.contains(&("Ten Ten - Pork Bun".to_string(), Money::from_cents(499))),
         "{observed:?}"
     );
     assert_eq!(observed.len(), 4, "{observed:?}");
@@ -299,26 +313,26 @@ fn weight_row_total_validates_against_rate_and_frees_drifted_price() {
         "Meat 4.19".to_string(),
         "Sub Total 21.68".to_string(),
     ];
-    let summary_amounts = HashSet::from([2168]);
+    let summary_amounts = HashSet::from([Money::from_cents(2168)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let observed: Vec<(String, i64)> = items
+    let observed: Vec<(String, Money)> = items
         .into_iter()
-        .map(|item| (item.description, item.price_cents))
+        .map(|item| (item.description, item.price))
         .collect();
 
     assert!(
         observed
             .iter()
-            .any(|(d, p)| d.starts_with("Fresh Chicken Wings") && *p == 1004),
+            .any(|(d, p)| d.starts_with("Fresh Chicken Wings") && *p == Money::from_cents(1004)),
         "{observed:?}"
     );
     assert!(
-        observed.contains(&("Meat".to_string(), 745)),
+        observed.contains(&("Meat".to_string(), Money::from_cents(745))),
         "{observed:?}"
     );
     assert!(
-        observed.contains(&("Meat".to_string(), 419)),
+        observed.contains(&("Meat".to_string(), Money::from_cents(419))),
         "{observed:?}"
     );
 }
@@ -346,20 +360,26 @@ fn coincidental_qty_echo_pairs_downward_under_receipt_drift() {
         "TCMC - Strawberry Flavore".to_string(),
         "Sub Total 9.47".to_string(),
     ];
-    let summary_amounts = HashSet::from([947]);
+    let summary_amounts = HashSet::from([Money::from_cents(947)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let observed: Vec<(String, i64)> = items
+    let observed: Vec<(String, Money)> = items
         .into_iter()
-        .map(|item| (item.description, item.price_cents))
+        .map(|item| (item.description, item.price))
         .collect();
 
     assert!(
-        observed.contains(&("TCMC - Strawberry Flavore".to_string(), 199)),
+        observed.contains(&(
+            "TCMC - Strawberry Flavore".to_string(),
+            Money::from_cents(199)
+        )),
         "{observed:?}"
     );
     assert!(
-        observed.contains(&("Margina Strawberry Flavor".to_string(), 199)),
+        observed.contains(&(
+            "Margina Strawberry Flavor".to_string(),
+            Money::from_cents(199)
+        )),
         "{observed:?}"
     );
 }
@@ -387,34 +407,34 @@ fn paren_subtext_price_pairs_forward_when_description_above_consumed() {
         "1 @ $2.98".to_string(),
         "Sub Total 14.21".to_string(),
     ];
-    let summary_amounts = HashSet::from([1421]);
+    let summary_amounts = HashSet::from([Money::from_cents(1421)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let observed: Vec<(String, i64)> = items
+    let observed: Vec<(String, Money)> = items
         .into_iter()
-        .map(|item| (item.description, item.price_cents))
+        .map(|item| (item.description, item.price))
         .collect();
 
     assert!(
-        observed.contains(&("Pork Lard".to_string(), 399)),
+        observed.contains(&("Pork Lard".to_string(), Money::from_cents(399))),
         "{observed:?}"
     );
     assert!(
         observed
             .iter()
-            .any(|(d, p)| d.starts_with("Pak Fok - Fried Tofu") && *p == 298),
+            .any(|(d, p)| d.starts_with("Pak Fok - Fried Tofu") && *p == Money::from_cents(298)),
         "{observed:?}"
     );
     assert!(
         observed
             .iter()
-            .any(|(d, p)| d.starts_with("LBT - Frozen Sandwich") && *p == 128),
+            .any(|(d, p)| d.starts_with("LBT - Frozen Sandwich") && *p == Money::from_cents(128)),
         "{observed:?}"
     );
     assert!(
-        observed
-            .iter()
-            .any(|(d, p)| d.starts_with("Sanquan - Yellow Millet C") && *p == 398),
+        observed.iter().any(
+            |(d, p)| d.starts_with("Sanquan - Yellow Millet C") && *p == Money::from_cents(398)
+        ),
         "{observed:?}"
     );
     // Pork Lard must not also appear at Pak Fok's price (the old
@@ -422,7 +442,7 @@ fn paren_subtext_price_pairs_forward_when_description_above_consumed() {
     assert!(
         !observed
             .iter()
-            .any(|(d, p)| d.starts_with("Pork Lard") && *p == 298),
+            .any(|(d, p)| d.starts_with("Pork Lard") && *p == Money::from_cents(298)),
         "{observed:?}"
     );
 }
@@ -447,28 +467,34 @@ fn priced_header_chain_resolves_first_two_items_under_drift() {
         "Dim Sum".to_string(),
         "Sub Total 16.24".to_string(),
     ];
-    let summary_amounts = HashSet::from([1624]);
+    let summary_amounts = HashSet::from([Money::from_cents(1624)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let observed: Vec<(String, i64)> = items
+    let observed: Vec<(String, Money)> = items
         .into_iter()
-        .map(|item| (item.description, item.price_cents))
+        .map(|item| (item.description, item.price))
         .collect();
 
     assert!(
-        observed.contains(&("S & B - Wasabi".to_string(), 559)),
+        observed.contains(&("S & B - Wasabi".to_string(), Money::from_cents(559))),
         "{observed:?}"
     );
     assert!(
-        observed.contains(&("Nissin - Chicken Flavour".to_string(), 268)),
+        observed.contains(&(
+            "Nissin - Chicken Flavour".to_string(),
+            Money::from_cents(268)
+        )),
         "{observed:?}"
     );
     assert!(
-        observed.contains(&("Shodoshima - Asian Style".to_string(), 499)),
+        observed.contains(&(
+            "Shodoshima - Asian Style".to_string(),
+            Money::from_cents(499)
+        )),
         "{observed:?}"
     );
     assert!(
-        observed.contains(&("Dim Sum".to_string(), 298)),
+        observed.contains(&("Dim Sum".to_string(), Money::from_cents(298))),
         "{observed:?}"
     );
     assert_eq!(observed.len(), 4, "{observed:?}");
@@ -494,24 +520,30 @@ fn mangled_reg_row_forwards_drifted_price_under_drift() {
         "*DongBei Sticky Spicy Hot 4.99".to_string(),
         "Sub Total 26.34".to_string(),
     ];
-    let summary_amounts = HashSet::from([2634]);
+    let summary_amounts = HashSet::from([Money::from_cents(2634)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let observed: Vec<(String, i64)> = items
+    let observed: Vec<(String, Money)> = items
         .into_iter()
-        .map(|item| (item.description, item.price_cents))
+        .map(|item| (item.description, item.price))
         .collect();
 
     assert!(
-        observed.contains(&("LKS Dried Cod Fish Slice".to_string(), 299)),
+        observed.contains(&(
+            "LKS Dried Cod Fish Slice".to_string(),
+            Money::from_cents(299)
+        )),
         "{observed:?}"
     );
     assert!(
-        observed.contains(&("*Yang Guo Fu Spicy Hot Pot".to_string(), 399)),
+        observed.contains(&(
+            "*Yang Guo Fu Spicy Hot Pot".to_string(),
+            Money::from_cents(399)
+        )),
         "{observed:?}"
     );
     assert!(
-        observed.contains(&("Hot Bean Sauce 450g".to_string(), 699)),
+        observed.contains(&("Hot Bean Sauce 450g".to_string(), Money::from_cents(699))),
         "{observed:?}"
     );
 }
@@ -527,18 +559,18 @@ fn weight_rate_row_with_dropped_at_still_prices_item_above() {
         "1.86 1b  $2.49/1b 4.63".to_string(),
         "Sub Total 4.63".to_string(),
     ];
-    let summary_amounts = HashSet::from([463]);
+    let summary_amounts = HashSet::from([Money::from_cents(463)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let observed: Vec<(String, i64)> = items
+    let observed: Vec<(String, Money)> = items
         .into_iter()
-        .map(|item| (item.description, item.price_cents))
+        .map(|item| (item.description, item.price))
         .collect();
 
     assert!(
         observed
             .iter()
-            .any(|(d, p)| d.starts_with("Fresh Ginger") && *p == 463),
+            .any(|(d, p)| d.starts_with("Fresh Ginger") && *p == Money::from_cents(463)),
         "{observed:?}"
     );
     assert_eq!(observed.len(), 1, "{observed:?}");
@@ -561,24 +593,24 @@ fn subtext_price_stays_with_unclaimed_item_above() {
         "3 @ $0.98".to_string(),
         "Sub Total 8.82".to_string(),
     ];
-    let summary_amounts = HashSet::from([882]);
+    let summary_amounts = HashSet::from([Money::from_cents(882)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let observed: Vec<(String, i64)> = items
+    let observed: Vec<(String, Money)> = items
         .into_iter()
-        .map(|item| (item.description, item.price_cents))
+        .map(|item| (item.description, item.price))
         .collect();
 
     assert!(
         observed
             .iter()
-            .any(|(d, p)| d.starts_with("HLY - Potato Chips Honey") && *p == 588),
+            .any(|(d, p)| d.starts_with("HLY - Potato Chips Honey") && *p == Money::from_cents(588)),
         "{observed:?}"
     );
     assert!(
-        observed
-            .iter()
-            .any(|(d, p)| d.starts_with("HLY - Potato Chips Origin") && *p == 294),
+        observed.iter().any(
+            |(d, p)| d.starts_with("HLY - Potato Chips Origin") && *p == Money::from_cents(294)
+        ),
         "{observed:?}"
     );
     assert_eq!(observed.len(), 2, "{observed:?}");
@@ -598,24 +630,24 @@ fn multiline_name_continuation_does_not_block_orphan_pairing() {
         "Gray Ridge - White Fegs E".to_string(),
         "Sub Total 12.57".to_string(),
     ];
-    let summary_amounts = HashSet::from([1257]);
+    let summary_amounts = HashSet::from([Money::from_cents(1257)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let observed: Vec<(String, i64)> = items
+    let observed: Vec<(String, Money)> = items
         .into_iter()
-        .map(|item| (item.description, item.price_cents))
+        .map(|item| (item.description, item.price))
         .collect();
 
     assert!(
         observed
             .iter()
-            .any(|(d, p)| d.starts_with("Natrel") && *p == 498),
+            .any(|(d, p)| d.starts_with("Natrel") && *p == Money::from_cents(498)),
         "{observed:?}"
     );
     assert!(
         observed
             .iter()
-            .any(|(d, p)| d.starts_with("Gray Ridge") && *p == 759),
+            .any(|(d, p)| d.starts_with("Gray Ridge") && *p == Money::from_cents(759)),
         "{observed:?}"
     );
 }
@@ -630,13 +662,13 @@ fn strips_embedded_unit_price_and_tax_flags_from_description() {
         "SUBTOTAL: 20.99".to_string(),
         "TOTAL: $23.72".to_string(),
     ];
-    let summary_amounts = HashSet::from([2099, 2372]);
+    let summary_amounts = HashSet::from([Money::from_cents(2099), Money::from_cents(2372)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
 
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].description, "VICKS SINUS CO");
-    assert_eq!(items[0].price_cents, 2099);
+    assert_eq!(items[0].price, Money::from_cents(2099));
 }
 
 #[test]
@@ -659,31 +691,31 @@ fn extract_trailing_price_cents_signs_discounts() {
     // Leading-minus discount convention (e.g. Jin Lian "D9 -$1.96").
     assert_eq!(
         extract_trailing_price_cents("250g D9 -$1.96").map(|t| t.0),
-        Some(-196)
+        Some(Money::from_cents(-196))
     );
     assert_eq!(
         extract_trailing_price_cents("JL5 -$5.00").map(|t| t.0),
-        Some(-500)
+        Some(Money::from_cents(-500))
     );
     // Costco trailing-minus stays negative (and isn't double-handled).
     assert_eq!(
         extract_trailing_price_cents("TPD/1796144 3.00-").map(|t| t.0),
-        Some(-300)
+        Some(Money::from_cents(-300))
     );
     // Plain prices stay positive.
     assert_eq!(
         extract_trailing_price_cents("Meat 20.53").map(|t| t.0),
-        Some(2053)
+        Some(Money::from_cents(2053))
     );
     // Guards: a mid-token hyphen and a spaced " - " separator must NOT
     // flip the sign — only a '-' glued to the price (directly or via '$').
     assert_eq!(
         extract_trailing_price_cents("ITEM-1.96").map(|t| t.0),
-        Some(196)
+        Some(Money::from_cents(196))
     );
     assert_eq!(
         extract_trailing_price_cents("MILK 2% - 3.99").map(|t| t.0),
-        Some(399)
+        Some(Money::from_cents(399))
     );
 }
 
@@ -699,17 +731,20 @@ fn parses_leading_minus_discount_lines_as_negative_items() {
         "SUBTOTAL $55.49".to_string(),
         "TOTAL $50.49".to_string(),
     ];
-    let summary_amounts = HashSet::from([5549, 5049]);
+    let summary_amounts = HashSet::from([Money::from_cents(5549), Money::from_cents(5049)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let prices: Vec<i64> = items.iter().map(|it| it.price_cents).collect();
-    assert!(prices.contains(&1399), "positive item missing: {prices:?}");
+    let prices: Vec<Money> = items.iter().map(|it| it.price).collect();
     assert!(
-        prices.contains(&-196),
+        prices.contains(&Money::from_cents(1399)),
+        "positive item missing: {prices:?}"
+    );
+    assert!(
+        prices.contains(&Money::from_cents(-196)),
         "D9 discount must be negative: {prices:?}"
     );
     assert!(
-        prices.contains(&-528),
+        prices.contains(&Money::from_cents(-528)),
         "D7 discount must be negative: {prices:?}"
     );
 }
@@ -725,15 +760,18 @@ fn parses_tx_category_tax_suffix_prices() {
         "SUB TOTAL $9.86".to_string(),
         "TOTAL $9.86".to_string(),
     ];
-    let summary_amounts = HashSet::from([986]);
+    let summary_amounts = HashSet::from([Money::from_cents(986)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let prices: Vec<i64> = items.iter().map(|it| it.price_cents).collect();
+    let prices: Vec<Money> = items.iter().map(|it| it.price).collect();
     assert!(
-        prices.contains(&388),
+        prices.contains(&Money::from_cents(388)),
         "Tx1-suffixed price not recovered: {prices:?}"
     );
-    assert!(prices.contains(&598), "plain price missing: {prices:?}");
+    assert!(
+        prices.contains(&Money::from_cents(598)),
+        "plain price missing: {prices:?}"
+    );
 }
 
 #[test]
@@ -748,13 +786,16 @@ fn recovers_letter_fraction_malformed_price_via_reconciliation() {
         "Sub Total 3.50".to_string(),
         "Total 3.50".to_string(),
     ];
-    let summary_amounts = HashSet::from([350]);
+    let summary_amounts = HashSet::from([Money::from_cents(350)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let prices: Vec<i64> = items.iter().map(|it| it.price_cents).collect();
-    assert!(prices.contains(&259), "regular item missing: {prices:?}");
+    let prices: Vec<Money> = items.iter().map(|it| it.price).collect();
     assert!(
-        prices.contains(&91),
+        prices.contains(&Money::from_cents(259)),
+        "regular item missing: {prices:?}"
+    );
+    assert!(
+        prices.contains(&Money::from_cents(91)),
         "0.9I should reconcile to 0.91: {prices:?}"
     );
 }
@@ -771,16 +812,16 @@ fn drops_item_price_exceeding_receipt_total() {
         "SUB TOTAL $24.32".to_string(),
         "TOTAL $25.44".to_string(),
     ];
-    let summary_amounts = HashSet::from([2432, 2544]);
+    let summary_amounts = HashSet::from([Money::from_cents(2432), Money::from_cents(2544)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let prices: Vec<i64> = items.iter().map(|it| it.price_cents).collect();
+    let prices: Vec<Money> = items.iter().map(|it| it.price).collect();
     assert!(
-        !prices.contains(&8158),
+        !prices.contains(&Money::from_cents(8158)),
         "81.58 outlier should be dropped: {prices:?}"
     );
     assert!(
-        prices.contains(&388),
+        prices.contains(&Money::from_cents(388)),
         "valid Tx1 item should remain: {prices:?}"
     );
 }
@@ -809,16 +850,20 @@ fn column_header_total_is_not_the_grand_total_and_tender_backstops_the_cap() {
     .into_iter()
     .map(String::from)
     .collect();
-    let summary = HashSet::from([1079, 140, 1219]);
+    let summary = HashSet::from([
+        Money::from_cents(1079),
+        Money::from_cents(140),
+        Money::from_cents(1219),
+    ]);
     let (items, _warnings) = extract_text_items(&lines, &summary);
-    let observed: Vec<(String, i64)> = items
+    let observed: Vec<(String, Money)> = items
         .into_iter()
-        .map(|item| (item.description, item.price_cents))
+        .map(|item| (item.description, item.price))
         .collect();
     assert!(
         observed
             .iter()
-            .any(|(d, p)| d.contains("TOOTHPASTE") && *p == 1079),
+            .any(|(d, p)| d.contains("TOOTHPASTE") && *p == Money::from_cents(1079)),
         "{observed:?}"
     );
 }
@@ -837,22 +882,24 @@ fn ocr_noise_between_weight_unit_and_at_still_prices_item_above() {
         "2.32 16-@ $1.59/16 3.69".to_string(),
         "Sub Total 7.36".to_string(),
     ];
-    let summary_amounts = HashSet::from([736]);
+    let summary_amounts = HashSet::from([Money::from_cents(736)]);
 
     let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
-    let observed: Vec<(String, i64)> = items
+    let observed: Vec<(String, Money)> = items
         .into_iter()
-        .map(|item| (item.description, item.price_cents))
+        .map(|item| (item.description, item.price))
         .collect();
 
     assert!(
-        observed.iter().any(|(d, p)| d == "Napa Round" && *p == 367),
+        observed
+            .iter()
+            .any(|(d, p)| d == "Napa Round" && *p == Money::from_cents(367)),
         "{observed:?}"
     );
     assert!(
         observed
             .iter()
-            .any(|(d, p)| d == "Winter Melon" && *p == 369),
+            .any(|(d, p)| d == "Winter Melon" && *p == Money::from_cents(369)),
         "{observed:?}"
     );
     assert!(
