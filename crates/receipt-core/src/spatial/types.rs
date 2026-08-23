@@ -46,3 +46,22 @@ pub(crate) struct AnnotationRow {
     pub(crate) left_text: String,
     pub(crate) has_price: bool,
 }
+
+/// What stage 4 decided about one price: which row it belongs to, and the three
+/// facts about *how* it decided that the emission stage still needs.
+#[derive(Clone, Debug)]
+pub(crate) struct LineChoice {
+    pub(crate) line_index: Option<usize>,
+    pub(crate) distance: f64,
+    /// Stage 3's value, possibly raised by stage 4.
+    pub(crate) prefer_below: bool,
+    /// The nearest-row search found the *next priced row* for a source row that
+    /// carries no description of its own. That is not a pairing, and it must not
+    /// fall through to the search-above fallback either.
+    pub(crate) suppress_fallback: bool,
+    /// The source row is a bare code repeating an item already priced above it,
+    /// so a miss here is expected and must not be warned about.
+    pub(crate) source_repeats_previous_priced_item: bool,
+    /// The price was moved onto an unpriced deposit stub below its own row.
+    pub(crate) shifted_to_deposit_stub: bool,
+}

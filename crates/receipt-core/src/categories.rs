@@ -640,7 +640,7 @@ pub fn classify_item_key(
     let best = matches
         .into_iter()
         .filter(|matched| matched.category.is_some())
-        .max_by(|left, right| compare_match_rank(left, right));
+        .max_by(compare_match_rank);
     best.and_then(|matched| matched.category).or(default)
 }
 
