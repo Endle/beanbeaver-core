@@ -1,4 +1,26 @@
-//! Helpers and the main [`extract_text_items`] entry point.
+//! Text item extraction: pair each description with a price using the *line
+//! text* only, for receipts whose word boxes give no usable amount column.
+//!
+//! [`extract_text_items`] at the bottom of this file is the entry point, and it
+//! reads as six stages:
+//!
+//! 1. Receipt-level facts — [`grand_total_line`], [`total_price_cap`], and the
+//!    price-drift verdict. All three bound what the per-row stages may decide.
+//! 2. Rows the loop can answer without a price: [`orphan_qty_pairing`],
+//!    [`drifted_price_pairing`], [`unpriced_line_outcome`].
+//! 3. [`plan_price_line`] — what a trailing price means, or that it means
+//!    nothing. Its answer is a [`PricePlan`], and everything after it acts on
+//!    that plan rather than re-deciding.
+//! 4. [`find_description`] — which row owns a price the row itself did not
+//!    describe. Four walks; the order between them is the algorithm.
+//! 5. [`resolve_deferred`] — replay the ordered outcomes, recovering malformed
+//!    prices against the receipt's own summary amounts.
+//! 6. [`drop_prices_above_cap`] — discard what the receipt total cannot support.
+//!
+//! Stages 2-4 read the rows through [`Lines`], which carries the shared borrow,
+//! the claimed-row set, and the drift verdict together. Claiming a row is
+//! always the *caller's* job: a stage returns which row it wants and never
+//! marks it, which is what keeps the order of claims in one place.
 
 use crate::money::Money;
 use regex::Regex;
@@ -782,813 +804,20 @@ fn reconcile_malformed_price_candidates(
     })
 }
 
-pub fn extract_text_items(
-    lines: &[String],
+/// Stage 5 — resolve the deferred stream into items and warnings.
+///
+/// The loop above cannot emit directly: a malformed price is only recoverable
+/// once every *well-formed* item is known, because the recovery is a
+/// reconciliation against the receipt's own summary amounts. So the loop
+/// records outcomes in order and this stage replays them, substituting a
+/// recovered price where one was found and a warning where none was.
+///
+/// Order is what makes `after_item_index` meaningful, so the replay must stay
+/// a single pass over `deferred` in the order the loop pushed it.
+fn resolve_deferred(
+    deferred: Vec<DeferredTextOutcome>,
     summary_amounts: &HashSet<Money>,
 ) -> (Vec<ParsedTextItem>, Vec<TextParserWarning>) {
-    let mut deferred = Vec::new();
-    let normalized_lines: Vec<String> = lines
-        .iter()
-        .map(|line| normalize_decimal_spacing(line))
-        .collect();
-    // Track description lines already consumed by an earlier price so a later
-    // price's forward/backward search can't grab the same description. Without
-    // this, a "weak inline desc" line like "(1kg) 16.99" forces a backward walk
-    // that pulls the previous item's description, producing a cross-row leak
-    // (Foody Mart bug C).
-    let mut used_text_lines: Vec<bool> = vec![false; normalized_lines.len()];
-
-    let total_line_idx = normalized_lines.iter().position(|line| {
-        let upper = line.to_ascii_uppercase();
-        re_total_word().is_match(line)
-            && !upper.contains("SUBTOTAL")
-            && !upper.contains("TOTAL NUMBER")
-            && !upper.contains("TOTAL DISCOUNT")
-            && !upper.contains("TOTAL ITEMS")
-            && !upper.contains("TOTAL SAVINGS")
-            && !upper.contains("TOTAL SAVED")
-            // A column-header row ("DESCRIPTION QTY UNIT TOTAL") is not the
-            // grand total; treating it as one truncates the whole item region.
-            && !upper.contains("QTY")
-            && !upper.contains("DESCRIPTION")
-    });
-
-    // Authoritative receipt total, when a grand-total line carries a price.
-    // Used as a sanity ceiling on individual item prices: a single positive
-    // line item can never exceed (total + sum of discounts), so a price above
-    // that ceiling is an OCR artifact (e.g. "$1.58" misread as "81.58") and is
-    // dropped rather than mis-paired — "prefer missing items over wrong
-    // pairings". Taken as the max over genuine grand-total lines (not the
-    // first match) so sub-lines like "TOTAL TAX" never stand in for the total.
-    let total_cap_cents = normalized_lines
-        .iter()
-        .filter(|line| {
-            let upper = line.to_ascii_uppercase();
-            let is_total_line = re_total_word().is_match(line)
-                && !upper.contains("SUBTOTAL")
-                && !upper.contains("TOTAL TAX")
-                && !upper.contains("TOTAL NUMBER")
-                && !upper.contains("TOTAL DISCOUNT")
-                && !upper.contains("TOTAL ITEMS")
-                && !upper.contains("TOTAL SAVINGS")
-                && !upper.contains("TOTAL SAVED")
-                && !upper.contains("TOTAL POINTS");
-            // A card tender is an equally valid ceiling: the charge is never
-            // less than any single item. This keeps the cap honest when the
-            // TOTAL row picked up a neighbouring smaller amount during line
-            // grouping (Pharmasave's "TOTAL $1.40" carrying the HST).
-            is_total_line || re_tender_label().is_match(line)
-        })
-        .filter_map(|line| extract_trailing_price_cents(line).map(|(c, _, _)| c))
-        .filter(|c| *c > Money::ZERO)
-        .max();
-
-    // Receipt-level evidence that the right price column drifted one row up
-    // (photo shear on two-column Asian-grocery receipts): count qty rows whose
-    // trailing price does NOT reconcile as the row's own qty×unit total. On a
-    // straight receipt this is ~0; on a leaning one ("1 @ $2.59  0.91H", …)
-    // nearly every deal block contributes one. With systematic drift
-    // established, a qty row whose trailing price *coincidentally* equals its
-    // own total ("1 @ $1.99  1.99" where the next item also costs 1.99) is
-    // still treated as carrying the next item's price, and paren-subtext rows
-    // pair forward instead of backward.
-    let price_drift = count_price_drift_evidence(&normalized_lines) >= PRICE_DRIFT_EVIDENCE_MIN;
-
-    for (i, line) in normalized_lines.iter().enumerate() {
-        if total_line_idx.is_some_and(|total_idx| i > total_idx) {
-            break;
-        }
-        if re_skip_patterns().is_match(line) {
-            continue;
-        }
-        if line.len() < 3 || re_digits_only().is_match(line) {
-            continue;
-        }
-
-        let is_qty_line = looks_like_quantity_expression(line);
-        let has_trailing_total = re_trailing_total_presence().is_match(line);
-
-        // OCR column-merge recovery: a quantity line can absorb the NEXT
-        // item's price into its own text row -- e.g. FreshCo
-        // "2 @ 1/ $12.98 $11.19 C", where $11.19 is the price of the
-        // price-less "Natrel Milk 2% 4L" line below (the right-hand price
-        // column drifted up one row in OCR reading order). When a qty line
-        // carries a trailing price that does NOT reconcile as its own line
-        // total (qty x unit) and the next line is a bare, price-less
-        // description, pair that orphan price with that description. The qty
-        // line itself is still consumed below as a modifier of the item above.
-        if is_qty_line {
-            let prices: Vec<Money> = re_find_prices()
-                .captures_iter(line)
-                .filter_map(|caps| caps.get(1).and_then(|m| parse_cents(m.as_str())))
-                .collect();
-            // The orphan must be a genuine trailing price, not the tail of a
-            // parenthetical deal ("(2/$3.50)" ends the coriander line; that
-            // 3.50 is subtext, not a drifted amount).
-            let trailing = extract_trailing_price_cents(line).map(|(c, _, _)| c);
-            if prices.len() >= 2 && trailing == prices.last().copied() {
-                let orphan_cents = *prices.last().unwrap();
-                let reconciles_as_own_total = parse_quantity_modifier(line)
-                    .map(|modifier| validate_quantity_price(orphan_cents, &modifier))
-                    .unwrap_or(false);
-                // The downward pairing is only valid when the description
-                // above is already priced, so this row has nothing left to
-                // donate upward. An unclaimed description above keeps the
-                // trailing price as its own — whether the row reconciles
-                // ("Broccoli (Crowns)" / "0.41 lb @ $1.98/lb  0.81") or not
-                // ("HLY - Potato Chips Honey" / "(...)@3.99(1/$0.98)  5.88H",
-                // where 5.88 is Honey's own price on its deal-subtext row).
-                // Under receipt-level drift even a coincidentally-reconciling
-                // echo ("1 @ $1.99  1.99" where the next item also costs
-                // 1.99) is the next item's price.
-                let above_consumed =
-                    nearest_desc_above_consumed(&normalized_lines, &used_text_lines, i);
-                let echo_is_drifted = price_drift && above_consumed;
-                if orphan_cents > Money::ZERO
-                    && above_consumed
-                    && (!reconciles_as_own_total || echo_is_drifted)
-                {
-                    // The descriptive line can sit a row or two further down
-                    // when the block carries its own qty row: Foody Mart prints
-                    // "(<size>)@<unit>(<deal>) <orphan>" / "1 @ $2.99" /
-                    // "<item name>". Skip qty rows; never leap over a priced
-                    // row (that's another item's territory).
-                    let mut desc_line_idx = None;
-                    for j in (i + 1)..normalized_lines.len().min(i + 4) {
-                        let candidate = normalized_lines[j].trim();
-                        if candidate.is_empty() || looks_like_quantity_expression(candidate) {
-                            continue;
-                        }
-                        if line_has_trailing_price(candidate) {
-                            break;
-                        }
-                        desc_line_idx = Some(j);
-                        break;
-                    }
-                    if let Some(next_idx) = desc_line_idx {
-                        let next_trimmed = normalized_lines[next_idx].trim();
-                        // Skip if the line was already consumed by an
-                        // earlier price's search — avoids cross-row leak.
-                        // Do NOT mark used here: this orphan-qty pairing is a
-                        // low-confidence OCR-column-merge heuristic, so a later
-                        // higher-confidence search (backward / weak-desc forward)
-                        // is allowed to claim the same description.
-                        // A bare counter label ("Meat" above its mangled
-                        // Chinese subtext) is a real item here — the orphan
-                        // price arriving from this qty row is what prices it.
-                        // `is_priced_generic_item_label`'s trailing-price
-                        // requirement can't see a price delivered from above.
-                        if !used_text_lines[next_idx]
-                            && (is_descriptive_candidate(next_trimmed)
-                                || is_generic_counter_label(next_trimmed))
-                        {
-                            let desc = strip_sale_price_subtext(&strip_leading_receipt_codes(
-                                next_trimmed,
-                            ));
-                            deferred.push(DeferredTextOutcome::Item(ParsedTextItem {
-                                category_source: desc.clone(),
-                                description: desc,
-                                price: orphan_cents,
-                                quantity: 1,
-                            }));
-                            // If the line right after the description also
-                            // carries a trailing price equal to orphan_cents
-                            // (the typical Asian-grocery `desc / size+price /
-                            // qty / ...` layout where the qty repeats the unit
-                            // price), the pairing is confirmed: mark the desc
-                            // line used so the following iteration's weak-desc
-                            // backward search can't re-claim it (bug H/K). If
-                            // it does NOT match, the pairing is speculative —
-                            // leave the line unmarked so a later
-                            // higher-confidence backward search can reach it.
-                            // Mark the claimed description so the next link
-                            // of the chain sees it as consumed: the row below
-                            // it can then donate ITS trailing price downward
-                            // (nearest_desc_above_consumed), and the paren
-                            // back-walk can't emit the same item again at a
-                            // drifted price. The pairing itself was already
-                            // gated on the description above being consumed,
-                            // so this is no longer speculative.
-                            used_text_lines[next_idx] = true;
-                            // The orphan-qty path just paired this line's
-                            // trailing price with the description below. Don't
-                            // also let the regular extract path pair the same
-                            // trailing price with a description ABOVE — that
-                            // produces a duplicate extraction (bug K) where the
-                            // qty/sale-subtext gets glued onto the wrong item.
-                            continue;
-                        }
-                    }
-                }
-            }
-        }
-
-        if is_qty_line && !has_trailing_total {
-            if line.to_ascii_lowercase().contains("/for") {
-                let tail_token = re_tail_token()
-                    .captures(line)
-                    .and_then(|captures| captures.get(1).map(|m| m.as_str().to_string()))
-                    .unwrap_or_default();
-                if !tail_token.is_empty() && tail_token.chars().any(|ch| ch.is_ascii_alphabetic()) {
-                    let context = truncated_context(line);
-                    deferred.push(DeferredTextOutcome::Warning(
-                        ReceiptWarningKind::PossibleMissedItem,
-                        format!(
-                            "maybe missed item near malformed multi-buy total \"{tail_token}\" (context: \"{context}\")"
-                        ),
-                    ));
-                }
-            }
-            continue;
-        }
-
-        if re_parenthetical_only().is_match(line) && !re_trailing_price().is_match(line) {
-            continue;
-        }
-
-        if let Some((price_cents, _is_discount, price_start)) = extract_trailing_price_cents(line) {
-            // A row already claimed as another pairing's description can
-            // still carry a trailing price — under drift it is the NEXT
-            // item's, drifted onto this name row ("S & B - Wasabi  2.68"
-            // right after the priced header claimed Wasabi at 5.59). Forward
-            // it to the next unclaimed description and consume this row.
-            if price_drift && used_text_lines[i] {
-                for j in (i + 1)..normalized_lines.len().min(i + 4) {
-                    if used_text_lines[j] {
-                        break;
-                    }
-                    let candidate = normalized_lines[j].trim();
-                    if line_has_trailing_price(candidate) {
-                        break;
-                    }
-                    if candidate.is_empty()
-                        || looks_like_quantity_expression(candidate)
-                        || !(is_descriptive_candidate(candidate)
-                            || is_generic_counter_label(candidate))
-                    {
-                        continue;
-                    }
-                    let desc = strip_sale_price_subtext(&strip_leading_receipt_codes(candidate));
-                    deferred.push(DeferredTextOutcome::Item(ParsedTextItem {
-                        category_source: desc.clone(),
-                        description: desc,
-                        price: price_cents,
-                        quantity: 1,
-                    }));
-                    used_text_lines[j] = true;
-                    break;
-                }
-                continue;
-            }
-            let line_upper = line.to_ascii_uppercase();
-            let mut desc_part = line[..price_start].trim().to_string();
-            let compact_line = re_compact_space().replace_all(&line_upper, "").to_string();
-            let mut prefer_forward_desc = false;
-            let mut skip_if_no_forward_desc = false;
-
-            let has_reg_marker = line_upper.contains("REG$")
-                || line_upper.contains("@REG")
-                || line_upper.contains("0REG")
-                || line_upper.contains("OREG")
-                || re_reg_price_marker().is_match(&line_upper);
-
-            if has_reg_marker {
-                let prices: Vec<_> = re_find_prices().find_iter(line).collect();
-                if prices.len() == 1 {
-                    let mut marker: String = desc_part
-                        .to_ascii_uppercase()
-                        .chars()
-                        .filter(|ch| ch.is_ascii_alphanumeric())
-                        .collect();
-                    marker = Regex::new(r"^\d+")
-                        .unwrap()
-                        .replace(&marker, "")
-                        .to_string();
-                    if marker.ends_with("REG") {
-                        continue;
-                    }
-                }
-                if prices.len() > 1
-                    && i > 0
-                    && re_trailing_price().is_match(&normalized_lines[i - 1])
-                {
-                    prefer_forward_desc = true;
-                    skip_if_no_forward_desc = true;
-                }
-            }
-
-            // Skip ghost promo artifacts like "EG2.99" where letters and price
-            // run together.  Only fire when the *original* (uncompacted) line also
-            // matches — lines with clear whitespace separation (e.g. "Meat 20.53")
-            // are real items, not ghosts.
-            if re_compact_promo_ghost().is_match(&compact_line)
-                && re_compact_promo_ghost().is_match(line_upper.trim())
-                && !looks_like_onsale_marker(&desc_part)
-            {
-                if i > 0 && line_has_trailing_price(&normalized_lines[i - 1]) {
-                    continue;
-                }
-            }
-
-            // Skip TOTAL/SUBTOTAL summary rows, including OCR-mangled variants
-            // like "Tota1$" (l→1) or "SUBTCTAL" (O→C). Without the
-            // `re_total_ocr_variants` arm these lines passed the literal
-            // contains() checks, fell into the description-search else branch,
-            // and emitted a "maybe missed item" warning at the summary amount
-            // (Al-Premium 16.93 phantom).
-            if line_upper.contains("TOTAL")
-                || line_upper.contains("SUBTOTAL")
-                || line_upper.contains("SUB TOTAL")
-                || re_total_ocr_variants().is_match(&line_upper)
-            {
-                continue;
-            }
-
-            if i > 0 && summary_amounts.contains(&price_cents.abs()) {
-                let prev_upper = normalized_lines[i - 1].to_ascii_uppercase();
-                if prev_upper.contains("TOTAL")
-                    || prev_upper.contains("SUBTOTAL")
-                    || prev_upper.contains("SUB TOTAL")
-                {
-                    continue;
-                }
-            }
-
-            let weak_inline_desc = is_weak_inline_description(&desc_part);
-            let mut force_backward =
-                line_upper.contains("REG$") || line_upper.contains("@REG") || weak_inline_desc;
-            // Under receipt-level drift a paren-subtext row's trailing price
-            // belongs to the item BELOW when the description above is already
-            // priced ("Pork Lard" claimed from its qty row, so "(3 380g)
-            // 2.98" is Pak Fok's) — search forward, stopping at the first
-            // priced row rather than leaping over it. When the description
-            // above is still unclaimed, the price is its own ("Fresh Chicken
-            // Wings" / "(WRER)  10.04") and the backward walk stays correct.
-            let drift_paren_forward = price_drift
-                && desc_part.trim_start().starts_with('(')
-                && nearest_desc_above_consumed(&normalized_lines, &used_text_lines, i);
-            if drift_paren_forward {
-                prefer_forward_desc = true;
-            }
-            if has_reg_marker
-                && force_backward
-                && i > 0
-                && !normalized_lines[i - 1].trim().is_empty()
-                && line_has_trailing_price(normalized_lines[i - 1].trim())
-                && desc_part.starts_with('(')
-            {
-                prefer_forward_desc = true;
-            }
-
-            if !desc_part.is_empty() {
-                desc_part = Regex::new(r"^\d{8,}\s*")
-                    .unwrap()
-                    .replace(&desc_part, "")
-                    .to_string();
-            }
-            let is_onsale_marker_desc = looks_like_onsale_marker(&desc_part);
-            if is_onsale_marker_desc {
-                prefer_forward_desc = true;
-                if i > 0 && line_has_trailing_price(normalized_lines[i - 1].trim()) {
-                    skip_if_no_forward_desc = true;
-                }
-            }
-
-            let is_priced_section_header = !desc_part.is_empty()
-                && is_section_header_text(&desc_part)
-                && !is_priced_generic_item_label(&desc_part, line);
-            let mut skip_section_header_price = false;
-            if is_priced_section_header {
-                desc_part.clear();
-                for j in (i + 1)..normalized_lines.len().min(i + 4) {
-                    let next_line = normalized_lines[j].trim();
-                    if next_line.is_empty() {
-                        continue;
-                    }
-                    if looks_like_summary_line(next_line) {
-                        break;
-                    }
-                    if let Some((next_price, _, _)) = extract_trailing_price_cents(next_line) {
-                        if next_price == price_cents {
-                            skip_section_header_price = true;
-                        }
-                    }
-                    break;
-                }
-            }
-            if skip_section_header_price {
-                continue;
-            }
-
-            let is_malformed_price_marker = !desc_part.is_empty()
-                && desc_part.starts_with('(')
-                && desc_part.contains('$')
-                && !desc_part.contains(' ')
-                && desc_part.len() <= 16
-                && !desc_part.contains('@')
-                && !desc_part.to_ascii_uppercase().contains("REG");
-            let is_quantity_stub = re_malformed_price_marker().is_match(&desc_part);
-            let mut is_qty_expr = if !desc_part.is_empty() {
-                looks_like_quantity_expression(&desc_part)
-                    || re_onsale_parenthetical().is_match(&desc_part)
-                    || is_onsale_marker_desc
-            } else {
-                false
-            };
-
-            if is_malformed_price_marker {
-                let prev_line = if i > 0 {
-                    normalized_lines[i - 1].trim()
-                } else {
-                    ""
-                };
-                let next_line = if i + 1 < normalized_lines.len() {
-                    normalized_lines[i + 1].trim()
-                } else {
-                    ""
-                };
-                let prev_looks_like_description = !prev_line.is_empty()
-                    && !re_skip_patterns().is_match(prev_line)
-                    && !looks_like_summary_line(prev_line)
-                    && !looks_like_quantity_expression(prev_line)
-                    && !line_has_trailing_price(prev_line);
-                let next_supports_multi_buy =
-                    !next_line.is_empty() && looks_like_quantity_expression(next_line);
-                if prev_looks_like_description && next_supports_multi_buy {
-                    force_backward = true;
-                    desc_part.clear();
-                    is_qty_expr = false;
-                } else {
-                    continue;
-                }
-            }
-            if is_quantity_stub {
-                continue;
-            }
-
-            // If desc_part is a mangled REG-price marker (OCR ate the leading R,
-            // so "REG$15.99" became "#EG15.99" or "(EG$5.99"), the trailing
-            // price is the suggested-retail marker, not an item price. The if
-            // block below already filters via `!re_mangled_reg_marker`, but the
-            // else branch would back-walk and emit a phantom item paired with
-            // the previous line. Suppress the whole line instead.
-            if !desc_part.is_empty() && re_mangled_reg_marker().is_match(desc_part.trim()) {
-                // Under drift with the description above already priced, the
-                // REG amount lives inside the marker itself and the trailing
-                // price is the NEXT item's ("(-EG4.99  2.99" above "LKS Dried
-                // Cod Fish Slice") — forward it; in every other shape the
-                // trailing price is the suggested-retail amount, so keep
-                // suppressing the row.
-                if drift_paren_forward {
-                    skip_if_no_forward_desc = true;
-                } else {
-                    continue;
-                }
-            }
-
-            if !desc_part.is_empty()
-                && desc_part.len() > 2
-                && !is_qty_expr
-                && !force_backward
-                && !drift_paren_forward
-                && !looks_like_summary_line(desc_part.trim())
-            {
-                let desc_alpha = alpha_ratio(desc_part.trim());
-                let desc_clean = strip_sale_price_subtext(&desc_part);
-                let desc_clean = re_embedded_unit_price_suffix()
-                    .replace(&desc_clean, "")
-                    .trim()
-                    .to_string();
-                deferred.push(DeferredTextOutcome::Item(ParsedTextItem {
-                    description: desc_clean.clone(),
-                    category_source: desc_clean,
-                    price: price_cents,
-                    quantity: 1,
-                }));
-                // Only block subsequent backward walks when desc_part is a
-                // genuine description. Low-alpha junk like "#E$" must stay
-                // walkable so the next price below can reach the real item
-                // sitting above the junk.
-                if desc_alpha >= 0.5 {
-                    used_text_lines[i] = true;
-                }
-            } else {
-                let mut qty_info = Vec::new();
-                let mut qty_modifiers = Vec::new();
-                let mut found_desc: Option<String> = None;
-                let mut found_desc_line_idx: Option<usize> = None;
-
-                if is_priced_section_header {
-                    for j in (i + 1)..normalized_lines.len().min(i + 5) {
-                        if used_text_lines[j] {
-                            // A used line marks the start of another item's
-                            // territory; don't walk past it.
-                            break;
-                        }
-                        let next_line = normalized_lines[j].trim();
-                        // Under established drift the first item below a
-                        // priced header often carries the SECOND item's price
-                        // on its own name row ("&& 01-Grocery  5.59" / "S & B
-                        // - Wasabi  2.68"). The header's price belongs to that
-                        // name regardless; skipping it would cross the whole
-                        // section's pairing by one.
-                        if price_drift && re_trailing_price().is_match(next_line) {
-                            if let Some((_, _, price_start)) =
-                                extract_trailing_price_cents(next_line)
-                            {
-                                let head = next_line[..price_start].trim();
-                                let cleaned_head = strip_leading_receipt_codes(head);
-                                if !cleaned_head.is_empty()
-                                    && !is_section_header_text(&cleaned_head)
-                                    && alpha_ratio(&cleaned_head) >= 0.5
-                                {
-                                    found_desc = Some(cleaned_head);
-                                    found_desc_line_idx = Some(j);
-                                    break;
-                                }
-                            }
-                        }
-                        if next_line.is_empty()
-                            || re_skip_patterns().is_match(next_line)
-                            || looks_like_summary_line(next_line)
-                            || looks_like_quantity_expression(next_line)
-                            || looks_like_onsale_marker(next_line)
-                            || re_trailing_price().is_match(next_line)
-                            || re_standalone_price_line().is_match(next_line)
-                            || re_long_digits_line().is_match(next_line)
-                        {
-                            continue;
-                        }
-                        let cleaned_next = strip_leading_receipt_codes(next_line);
-                        // Bare counter labels ("Meat" below a priced
-                        // "&& 03-Meat" banner) are the item the header's
-                        // drifted price belongs to, not another banner.
-                        if cleaned_next.is_empty()
-                            || (is_section_header_text(&cleaned_next)
-                                && !is_generic_counter_label(&cleaned_next))
-                        {
-                            continue;
-                        }
-                        // The `&& <Dept> price` section-header signal is strong:
-                        // the next non-section line is almost always the item
-                        // name even if it carries trailing OCR-mangled subtext
-                        // like `(125gx5)@8.99(1/$6.99)` that drags the alpha
-                        // ratio below 0.5. A more permissive threshold here lets
-                        // descriptions like "MN - Crispy Coffee Flavor 6*60g)..."
-                        // (ratio 0.46) pair correctly, while pure-noise lines
-                        // are still rejected.
-                        if alpha_ratio(&cleaned_next) < 0.35 {
-                            continue;
-                        }
-                        found_desc = Some(cleaned_next);
-                        found_desc_line_idx = Some(j);
-                        break;
-                    }
-                }
-                if is_priced_section_header && found_desc.is_none() {
-                    continue;
-                }
-
-                if found_desc.is_none() && prefer_forward_desc {
-                    for j in (i + 1)..normalized_lines.len().min(i + 5) {
-                        if used_text_lines[j] {
-                            break;
-                        }
-                        let next_line = normalized_lines[j].trim();
-                        if line_has_trailing_price(next_line) {
-                            if drift_paren_forward {
-                                break;
-                            }
-                            continue;
-                        }
-                        if next_line.is_empty()
-                            || re_skip_patterns().is_match(next_line)
-                            || looks_like_summary_line(next_line)
-                            || looks_like_quantity_expression(next_line)
-                            || looks_like_onsale_marker(next_line)
-                        {
-                            continue;
-                        }
-                        let cleaned_next = strip_leading_receipt_codes(next_line);
-                        // Bare counter labels ("Meat") are items about to be
-                        // priced by this row, not department banners.
-                        if cleaned_next.is_empty()
-                            || (is_section_header_text(&cleaned_next)
-                                && !is_generic_counter_label(&cleaned_next))
-                        {
-                            continue;
-                        }
-                        if alpha_ratio(&cleaned_next) < 0.5 {
-                            continue;
-                        }
-                        found_desc = Some(cleaned_next);
-                        found_desc_line_idx = Some(j);
-                        break;
-                    }
-                }
-                if skip_if_no_forward_desc && found_desc.is_none() {
-                    continue;
-                }
-
-                if found_desc.is_none() {
-                    let lower_bound = i.saturating_sub(5);
-                    for j in (lower_bound..i).rev() {
-                        if used_text_lines[j] {
-                            // A used line marks the end of the previous item's
-                            // territory; don't walk past it to grab a description
-                            // belonging to an item we've already paired.
-                            break;
-                        }
-                        let prev_line = normalized_lines[j].trim();
-                        if Regex::new(&format!(r"^[\d.]+\s*{TAX_FLAG_CLASS}\s*$"))
-                            .unwrap()
-                            .is_match(prev_line)
-                            || Regex::new(r"^\d{8,}$").unwrap().is_match(prev_line)
-                            || re_skip_patterns().is_match(prev_line)
-                        {
-                            continue;
-                        }
-                        if let Some(modifier) = parse_quantity_modifier(prev_line) {
-                            qty_modifiers.push(modifier);
-                            qty_info.push(prev_line.to_string());
-                            continue;
-                        }
-                        if looks_like_quantity_expression(prev_line) {
-                            qty_info.push(prev_line.to_string());
-                            continue;
-                        }
-                        if looks_like_onsale_marker(prev_line)
-                            || re_price_info_line().is_match(prev_line)
-                            || re_parenthetical_closed().is_match(prev_line)
-                            || (prev_line.starts_with('(') && !prev_line.contains(')'))
-                            || re_onsale_parenthetical().is_match(prev_line)
-                            || re_parenthetical_multibuy().is_match(prev_line)
-                            || prev_line.len() <= 3
-                        {
-                            continue;
-                        }
-                        // See patterns::SKIP_PRICED_LINES_IN_BACKWARD_DESC_SEARCH
-                        // for rationale and revert instructions.
-                        // Limited to bare-price triggers (no qty expression,
-                        // no description) so OCR column-merge cases like
-                        // "1 @ $9.99 3.99" can still back-walk into a
-                        // legitimate "ITEM NAME 9.99" description line.
-                        if SKIP_PRICED_LINES_IN_BACKWARD_DESC_SEARCH
-                            && !is_qty_expr
-                            && !force_backward
-                            && line_has_trailing_price(prev_line)
-                        {
-                            continue;
-                        }
-
-                        let desc_for_ratio = strip_leading_receipt_codes(prev_line);
-                        if alpha_ratio(&desc_for_ratio) < 0.5 {
-                            continue;
-                        }
-                        if prev_line.len() > 2
-                            && !Regex::new(r"^[\d.]+$").unwrap().is_match(prev_line)
-                        {
-                            let cleaned_prev = strip_leading_receipt_codes(prev_line);
-                            if !cleaned_prev.is_empty() {
-                                found_desc = Some(cleaned_prev);
-                                found_desc_line_idx = Some(j);
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // Forward fallback: when the price line has no usable
-                // description on its own (empty / very short / weak-parenthetical
-                // like "(1kg)" or "()") and backward search returned nothing,
-                // try a couple of lines forward. This handles Foody Mart-style
-                // layouts where the price comes BEFORE the description.
-                if found_desc.is_none()
-                    && !is_priced_section_header
-                    && !prefer_forward_desc
-                    && (desc_part.is_empty() || desc_part.len() <= 3 || force_backward)
-                {
-                    for j in (i + 1)..normalized_lines.len().min(i + 3) {
-                        if used_text_lines[j] {
-                            break;
-                        }
-                        let next_line = normalized_lines[j].trim();
-                        if next_line.is_empty()
-                            || re_skip_patterns().is_match(next_line)
-                            || looks_like_summary_line(next_line)
-                            || looks_like_quantity_expression(next_line)
-                            || looks_like_onsale_marker(next_line)
-                            || line_has_trailing_price(next_line)
-                            || re_standalone_price_line().is_match(next_line)
-                            || re_long_digits_line().is_match(next_line)
-                        {
-                            continue;
-                        }
-                        let cleaned_next = strip_leading_receipt_codes(next_line);
-                        // Treat unpriced "Meat" / "Bakery" lines as legitimate
-                        // descriptions even though those words are also in the
-                        // section-name table — that's how Asian-grocery receipts
-                        // label the items.
-                        let is_generic_priced_label = matches!(
-                            cleaned_next.trim().to_ascii_uppercase().as_str(),
-                            "MEAT" | "BAKERY"
-                        );
-                        if cleaned_next.is_empty()
-                            || (is_section_header_text(&cleaned_next) && !is_generic_priced_label)
-                        {
-                            continue;
-                        }
-                        if alpha_ratio(&cleaned_next) < 0.5 {
-                            continue;
-                        }
-                        found_desc = Some(cleaned_next);
-                        found_desc_line_idx = Some(j);
-                        break;
-                    }
-                }
-
-                if let Some(mut found_desc_value) = found_desc {
-                    if let Some(source_idx) = found_desc_line_idx {
-                        found_desc_value = merge_description_context(
-                            &normalized_lines,
-                            &found_desc_value,
-                            source_idx,
-                        );
-                    }
-                    if weak_inline_desc {
-                        found_desc_value =
-                            format!("{found_desc_value} {desc_part}").trim().to_string();
-                    }
-                    let mut quantity = 1;
-                    let mut description_suffix = String::new();
-
-                    if let Some(modifier) = qty_modifiers.first() {
-                        if validate_quantity_price(price_cents, modifier) {
-                            quantity = modifier.quantity;
-                            if let Some(weight_text) = &modifier.weight_text {
-                                description_suffix = format!(" ({weight_text} lb)");
-                            }
-                        } else if !qty_info.is_empty() {
-                            let reversed: Vec<String> = qty_info.iter().rev().cloned().collect();
-                            description_suffix = format!(" ({})", reversed.join(", "));
-                        }
-                    } else if !qty_info.is_empty() {
-                        let reversed: Vec<String> = qty_info.iter().rev().cloned().collect();
-                        description_suffix = format!(" ({})", reversed.join(", "));
-                    }
-
-                    let cleaned_desc = strip_sale_price_subtext(&found_desc_value);
-                    deferred.push(DeferredTextOutcome::Item(ParsedTextItem {
-                        category_source: cleaned_desc.clone(),
-                        description: format!("{cleaned_desc}{description_suffix}"),
-                        price: price_cents,
-                        quantity,
-                    }));
-                    if let Some(idx) = found_desc_line_idx {
-                        used_text_lines[idx] = true;
-                    }
-                } else if price_cents > Money::ZERO {
-                    let mut message = format!("maybe missed item near price {}", price_cents);
-                    let context = truncated_context(line);
-                    if !context.is_empty() {
-                        message.push_str(&format!(" (context: \"{context}\")"));
-                    }
-                    deferred.push(DeferredTextOutcome::Warning(
-                        ReceiptWarningKind::PossibleMissedItem,
-                        message,
-                    ));
-                }
-            }
-        } else if let Some(candidate) = build_malformed_price_candidate(line) {
-            deferred.push(DeferredTextOutcome::Malformed(candidate));
-        } else if let Some(captures) = re_malformed_ocr_price().captures(line) {
-            let token = captures.get(1).map(|m| m.as_str()).unwrap_or("");
-            let context = truncated_context(line);
-            deferred.push(DeferredTextOutcome::Warning(
-                ReceiptWarningKind::PossibleMissedItem,
-                format!("maybe missed item with malformed OCR price \"{token}\" (context: \"{context}\")"),
-            ));
-        } else if line.to_ascii_lowercase().contains("/for")
-            && re_tail_token().is_match(line)
-            && re_tail_token()
-                .captures(line)
-                .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
-                .is_some_and(|tail| tail.chars().any(|ch| ch.is_ascii_alphabetic()))
-        {
-            let tail_token = re_tail_token()
-                .captures(line)
-                .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
-                .unwrap_or_default();
-            let context = truncated_context(line);
-            deferred.push(DeferredTextOutcome::Warning(
-                ReceiptWarningKind::PossibleMissedItem,
-                format!(
-                    "maybe missed item near malformed multi-buy total \"{tail_token}\" (context: \"{context}\")"
-                ),
-            ));
-        }
-    }
-
     let regular_total_cents = deferred
         .iter()
         .filter_map(|outcome| match outcome {
@@ -1654,31 +883,1194 @@ pub fn extract_text_items(
         }
     }
 
-    if let Some(cap_base) = total_cap_cents {
-        let discount_sum: Money = items
-            .iter()
-            .filter(|it| it.price < Money::ZERO)
-            .map(|it| -it.price)
-            .sum();
-        let cap = cap_base + discount_sum;
-        let mut kept = Vec::with_capacity(items.len());
-        for it in items.into_iter() {
-            if it.price > cap {
-                maybe_push_warning(
-                    &mut warnings,
-                    kept.len(),
-                    ReceiptWarningKind::DroppedImplausiblePrice,
-                    format!(
-                        "dropped implausible item price \"{}\" exceeding receipt total (context: \"{}\")",
-                        it.price,
-                        it.description,
-                    ),
-                );
-            } else {
-                kept.push(it);
+    (items, warnings)
+}
+
+/// Stage 6 — drop item prices above what the receipt itself can support.
+///
+/// A single positive line item can never exceed the receipt total plus the
+/// discounts that reduced it, so a price above that ceiling is an OCR artifact
+/// ("$1.58" misread as "81.58"). Dropping it with a warning is the "prefer
+/// missing items over wrong pairings" rule: a wrong price corrupts the ledger,
+/// a missing one is visible.
+fn drop_prices_above_cap(
+    items: Vec<ParsedTextItem>,
+    warnings: &mut Vec<TextParserWarning>,
+    cap_base: Money,
+) -> Vec<ParsedTextItem> {
+    let discount_sum: Money = items
+        .iter()
+        .filter(|it| it.price < Money::ZERO)
+        .map(|it| -it.price)
+        .sum();
+    let cap = cap_base + discount_sum;
+    let mut kept = Vec::with_capacity(items.len());
+    for it in items.into_iter() {
+        if it.price > cap {
+            maybe_push_warning(
+                warnings,
+                kept.len(),
+                ReceiptWarningKind::DroppedImplausiblePrice,
+                format!(
+                    "dropped implausible item price \"{}\" exceeding receipt total (context: \"{}\")",
+                    it.price, it.description,
+                ),
+            );
+        } else {
+            kept.push(it);
+        }
+    }
+    kept
+}
+
+/// The grand-total row, which is where the item region ends.
+///
+/// Every exclusion here is a row that says TOTAL without being the total. The
+/// column-header case ("DESCRIPTION QTY UNIT TOTAL") is the dangerous one: read
+/// as the grand total it sits *above* the items, so treating it as the total
+/// truncates the whole item region.
+fn grand_total_line(lines: &[String]) -> Option<usize> {
+    lines.iter().position(|line| {
+        let upper = line.to_ascii_uppercase();
+        re_total_word().is_match(line)
+            && !upper.contains("SUBTOTAL")
+            && !upper.contains("TOTAL NUMBER")
+            && !upper.contains("TOTAL DISCOUNT")
+            && !upper.contains("TOTAL ITEMS")
+            && !upper.contains("TOTAL SAVINGS")
+            && !upper.contains("TOTAL SAVED")
+            // A column-header row ("DESCRIPTION QTY UNIT TOTAL") is not the
+            // grand total; treating it as one truncates the whole item region.
+            && !upper.contains("QTY")
+            && !upper.contains("DESCRIPTION")
+    })
+}
+
+/// Authoritative receipt total, when a grand-total line carries a price.
+///
+/// Used as a sanity ceiling on individual item prices: a single positive line
+/// item can never exceed (total + sum of discounts), so a price above that
+/// ceiling is an OCR artifact (e.g. "$1.58" misread as "81.58") and is dropped
+/// rather than mis-paired — "prefer missing items over wrong pairings". Taken
+/// as the max over genuine grand-total lines (not the first match) so sub-lines
+/// like "TOTAL TAX" never stand in for the total.
+///
+/// The exclusion list differs from [`grand_total_line`]'s on purpose: this one
+/// is looking for an *amount* to bound by, so it also rejects TOTAL TAX and
+/// TOTAL POINTS and accepts a card tender, while that one is looking for where
+/// the items stop.
+fn total_price_cap(lines: &[String]) -> Option<Money> {
+    lines
+        .iter()
+        .filter(|line| {
+            let upper = line.to_ascii_uppercase();
+            let is_total_line = re_total_word().is_match(line)
+                && !upper.contains("SUBTOTAL")
+                && !upper.contains("TOTAL TAX")
+                && !upper.contains("TOTAL NUMBER")
+                && !upper.contains("TOTAL DISCOUNT")
+                && !upper.contains("TOTAL ITEMS")
+                && !upper.contains("TOTAL SAVINGS")
+                && !upper.contains("TOTAL SAVED")
+                && !upper.contains("TOTAL POINTS");
+            // A card tender is an equally valid ceiling: the charge is never
+            // less than any single item. This keeps the cap honest when the
+            // TOTAL row picked up a neighbouring smaller amount during line
+            // grouping (Pharmasave's "TOTAL $1.40" carrying the HST).
+            is_total_line || re_tender_label().is_match(line)
+        })
+        .filter_map(|line| extract_trailing_price_cents(line).map(|(c, _, _)| c))
+        .filter(|c| *c > Money::ZERO)
+        .max()
+}
+
+/// A `N/for` multi-buy row whose total OCR mangled into a token carrying
+/// letters ("3/for 5.0O"). The amount is unrecoverable — there is no second
+/// reading of it anywhere on the receipt — so the only honest output is to say
+/// an item may have been missed here.
+///
+/// Two arms of the loop reach this, and they used to carry a copy each: a
+/// `/for` row is a quantity expression whether or not its mangled tail happened
+/// to parse as a trailing price, so both the qty-row arm and the no-price tail
+/// need the same answer.
+fn multi_buy_tail_warning(line: &str) -> Option<DeferredTextOutcome> {
+    if !line.to_ascii_lowercase().contains("/for") {
+        return None;
+    }
+    let tail_token = re_tail_token()
+        .captures(line)
+        .and_then(|captures| captures.get(1).map(|m| m.as_str().to_string()))?;
+    if !tail_token.chars().any(|ch| ch.is_ascii_alphabetic()) {
+        return None;
+    }
+    let context = truncated_context(line);
+    Some(DeferredTextOutcome::Warning(
+        ReceiptWarningKind::PossibleMissedItem,
+        format!(
+            "maybe missed item near malformed multi-buy total \"{tail_token}\" (context: \"{context}\")"
+        ),
+    ))
+}
+
+/// What a row carrying no well-formed trailing price is worth, if anything.
+///
+/// Three alternatives in priority order: a price mangled *recoverably* (the
+/// summary reconciliation in [`reconcile_malformed_price_candidates`] can put
+/// it back), a price mangled beyond recovery, and a multi-buy row whose total
+/// was eaten. Everything else a receipt prints — addresses, phone numbers,
+/// loyalty text — is silence, which is why falling through returns `None`
+/// rather than a warning.
+fn unpriced_line_outcome(line: &str) -> Option<DeferredTextOutcome> {
+    if let Some(candidate) = build_malformed_price_candidate(line) {
+        return Some(DeferredTextOutcome::Malformed(candidate));
+    }
+    if let Some(captures) = re_malformed_ocr_price().captures(line) {
+        let token = captures.get(1).map(|m| m.as_str()).unwrap_or("");
+        let context = truncated_context(line);
+        return Some(DeferredTextOutcome::Warning(
+            ReceiptWarningKind::PossibleMissedItem,
+            format!(
+                "maybe missed item with malformed OCR price \"{token}\" (context: \"{context}\")"
+            ),
+        ));
+    }
+    multi_buy_tail_warning(line)
+}
+
+/// The rows one pass over a receipt reads, plus the receipt-level verdict that
+/// changes how it reads them.
+///
+/// Every stage below wants all three at once: which rows exist, which of them
+/// an earlier price already claimed, and whether the right-hand price column
+/// drifted a row up. Bundling them is what keeps the extracted stages under
+/// `too_many_arguments` without an `#[allow]`, and it is honest rather than
+/// convenient — a stage that consults one of these consults all of them.
+///
+/// `used` is a shared borrow on purpose. Claiming a row is the caller's job, so
+/// a stage returns *which* row it claimed and never marks it: that keeps the
+/// order of claims in one place, which is what the cross-row-leak guards
+/// (bugs C, H, K) depend on.
+#[derive(Clone, Copy)]
+struct Lines<'a> {
+    all: &'a [String],
+    used: &'a [bool],
+    drift: bool,
+}
+
+impl<'a> Lines<'a> {
+    fn of(all: &'a [String], used: &'a [bool], drift: bool) -> Self {
+        Lines { all, used, drift }
+    }
+}
+
+/// A description row claimed by a price that was printed somewhere else.
+struct OrphanQtyPairing {
+    item: ParsedTextItem,
+    /// The row the price was paired with; the caller marks it used.
+    description_line: usize,
+}
+
+/// OCR column-merge recovery: a quantity line can absorb the NEXT item's price
+/// into its own text row.
+///
+/// FreshCo prints "2 @ 1/ $12.98 $11.19 C", where $11.19 is the price of the
+/// price-less "Natrel Milk 2% 4L" line below — the right-hand price column
+/// drifted up one row in OCR reading order. When a qty line carries a trailing
+/// price that does NOT reconcile as its own line total (qty × unit) and the
+/// next line is a bare, price-less description, that orphan price belongs to
+/// that description. The qty line itself is still consumed later as a modifier
+/// of the item above.
+fn orphan_qty_pairing(index: usize, line: &str, rows: Lines<'_>) -> Option<OrphanQtyPairing> {
+    let prices: Vec<Money> = re_find_prices()
+        .captures_iter(line)
+        .filter_map(|caps| caps.get(1).and_then(|m| parse_cents(m.as_str())))
+        .collect();
+    // The orphan must be a genuine trailing price, not the tail of a
+    // parenthetical deal ("(2/$3.50)" ends the coriander line; that 3.50 is
+    // subtext, not a drifted amount).
+    let trailing = extract_trailing_price_cents(line).map(|(c, _, _)| c);
+    if prices.len() < 2 || trailing != prices.last().copied() {
+        return None;
+    }
+    let orphan_cents = *prices.last().unwrap();
+    let reconciles_as_own_total = parse_quantity_modifier(line)
+        .map(|modifier| validate_quantity_price(orphan_cents, &modifier))
+        .unwrap_or(false);
+    // The downward pairing is only valid when the description above is already
+    // priced, so this row has nothing left to donate upward. An unclaimed
+    // description above keeps the trailing price as its own — whether the row
+    // reconciles ("Broccoli (Crowns)" / "0.41 lb @ $1.98/lb  0.81") or not
+    // ("HLY - Potato Chips Honey" / "(...)@3.99(1/$0.98)  5.88H", where 5.88 is
+    // Honey's own price on its deal-subtext row). Under receipt-level drift even
+    // a coincidentally-reconciling echo ("1 @ $1.99  1.99" where the next item
+    // also costs 1.99) is the next item's price.
+    let above_consumed = nearest_desc_above_consumed(rows.all, rows.used, index);
+    let echo_is_drifted = rows.drift && above_consumed;
+    if orphan_cents <= Money::ZERO
+        || !above_consumed
+        || (reconciles_as_own_total && !echo_is_drifted)
+    {
+        return None;
+    }
+
+    let next_idx = orphan_description_row(index, rows)?;
+    let next_trimmed = rows.all[next_idx].trim();
+    // Skip a line an earlier price's search already consumed — that is the
+    // cross-row leak. A bare counter label ("Meat" above its mangled Chinese
+    // subtext) is a real item here: the orphan price arriving from this qty row
+    // is what prices it, and `is_priced_generic_item_label`'s trailing-price
+    // requirement cannot see a price delivered from above.
+    if rows.used[next_idx]
+        || !(is_descriptive_candidate(next_trimmed) || is_generic_counter_label(next_trimmed))
+    {
+        return None;
+    }
+    let desc = strip_sale_price_subtext(&strip_leading_receipt_codes(next_trimmed));
+    Some(OrphanQtyPairing {
+        item: ParsedTextItem {
+            category_source: desc.clone(),
+            description: desc,
+            price: orphan_cents,
+            quantity: 1,
+        },
+        description_line: next_idx,
+    })
+}
+
+/// The row an orphan price found on a qty line is describing.
+///
+/// It can sit a row or two further down when the block carries its own qty row:
+/// Foody Mart prints "(<size>)@<unit>(<deal>) <orphan>" / "1 @ $2.99" /
+/// "<item name>". Skip qty rows; never leap over a priced row, which is another
+/// item's territory.
+fn orphan_description_row(index: usize, rows: Lines<'_>) -> Option<usize> {
+    for j in (index + 1)..rows.all.len().min(index + 4) {
+        let candidate = rows.all[j].trim();
+        if candidate.is_empty() || looks_like_quantity_expression(candidate) {
+            continue;
+        }
+        if line_has_trailing_price(candidate) {
+            return None;
+        }
+        return Some(j);
+    }
+    None
+}
+
+/// Where a trailing price goes when the row printing it is already spoken for.
+///
+/// Only reachable under established drift: an unclaimed row's own trailing
+/// price is its own. Stops at the first priced row rather than leaping over it,
+/// because that row is the next item's territory.
+fn drifted_price_pairing(
+    index: usize,
+    price_cents: Money,
+    rows: Lines<'_>,
+) -> Option<OrphanQtyPairing> {
+    for j in (index + 1)..rows.all.len().min(index + 4) {
+        if rows.used[j] {
+            return None;
+        }
+        let candidate = rows.all[j].trim();
+        if line_has_trailing_price(candidate) {
+            return None;
+        }
+        if candidate.is_empty()
+            || looks_like_quantity_expression(candidate)
+            || !(is_descriptive_candidate(candidate) || is_generic_counter_label(candidate))
+        {
+            continue;
+        }
+        let desc = strip_sale_price_subtext(&strip_leading_receipt_codes(candidate));
+        return Some(OrphanQtyPairing {
+            item: ParsedTextItem {
+                category_source: desc.clone(),
+                description: desc,
+                price: price_cents,
+                quantity: 1,
+            },
+            description_line: j,
+        });
+    }
+    None
+}
+
+/// What the flag cascade decided about one row's trailing price.
+///
+/// These eight used to be mutable locals threaded through 200 lines of rules,
+/// and that is what made the region hard to read: each rule could still change
+/// what an earlier one had set, so no line of it could be understood without
+/// the whole. Naming the result makes the boundary explicit — everything above
+/// this struct *decides*, everything below it *acts*.
+///
+/// `desc_part` is part of the decision, not an input: three of the rules clear
+/// it (a priced section header donates its price downward; a malformed price
+/// marker keeps only the price), which is how "this row has no usable
+/// description of its own" reaches the search stage.
+struct PricePlan {
+    /// The description text left of the price, after the rules had their say.
+    desc_part: String,
+    /// Look below the price for its description before looking above.
+    prefer_forward_desc: bool,
+    /// If the forward search finds nothing, drop the price rather than
+    /// back-walking — the row above is somebody else's.
+    skip_if_no_forward_desc: bool,
+    /// The inline description is not usable; walk back for a real one.
+    force_backward: bool,
+    /// The inline text is a size/weight fragment ("(1kg)") that belongs
+    /// *appended* to whatever description the search finds, not discarded.
+    weak_inline_desc: bool,
+    /// A parenthetical subtext row under established drift, whose price is the
+    /// item below's. Distinct from `prefer_forward_desc` because it also stops
+    /// the forward walk at the first priced row.
+    drift_paren_forward: bool,
+    /// A department banner carrying a price ("&& 01-Grocery  5.59"), whose
+    /// price belongs to the first real item below it.
+    is_priced_section_header: bool,
+    /// The inline text is a quantity expression, not a description.
+    is_qty_expr: bool,
+}
+
+/// Stage 3 — decide how one trailing price should be paired, or that it should
+/// not be.
+///
+/// `None` means the row is not an item price at all: a summary row, a
+/// suggested-retail REG marker, a ghost promo artifact, a quantity stub, or a
+/// section header whose price the item below repeats. Every one of those used
+/// to be a bare `continue` in the middle of the loop.
+fn plan_price_line(
+    index: usize,
+    line: &str,
+    price_start: usize,
+    price_cents: Money,
+    summary_amounts: &HashSet<Money>,
+    rows: Lines<'_>,
+) -> Option<PricePlan> {
+    let line_upper = line.to_ascii_uppercase();
+    let mut desc_part = line[..price_start].trim().to_string();
+    let compact_line = re_compact_space().replace_all(&line_upper, "").to_string();
+    let mut prefer_forward_desc = false;
+    let mut skip_if_no_forward_desc = false;
+    let previous_line = || rows.all[index - 1].as_str();
+
+    let has_reg_marker = has_reg_price_marker(&line_upper);
+
+    if has_reg_marker {
+        if is_suggested_retail_row(line, &desc_part) {
+            return None;
+        }
+        // Two prices on a REG row means one of them is the real one; with the
+        // row above already priced, the item this row prices is below it.
+        if re_find_prices().find_iter(line).count() > 1
+            && index > 0
+            && re_trailing_price().is_match(previous_line())
+        {
+            prefer_forward_desc = true;
+            skip_if_no_forward_desc = true;
+        }
+    }
+
+    if is_ghost_promo_row(&line_upper, &compact_line, &desc_part, index, rows) {
+        return None;
+    }
+    if price_row_is_summary(index, &line_upper, price_cents, summary_amounts, rows) {
+        return None;
+    }
+
+    let weak_inline_desc = is_weak_inline_description(&desc_part);
+    let mut force_backward =
+        line_upper.contains("REG$") || line_upper.contains("@REG") || weak_inline_desc;
+    // Under receipt-level drift a paren-subtext row's trailing price belongs to
+    // the item BELOW when the description above is already priced ("Pork Lard"
+    // claimed from its qty row, so "(3 380g) 2.98" is Pak Fok's) — search
+    // forward, stopping at the first priced row rather than leaping over it.
+    // When the description above is still unclaimed, the price is its own
+    // ("Fresh Chicken Wings" / "(WRER)  10.04") and the backward walk is right.
+    let drift_paren_forward = rows.drift
+        && desc_part.trim_start().starts_with('(')
+        && nearest_desc_above_consumed(rows.all, rows.used, index);
+    if drift_paren_forward {
+        prefer_forward_desc = true;
+    }
+    if has_reg_marker
+        && force_backward
+        && index > 0
+        && !previous_line().trim().is_empty()
+        && line_has_trailing_price(previous_line().trim())
+        && desc_part.starts_with('(')
+    {
+        prefer_forward_desc = true;
+    }
+
+    if !desc_part.is_empty() {
+        desc_part = Regex::new(r"^\d{8,}\s*")
+            .unwrap()
+            .replace(&desc_part, "")
+            .to_string();
+    }
+    let is_onsale_marker_desc = looks_like_onsale_marker(&desc_part);
+    if is_onsale_marker_desc {
+        prefer_forward_desc = true;
+        if index > 0 && line_has_trailing_price(previous_line().trim()) {
+            skip_if_no_forward_desc = true;
+        }
+    }
+
+    let is_priced_section_header = !desc_part.is_empty()
+        && is_section_header_text(&desc_part)
+        && !is_priced_generic_item_label(&desc_part, line);
+    if is_priced_section_header {
+        desc_part.clear();
+        if section_header_price_is_repeated(index, price_cents, rows) {
+            return None;
+        }
+    }
+
+    let is_malformed_price_marker = is_bare_price_marker(&desc_part);
+    let is_quantity_stub = re_malformed_price_marker().is_match(&desc_part);
+    let mut is_qty_expr = if !desc_part.is_empty() {
+        looks_like_quantity_expression(&desc_part)
+            || re_onsale_parenthetical().is_match(&desc_part)
+            || is_onsale_marker_desc
+    } else {
+        false
+    };
+
+    if is_malformed_price_marker {
+        if !malformed_marker_is_multi_buy(index, rows) {
+            return None;
+        }
+        force_backward = true;
+        desc_part.clear();
+        is_qty_expr = false;
+    }
+    if is_quantity_stub {
+        return None;
+    }
+
+    // A mangled REG-price marker (OCR ate the leading R, so "REG$15.99" became
+    // "#EG15.99" or "(EG$5.99") means the trailing price is the suggested-retail
+    // amount, not an item price. The inline branch already filters these via
+    // `re_mangled_reg_marker`, but the search branch would back-walk and emit a
+    // phantom item paired with the previous line, so suppress the whole row.
+    if !desc_part.is_empty() && re_mangled_reg_marker().is_match(desc_part.trim()) {
+        // Under drift with the description above already priced, the REG amount
+        // lives inside the marker itself and the trailing price is the NEXT
+        // item's ("(-EG4.99  2.99" above "LKS Dried Cod Fish Slice") — forward
+        // it. In every other shape it is suggested retail, so keep suppressing.
+        if !drift_paren_forward {
+            return None;
+        }
+        skip_if_no_forward_desc = true;
+    }
+
+    Some(PricePlan {
+        desc_part,
+        prefer_forward_desc,
+        skip_if_no_forward_desc,
+        force_backward,
+        weak_inline_desc,
+        drift_paren_forward,
+        is_priced_section_header,
+        is_qty_expr,
+    })
+}
+
+/// Whether the item below a priced department banner repeats the banner's own
+/// price — in which case the banner is echoing the item, not pricing it, and
+/// counting both would double the item.
+///
+/// Only the first non-blank row below is consulted: past it the price belongs
+/// to some other item, and a summary row ends the question outright.
+fn section_header_price_is_repeated(index: usize, price_cents: Money, rows: Lines<'_>) -> bool {
+    for j in (index + 1)..rows.all.len().min(index + 4) {
+        let next_line = rows.all[j].trim();
+        if next_line.is_empty() {
+            continue;
+        }
+        if looks_like_summary_line(next_line) {
+            return false;
+        }
+        return extract_trailing_price_cents(next_line)
+            .is_some_and(|(next_price, _, _)| next_price == price_cents);
+    }
+    false
+}
+
+impl PricePlan {
+    /// Whether the row's own text is the description, so no search is needed.
+    ///
+    /// This is the common case and the cheap one — everything below exists for
+    /// the rows where it is false.
+    fn describes_itself(&self) -> bool {
+        !self.desc_part.is_empty()
+            && self.desc_part.len() > 2
+            && !self.is_qty_expr
+            && !self.force_backward
+            && !self.drift_paren_forward
+            && !looks_like_summary_line(self.desc_part.trim())
+    }
+}
+
+/// The item a row that describes itself yields.
+fn inline_item(plan: &PricePlan, price_cents: Money) -> ParsedTextItem {
+    let desc_clean = strip_sale_price_subtext(&plan.desc_part);
+    let desc_clean = re_embedded_unit_price_suffix()
+        .replace(&desc_clean, "")
+        .trim()
+        .to_string();
+    ParsedTextItem {
+        description: desc_clean.clone(),
+        category_source: desc_clean,
+        price: price_cents,
+        quantity: 1,
+    }
+}
+
+/// A price with no row willing to own it.
+fn unowned_price_warning(line: &str, price_cents: Money) -> DeferredTextOutcome {
+    let mut message = format!("maybe missed item near price {}", price_cents);
+    let context = truncated_context(line);
+    if !context.is_empty() {
+        message.push_str(&format!(" (context: \"{context}\")"));
+    }
+    DeferredTextOutcome::Warning(ReceiptWarningKind::PossibleMissedItem, message)
+}
+
+/// The quantity rows a backward walk passed on its way to a description.
+///
+/// Kept separate from the description itself because the walk that collects
+/// them can fail to find a description, and the *next* walk's find still needs
+/// them: "1 @ $2.99" above a price is that price's quantity no matter which
+/// direction the name turned up in.
+#[derive(Default)]
+struct QuantityContext {
+    /// Quantity rows in walk order — nearest the price first.
+    info: Vec<String>,
+    /// The subset that parsed as a structured modifier.
+    modifiers: Vec<QuantityModifier>,
+}
+
+/// What the four walks found.
+struct DescriptionSearch {
+    /// The row that owns the price, and its cleaned text.
+    found: Option<(usize, String)>,
+    qty: QuantityContext,
+    /// The plan said this price is only an item if a description turned up
+    /// below it; none did, so drop it silently instead of warning. Distinct
+    /// from `found: None`, which *is* worth a warning — the difference is
+    /// whether the parser expected to find nothing.
+    abandoned: bool,
+}
+
+/// Stage 4 — find the row that owns a price its own row did not describe.
+///
+/// Four walks, and the **order is the algorithm**: each one is more permissive
+/// than the last about what counts as a description, so running them in any
+/// other order would let a weaker signal win. A priced department banner points
+/// at the item below it; an explicit forward preference from the plan comes
+/// next; the ordinary backward walk (the common case, and the only one that
+/// collects quantity rows) after that; and the forward fallback last, for the
+/// layouts that print the price before the name.
+///
+/// Every walk stops at a row an earlier price already claimed. That is what
+/// keeps one item's description from leaking into another's (bugs C, H, K).
+fn find_description(index: usize, plan: &PricePlan, rows: Lines<'_>) -> DescriptionSearch {
+    let abandon = |qty| DescriptionSearch {
+        found: None,
+        qty,
+        abandoned: true,
+    };
+
+    if plan.is_priced_section_header {
+        let found = describe_below_priced_header(index, rows);
+        if found.is_none() {
+            return abandon(QuantityContext::default());
+        }
+        return DescriptionSearch {
+            found,
+            qty: QuantityContext::default(),
+            abandoned: false,
+        };
+    }
+
+    let mut found = None;
+    if plan.prefer_forward_desc {
+        found = describe_forward(index, plan.drift_paren_forward, rows);
+    }
+    if plan.skip_if_no_forward_desc && found.is_none() {
+        return abandon(QuantityContext::default());
+    }
+
+    let mut qty = QuantityContext::default();
+    if found.is_none() {
+        let walk = describe_backward(index, plan, rows);
+        found = walk.found;
+        qty = walk.qty;
+    }
+    if found.is_none()
+        && !plan.prefer_forward_desc
+        && (plan.desc_part.is_empty() || plan.desc_part.len() <= 3 || plan.force_backward)
+    {
+        found = describe_forward_fallback(index, rows);
+    }
+
+    DescriptionSearch {
+        found,
+        qty,
+        abandoned: false,
+    }
+}
+
+/// Walk 1 — the item below a priced department banner ("&& 01-Grocery  5.59").
+fn describe_below_priced_header(index: usize, rows: Lines<'_>) -> Option<(usize, String)> {
+    for j in (index + 1)..rows.all.len().min(index + 5) {
+        if rows.used[j] {
+            // A used line marks the start of another item's territory; don't
+            // walk past it.
+            return None;
+        }
+        let next_line = rows.all[j].trim();
+        // Under established drift the first item below a priced header often
+        // carries the SECOND item's price on its own name row ("&& 01-Grocery
+        // 5.59" / "S & B - Wasabi  2.68"). The header's price belongs to that
+        // name regardless; skipping it would cross the whole section's pairing
+        // by one.
+        if rows.drift && re_trailing_price().is_match(next_line) {
+            if let Some((_, _, price_start)) = extract_trailing_price_cents(next_line) {
+                let head = next_line[..price_start].trim();
+                let cleaned_head = strip_leading_receipt_codes(head);
+                if !cleaned_head.is_empty()
+                    && !is_section_header_text(&cleaned_head)
+                    && alpha_ratio(&cleaned_head) >= 0.5
+                {
+                    return Some((j, cleaned_head));
+                }
             }
         }
-        items = kept;
+        if next_line.is_empty()
+            || re_skip_patterns().is_match(next_line)
+            || looks_like_summary_line(next_line)
+            || looks_like_quantity_expression(next_line)
+            || looks_like_onsale_marker(next_line)
+            || re_trailing_price().is_match(next_line)
+            || re_standalone_price_line().is_match(next_line)
+            || re_long_digits_line().is_match(next_line)
+        {
+            continue;
+        }
+        let cleaned_next = strip_leading_receipt_codes(next_line);
+        // Bare counter labels ("Meat" below a priced "&& 03-Meat" banner) are
+        // the item the header's drifted price belongs to, not another banner.
+        if cleaned_next.is_empty()
+            || (is_section_header_text(&cleaned_next) && !is_generic_counter_label(&cleaned_next))
+        {
+            continue;
+        }
+        // The `&& <Dept> price` section-header signal is strong: the next
+        // non-section line is almost always the item name even if it carries
+        // trailing OCR-mangled subtext like `(125gx5)@8.99(1/$6.99)` that drags
+        // the alpha ratio below 0.5. A more permissive threshold here lets
+        // descriptions like "MN - Crispy Coffee Flavor 6*60g)..." (ratio 0.46)
+        // pair correctly, while pure-noise lines are still rejected.
+        if alpha_ratio(&cleaned_next) < 0.35 {
+            continue;
+        }
+        return Some((j, cleaned_next));
+    }
+    None
+}
+
+/// Walk 2 — the plan asked to look below before looking above.
+///
+/// `drift_paren_forward` is the difference between skipping a priced row and
+/// stopping at it: under drift the price belongs to the item immediately below,
+/// so a priced row in the way means the search has already gone too far.
+fn describe_forward(
+    index: usize,
+    drift_paren_forward: bool,
+    rows: Lines<'_>,
+) -> Option<(usize, String)> {
+    for j in (index + 1)..rows.all.len().min(index + 5) {
+        if rows.used[j] {
+            return None;
+        }
+        let next_line = rows.all[j].trim();
+        if line_has_trailing_price(next_line) {
+            if drift_paren_forward {
+                return None;
+            }
+            continue;
+        }
+        if next_line.is_empty()
+            || re_skip_patterns().is_match(next_line)
+            || looks_like_summary_line(next_line)
+            || looks_like_quantity_expression(next_line)
+            || looks_like_onsale_marker(next_line)
+        {
+            continue;
+        }
+        let cleaned_next = strip_leading_receipt_codes(next_line);
+        // Bare counter labels ("Meat") are items about to be priced by this row,
+        // not department banners.
+        if cleaned_next.is_empty()
+            || (is_section_header_text(&cleaned_next) && !is_generic_counter_label(&cleaned_next))
+        {
+            continue;
+        }
+        if alpha_ratio(&cleaned_next) < 0.5 {
+            continue;
+        }
+        return Some((j, cleaned_next));
+    }
+    None
+}
+
+/// Walk 3's result: a description, and the quantity rows passed to reach it.
+struct BackwardWalk {
+    found: Option<(usize, String)>,
+    qty: QuantityContext,
+}
+
+/// Walk 3 — the ordinary case: the name is printed above its price.
+///
+/// This is the only walk that collects quantity context, because a quantity row
+/// is printed between the name and its price ("Broccoli" / "0.41 lb @ $1.98/lb
+/// 0.81") and so is passed on the way back up. It keeps collecting even when it
+/// ends up finding no description, so walk 4 can still use what it saw.
+fn describe_backward(index: usize, plan: &PricePlan, rows: Lines<'_>) -> BackwardWalk {
+    let mut qty = QuantityContext::default();
+    let lower_bound = index.saturating_sub(5);
+    for j in (lower_bound..index).rev() {
+        if rows.used[j] {
+            // A used line marks the end of the previous item's territory; don't
+            // walk past it to grab a description belonging to an item we've
+            // already paired.
+            break;
+        }
+        let prev_line = rows.all[j].trim();
+        if Regex::new(&format!(r"^[\d.]+\s*{TAX_FLAG_CLASS}\s*$"))
+            .unwrap()
+            .is_match(prev_line)
+            || Regex::new(r"^\d{8,}$").unwrap().is_match(prev_line)
+            || re_skip_patterns().is_match(prev_line)
+        {
+            continue;
+        }
+        if let Some(modifier) = parse_quantity_modifier(prev_line) {
+            qty.modifiers.push(modifier);
+            qty.info.push(prev_line.to_string());
+            continue;
+        }
+        if looks_like_quantity_expression(prev_line) {
+            qty.info.push(prev_line.to_string());
+            continue;
+        }
+        if looks_like_onsale_marker(prev_line)
+            || re_price_info_line().is_match(prev_line)
+            || re_parenthetical_closed().is_match(prev_line)
+            || (prev_line.starts_with('(') && !prev_line.contains(')'))
+            || re_onsale_parenthetical().is_match(prev_line)
+            || re_parenthetical_multibuy().is_match(prev_line)
+            || prev_line.len() <= 3
+        {
+            continue;
+        }
+        // See patterns::SKIP_PRICED_LINES_IN_BACKWARD_DESC_SEARCH for rationale
+        // and revert instructions. Limited to bare-price triggers (no qty
+        // expression, no description) so OCR column-merge cases like
+        // "1 @ $9.99 3.99" can still back-walk into a legitimate
+        // "ITEM NAME 9.99" description line.
+        if SKIP_PRICED_LINES_IN_BACKWARD_DESC_SEARCH
+            && !plan.is_qty_expr
+            && !plan.force_backward
+            && line_has_trailing_price(prev_line)
+        {
+            continue;
+        }
+
+        let desc_for_ratio = strip_leading_receipt_codes(prev_line);
+        if alpha_ratio(&desc_for_ratio) < 0.5 {
+            continue;
+        }
+        if prev_line.len() > 2 && !Regex::new(r"^[\d.]+$").unwrap().is_match(prev_line) {
+            let cleaned_prev = strip_leading_receipt_codes(prev_line);
+            if !cleaned_prev.is_empty() {
+                return BackwardWalk {
+                    found: Some((j, cleaned_prev)),
+                    qty,
+                };
+            }
+        }
+    }
+    BackwardWalk { found: None, qty }
+}
+
+/// Walk 4 — the price came before the name.
+///
+/// Reached when the price row has no usable description of its own (empty, very
+/// short, or a weak parenthetical like "(1kg)") and the backward walk found
+/// nothing. Foody Mart-style layouts print it this way.
+fn describe_forward_fallback(index: usize, rows: Lines<'_>) -> Option<(usize, String)> {
+    for j in (index + 1)..rows.all.len().min(index + 3) {
+        if rows.used[j] {
+            return None;
+        }
+        let next_line = rows.all[j].trim();
+        if next_line.is_empty()
+            || re_skip_patterns().is_match(next_line)
+            || looks_like_summary_line(next_line)
+            || looks_like_quantity_expression(next_line)
+            || looks_like_onsale_marker(next_line)
+            || line_has_trailing_price(next_line)
+            || re_standalone_price_line().is_match(next_line)
+            || re_long_digits_line().is_match(next_line)
+        {
+            continue;
+        }
+        let cleaned_next = strip_leading_receipt_codes(next_line);
+        // Treat unpriced "Meat" / "Bakery" lines as legitimate descriptions even
+        // though those words are also in the section-name table — that's how
+        // Asian-grocery receipts label the items.
+        let is_generic_priced_label = matches!(
+            cleaned_next.trim().to_ascii_uppercase().as_str(),
+            "MEAT" | "BAKERY"
+        );
+        if cleaned_next.is_empty()
+            || (is_section_header_text(&cleaned_next) && !is_generic_priced_label)
+        {
+            continue;
+        }
+        if alpha_ratio(&cleaned_next) < 0.5 {
+            continue;
+        }
+        return Some((j, cleaned_next));
+    }
+    None
+}
+
+/// The item a searched-out description yields.
+///
+/// The quantity context decides between two shapes: a modifier whose arithmetic
+/// checks out against the price becomes a real `quantity` (and a weight suffix),
+/// while one that does not is appended as text instead. Keeping an unreconciled
+/// quantity as prose rather than as a number is deliberate — a wrong quantity
+/// silently corrupts the ledger, a parenthetical is visible.
+fn searched_item(
+    all_lines: &[String],
+    desc_line: usize,
+    desc_text: String,
+    price_cents: Money,
+    plan: &PricePlan,
+    qty: &QuantityContext,
+) -> ParsedTextItem {
+    let mut found_desc_value = merge_description_context(all_lines, &desc_text, desc_line);
+    if plan.weak_inline_desc {
+        found_desc_value = format!("{found_desc_value} {}", plan.desc_part)
+            .trim()
+            .to_string();
+    }
+    let mut quantity = 1;
+    let mut description_suffix = String::new();
+    let as_text = || {
+        format!(
+            " ({})",
+            qty.info
+                .iter()
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+
+    match qty.modifiers.first() {
+        Some(modifier) if validate_quantity_price(price_cents, modifier) => {
+            quantity = modifier.quantity;
+            if let Some(weight_text) = &modifier.weight_text {
+                description_suffix = format!(" ({weight_text} lb)");
+            }
+        }
+        _ if !qty.info.is_empty() => description_suffix = as_text(),
+        _ => {}
+    }
+
+    let cleaned_desc = strip_sale_price_subtext(&found_desc_value);
+    ParsedTextItem {
+        category_source: cleaned_desc.clone(),
+        description: format!("{cleaned_desc}{description_suffix}"),
+        price: price_cents,
+        quantity,
+    }
+}
+
+/// A REG row printing exactly one price is quoting suggested retail, not
+/// charging it.
+///
+/// The marker is read off the description side with digits and punctuation
+/// stripped, because OCR splices it in a dozen ways ("REG$", "0REG", "@REG").
+fn is_suggested_retail_row(line: &str, desc_part: &str) -> bool {
+    if re_find_prices().find_iter(line).count() != 1 {
+        return false;
+    }
+    let marker: String = desc_part
+        .to_ascii_uppercase()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect();
+    Regex::new(r"^\d+")
+        .unwrap()
+        .replace(&marker, "")
+        .ends_with("REG")
+}
+
+/// A ghost promo artifact like "EG2.99", where OCR ran letters and a price
+/// together into something that reads as a priced item but is not one.
+///
+/// Only fires when the *original* (uncompacted) line matches too: a row with
+/// clear whitespace separation ("Meat 20.53") is a real item, not a ghost. And
+/// only when the row above is already priced, which is what makes the amount a
+/// leftover rather than this row's own.
+fn is_ghost_promo_row(
+    line_upper: &str,
+    compact_line: &str,
+    desc_part: &str,
+    index: usize,
+    rows: Lines<'_>,
+) -> bool {
+    re_compact_promo_ghost().is_match(compact_line)
+        && re_compact_promo_ghost().is_match(line_upper.trim())
+        && !looks_like_onsale_marker(desc_part)
+        && index > 0
+        && line_has_trailing_price(&rows.all[index - 1])
+}
+
+/// Whether a priced row is the receipt talking about its own totals.
+///
+/// Two shapes. The row says TOTAL itself — including OCR-mangled variants like
+/// "Tota1$" (l→1) or "SUBTCTAL" (O→C); without that arm these passed the
+/// literal `contains` checks, fell through to the description search, and
+/// emitted a phantom "maybe missed item" at the summary amount (the Al-Premium
+/// 16.93 case). Or the row carries a known summary amount directly under its
+/// own label, which is the same thing split across two lines.
+fn price_row_is_summary(
+    index: usize,
+    line_upper: &str,
+    price_cents: Money,
+    summary_amounts: &HashSet<Money>,
+    rows: Lines<'_>,
+) -> bool {
+    if line_upper.contains("TOTAL")
+        || line_upper.contains("SUBTOTAL")
+        || line_upper.contains("SUB TOTAL")
+        || re_total_ocr_variants().is_match(line_upper)
+    {
+        return true;
+    }
+    if index == 0 || !summary_amounts.contains(&price_cents.abs()) {
+        return false;
+    }
+    let prev_upper = rows.all[index - 1].to_ascii_uppercase();
+    prev_upper.contains("TOTAL")
+        || prev_upper.contains("SUBTOTAL")
+        || prev_upper.contains("SUB TOTAL")
+}
+
+/// Whether a bare "($3.50)"-shaped marker row sits inside a multi-buy block — a
+/// real description above it and a quantity row below.
+///
+/// That is the one arrangement where the marker's price is an item price rather
+/// than deal subtext, and it is why such a row is kept at all.
+fn malformed_marker_is_multi_buy(index: usize, rows: Lines<'_>) -> bool {
+    let prev_line = if index > 0 {
+        rows.all[index - 1].trim()
+    } else {
+        ""
+    };
+    let next_line = if index + 1 < rows.all.len() {
+        rows.all[index + 1].trim()
+    } else {
+        ""
+    };
+    let prev_looks_like_description = !prev_line.is_empty()
+        && !re_skip_patterns().is_match(prev_line)
+        && !looks_like_summary_line(prev_line)
+        && !looks_like_quantity_expression(prev_line)
+        && !line_has_trailing_price(prev_line);
+    let next_supports_multi_buy =
+        !next_line.is_empty() && looks_like_quantity_expression(next_line);
+    prev_looks_like_description && next_supports_multi_buy
+}
+
+/// Whether a row quotes a REG (suggested retail) price anywhere in its text.
+///
+/// The four literals are the ways OCR splices the marker into its neighbour —
+/// "0REG" and "OREG" are a leading `@` misread as a digit or a letter.
+fn has_reg_price_marker(line_upper: &str) -> bool {
+    line_upper.contains("REG$")
+        || line_upper.contains("@REG")
+        || line_upper.contains("0REG")
+        || line_upper.contains("OREG")
+        || re_reg_price_marker().is_match(line_upper)
+}
+
+/// Whether the text left of the price is nothing but a parenthesised amount —
+/// "($3.50)" and nothing else.
+///
+/// Such a row carries a price and no name, so it is either deal subtext to be
+/// discarded or the middle of a multi-buy block; [`malformed_marker_is_multi_buy`]
+/// decides which. The length and space bounds are what keep a real description
+/// that happens to open with a bracket out of this class.
+fn is_bare_price_marker(desc_part: &str) -> bool {
+    !desc_part.is_empty()
+        && desc_part.starts_with('(')
+        && desc_part.contains('$')
+        && !desc_part.contains(' ')
+        && desc_part.len() <= 16
+        && !desc_part.contains('@')
+        && !desc_part.to_ascii_uppercase().contains("REG")
+}
+
+pub fn extract_text_items(
+    lines: &[String],
+    summary_amounts: &HashSet<Money>,
+) -> (Vec<ParsedTextItem>, Vec<TextParserWarning>) {
+    let mut deferred = Vec::new();
+    let normalized_lines: Vec<String> = lines
+        .iter()
+        .map(|line| normalize_decimal_spacing(line))
+        .collect();
+    // Track description lines already consumed by an earlier price so a later
+    // price's forward/backward search can't grab the same description. Without
+    // this, a "weak inline desc" line like "(1kg) 16.99" forces a backward walk
+    // that pulls the previous item's description, producing a cross-row leak
+    // (Foody Mart bug C).
+    let mut used_text_lines: Vec<bool> = vec![false; normalized_lines.len()];
+
+    let total_line_idx = grand_total_line(&normalized_lines);
+    let total_cap_cents = total_price_cap(&normalized_lines);
+
+    // Receipt-level evidence that the right price column drifted one row up
+    // (photo shear on two-column Asian-grocery receipts): count qty rows whose
+    // trailing price does NOT reconcile as the row's own qty×unit total. On a
+    // straight receipt this is ~0; on a leaning one ("1 @ $2.59  0.91H", …)
+    // nearly every deal block contributes one. With systematic drift
+    // established, a qty row whose trailing price *coincidentally* equals its
+    // own total ("1 @ $1.99  1.99" where the next item also costs 1.99) is
+    // still treated as carrying the next item's price, and paren-subtext rows
+    // pair forward instead of backward.
+    let price_drift = count_price_drift_evidence(&normalized_lines) >= PRICE_DRIFT_EVIDENCE_MIN;
+
+    for (i, line) in normalized_lines.iter().enumerate() {
+        if total_line_idx.is_some_and(|total_idx| i > total_idx) {
+            break;
+        }
+        if re_skip_patterns().is_match(line) {
+            continue;
+        }
+        if line.len() < 3 || re_digits_only().is_match(line) {
+            continue;
+        }
+
+        let is_qty_line = looks_like_quantity_expression(line);
+        let has_trailing_total = re_trailing_total_presence().is_match(line);
+        if is_qty_line {
+            if let Some(pairing) = orphan_qty_pairing(
+                i,
+                line,
+                Lines::of(&normalized_lines, &used_text_lines, price_drift),
+            ) {
+                used_text_lines[pairing.description_line] = true;
+                deferred.push(DeferredTextOutcome::Item(pairing.item));
+                continue;
+            }
+        }
+
+        if is_qty_line && !has_trailing_total {
+            if let Some(warning) = multi_buy_tail_warning(line) {
+                deferred.push(warning);
+            }
+            continue;
+        }
+
+        if re_parenthetical_only().is_match(line) && !re_trailing_price().is_match(line) {
+            continue;
+        }
+
+        if let Some((price_cents, _is_discount, price_start)) = extract_trailing_price_cents(line) {
+            // A row already claimed as another pairing's description can still
+            // carry a trailing price — under drift it is the NEXT item's,
+            // drifted onto this name row ("S & B - Wasabi  2.68" right after
+            // the priced header claimed Wasabi at 5.59). Forward it to the next
+            // unclaimed description and consume this row either way.
+            if price_drift && used_text_lines[i] {
+                if let Some(pairing) = drifted_price_pairing(
+                    i,
+                    price_cents,
+                    Lines::of(&normalized_lines, &used_text_lines, price_drift),
+                ) {
+                    used_text_lines[pairing.description_line] = true;
+                    deferred.push(DeferredTextOutcome::Item(pairing.item));
+                }
+                continue;
+            }
+            let Some(plan) = plan_price_line(
+                i,
+                line,
+                price_start,
+                price_cents,
+                summary_amounts,
+                Lines::of(&normalized_lines, &used_text_lines, price_drift),
+            ) else {
+                continue;
+            };
+
+            if plan.describes_itself() {
+                deferred.push(DeferredTextOutcome::Item(inline_item(&plan, price_cents)));
+                // Only block subsequent backward walks when the inline text is
+                // a genuine description. Low-alpha junk like "#E$" must stay
+                // walkable so the next price below can reach the real item
+                // sitting above the junk.
+                if alpha_ratio(plan.desc_part.trim()) >= 0.5 {
+                    used_text_lines[i] = true;
+                }
+            } else {
+                let search = find_description(
+                    i,
+                    &plan,
+                    Lines::of(&normalized_lines, &used_text_lines, price_drift),
+                );
+                if search.abandoned {
+                    continue;
+                }
+                match search.found {
+                    Some((desc_idx, desc_text)) => {
+                        deferred.push(DeferredTextOutcome::Item(searched_item(
+                            &normalized_lines,
+                            desc_idx,
+                            desc_text,
+                            price_cents,
+                            &plan,
+                            &search.qty,
+                        )));
+                        used_text_lines[desc_idx] = true;
+                    }
+                    None => {
+                        if price_cents > Money::ZERO {
+                            deferred.push(unowned_price_warning(line, price_cents));
+                        }
+                    }
+                }
+            }
+        } else if let Some(outcome) = unpriced_line_outcome(line) {
+            deferred.push(outcome);
+        }
+    }
+
+    let (mut items, mut warnings) = resolve_deferred(deferred, summary_amounts);
+
+    if let Some(cap_base) = total_cap_cents {
+        items = drop_prices_above_cap(items, &mut warnings, cap_base);
     }
 
     (items, warnings)
