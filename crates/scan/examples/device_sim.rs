@@ -273,14 +273,7 @@ fn run_probdump(models: &Path, img_path: &Path, outdir: &Path) {
 /// Compare our detection (final recognized lines) against PaddleOCR's `.ocr.json`
 /// boxes in the same padded space — localizes missing vs duplicated lines.
 fn run_detcmp(engine: &mut OcrEngine, path: &Path) {
-    let mut jpgs: Vec<PathBuf> = std::fs::read_dir(path)
-        .expect("read dir")
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.extension().is_some_and(|x| x == "jpg") && p.with_extension("ocr.json").exists()
-        })
-        .collect();
-    jpgs.sort();
+    let jpgs = collect_or_exit(path, "--detcmp", &["ocr.json"]);
 
     println!(
         "{:<40} {:>6} {:>6} {:>8} {:>8}",
@@ -477,16 +470,7 @@ fn classify_against_deskbox(desk_box: Bx, live: &[(Bx, String)], recognized: boo
 /// Sizes the detection-recall vs box-position vs recognition buckets. Set
 /// `ATTRIB_V=1` for a per-failure line.
 fn run_attrib(engine: &mut OcrEngine, path: &Path) {
-    let mut jpgs: Vec<PathBuf> = std::fs::read_dir(path)
-        .expect("read dir")
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.extension().is_some_and(|x| x == "jpg")
-                && p.with_extension("ocr.json").exists()
-                && p.with_extension("expected.json").exists()
-        })
-        .collect();
-    jpgs.sort();
+    let jpgs = collect_or_exit(path, "--attrib", &["ocr.json", "expected.json"]);
 
     let today = Date::new(2026, 6, 21).expect("reference date");
     let verbose = std::env::var("ATTRIB_V").is_ok();
@@ -798,22 +782,62 @@ fn run_single(
     Some((score(name, &expected, d, mapping), timings))
 }
 
-/// Recursively collect scorable `<stem>.jpg` under `dir`, counting every jpg
-/// seen so the header can still report how many lacked an `expected.json`.
-fn collect_jpgs(dir: &Path, all_jpg: &mut usize, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for path in entries.flatten().map(|e| e.path()) {
-        if path.is_dir() {
-            collect_jpgs(&path, all_jpg, out);
-        } else if path.extension().is_some_and(|x| x == "jpg") {
-            *all_jpg += 1;
-            if path.with_extension("expected.json").exists() {
+/// Recursively collect every `<stem>.jpg` under `dir`, sorted.
+///
+/// **Every corpus walk in this file must go through here.** The private corpus is
+/// grouped one directory per merchant — a layout core's `private_e2e.rs` depends
+/// on to give each merchant its own `#[test]` — so a flat `read_dir` finds
+/// nothing and reports it as an empty run rather than an error. That defect hit
+/// the scorecard once (it quietly measured nothing after the corpus was
+/// reorganised) and then hit `--attrib`, `--detcmp` and `--reccached` a second
+/// time, because the fix was applied to the scoring path alone.
+fn collect_all_jpgs(dir: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for path in entries.flatten().map(|e| e.path()) {
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|x| x == "jpg") {
                 out.push(path);
             }
         }
     }
+    let mut out = Vec::new();
+    walk(dir, &mut out);
+    out.sort();
+    out
+}
+
+/// Collect the fixtures a diagnostic can run on, and **exit loudly if there are
+/// none**. A zeroed table looks like a clean result, which is exactly how the
+/// flat-`read_dir` bug survived: the run has to fail, not report nothing.
+fn collect_or_exit(dir: &Path, what: &str, sidecars: &[&str]) -> Vec<PathBuf> {
+    let jpgs: Vec<PathBuf> = collect_all_jpgs(dir)
+        .into_iter()
+        .filter(|p| sidecars.iter().all(|ext| p.with_extension(ext).exists()))
+        .collect();
+    if jpgs.is_empty() {
+        eprintln!(
+            "error: {what}: no .jpg with {} found under {}",
+            sidecars.join(" + "),
+            dir.display()
+        );
+        std::process::exit(2);
+    }
+    jpgs
+}
+
+/// Recursively collect scorable `<stem>.jpg` under `dir`, counting every jpg
+/// seen so the header can still report how many lacked an `expected.json`.
+fn collect_jpgs(dir: &Path, all_jpg: &mut usize, out: &mut Vec<PathBuf>) {
+    let all = collect_all_jpgs(dir);
+    *all_jpg += all.len();
+    out.extend(
+        all.into_iter()
+            .filter(|p| p.with_extension("expected.json").exists()),
+    );
 }
 
 fn run_corpus(
@@ -1017,16 +1041,7 @@ fn run_reccached(
     today: Date,
     dir: &Path,
 ) {
-    let mut jpgs: Vec<PathBuf> = std::fs::read_dir(dir)
-        .expect("read dir")
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.extension().is_some_and(|x| x == "jpg")
-                && p.with_extension("ocr.json").exists()
-                && p.with_extension("expected.json").exists()
-        })
-        .collect();
-    jpgs.sort();
+    let jpgs = collect_or_exit(dir, "--reccached", &["ocr.json", "expected.json"]);
 
     let mut scores = Vec::new();
     for jpg in &jpgs {
