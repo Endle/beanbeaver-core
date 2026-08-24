@@ -522,16 +522,16 @@ fn extract_total_raw(lines: &[String]) -> i64 {
             // at section boundaries that can't be the total.
             const FORWARD_SCAN_WINDOW: usize = 20;
             let upper_bound = (idx + 1 + FORWARD_SCAN_WINDOW).min(lines.len());
-            for scan_idx in (idx + 1)..upper_bound {
-                let scan_upper = lines[scan_idx].to_ascii_uppercase();
+            for scan_line in lines.iter().take(upper_bound).skip(idx + 1) {
+                let scan_upper = scan_line.to_ascii_uppercase();
                 if scan_upper.contains("SUBTOTAL")
                     || scan_upper.contains("CHANGE")
                     || scan_upper.contains("BALANCE")
                 {
                     break;
                 }
-                if re_standalone_amount().is_match(&lines[scan_idx]) {
-                    if let Some(amount) = extract_price_from_line(&lines[scan_idx]) {
+                if re_standalone_amount().is_match(scan_line) {
+                    if let Some(amount) = extract_price_from_line(scan_line) {
                         return amount;
                     }
                 }
@@ -950,6 +950,227 @@ pub fn extract_subtotal(lines: &[String]) -> Option<i64> {
         }
     }
     None
+}
+
+fn to_four_digit_year(year: i32) -> i32 {
+    if year < 100 {
+        if year <= 69 {
+            2000 + year
+        } else {
+            1900 + year
+        }
+    } else {
+        year
+    }
+}
+
+fn numeric_date_candidates(part1: &str, part2: &str, part3: &str) -> Vec<(Date, &'static str)> {
+    let a = match part1.parse::<i32>() {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    let b = match part2.parse::<i32>() {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    let c = match part3.parse::<i32>() {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut candidates = Vec::new();
+    let mut add = |year: i32, month: i32, day: i32, kind: &'static str| {
+        let (Ok(month), Ok(day)) = (u32::try_from(month), u32::try_from(day)) else {
+            return;
+        };
+        if let Some(parsed) = Date::new(year, month, day) {
+            candidates.push((parsed, kind));
+        }
+    };
+
+    if part1.len() == 4 {
+        add(a, b, c, "ymd4");
+        return candidates;
+    }
+
+    if part3.len() == 4 {
+        if a > 12 && b <= 12 {
+            add(c, b, a, "dmy4");
+        } else if b > 12 && a <= 12 {
+            add(c, a, b, "mdy4");
+        } else {
+            add(c, a, b, "mdy4");
+            add(c, b, a, "dmy4");
+        }
+        return candidates;
+    }
+
+    let year_a = to_four_digit_year(a);
+    let year_c = to_four_digit_year(c);
+
+    if b <= 12 && c <= 31 {
+        add(year_a, b, c, "ymd2");
+    }
+    if a <= 12 && b <= 31 {
+        add(year_c, a, b, "mdy2");
+    }
+    if b <= 12 && a <= 31 {
+        add(year_c, b, a, "dmy2");
+    }
+
+    candidates
+}
+
+fn year_score(candidate_year: i32, current_year: i32) -> i32 {
+    10 - (candidate_year - current_year).abs().min(10)
+}
+
+fn kind_base_score(kind: &str) -> i32 {
+    match kind {
+        "ymd4" => 35,
+        "ymd2" => 28,
+        "mdy4" => 25,
+        "dmy4" => 24,
+        "mdy2" => 22,
+        "dmy2" => 20,
+        _ => 0,
+    }
+}
+
+fn compare_ranked_candidates(left: &RankedDateCandidate, right: &RankedDateCandidate) -> Ordering {
+    right
+        .score
+        .cmp(&left.score)
+        .then_with(|| left.line_index.cmp(&right.line_index))
+        .then_with(|| left.start.cmp(&right.start))
+}
+
+pub fn extract_date(lines: &[String], full_text: &str, current_year: i32) -> Option<Date> {
+    if lines.is_empty() && full_text.is_empty() {
+        return None;
+    }
+
+    let source_lines: Vec<String> = if lines.is_empty() {
+        full_text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect()
+    } else {
+        lines.to_vec()
+    };
+    let current_yy = current_year.rem_euclid(100);
+    let mut ranked_candidates = Vec::new();
+
+    for (line_index, line) in source_lines.iter().enumerate() {
+        let normalized_line = normalize_decimal_spacing(line);
+        let hint_bonus = if re_date_context_hint().is_match(&normalized_line) {
+            40
+        } else {
+            0
+        };
+        let prefer_year_first = hint_bonus > 0;
+
+        for captures in re_separated_date().captures_iter(&normalized_line) {
+            let part1 = captures.get(2).map(|m| m.as_str()).unwrap_or("");
+            let part2 = captures.get(3).map(|m| m.as_str()).unwrap_or("");
+            let part3 = captures.get(4).map(|m| m.as_str()).unwrap_or("");
+            let start = captures.get(2).map(|m| m.start()).unwrap_or(0);
+            for (candidate_date, kind) in numeric_date_candidates(part1, part2, part3) {
+                if kind == "ymd2" {
+                    let year_token = match part1.parse::<i32>() {
+                        Ok(value) => value,
+                        Err(_) => continue,
+                    };
+                    if !(prefer_year_first && (20..=current_yy + 1).contains(&year_token)) {
+                        continue;
+                    }
+                }
+                let mut base = kind_base_score(kind);
+                if kind == "mdy2" {
+                    base += 2;
+                }
+                if kind == "ymd2" && prefer_year_first {
+                    base += 3;
+                }
+                ranked_candidates.push(RankedDateCandidate {
+                    score: base + hint_bonus + year_score(candidate_date.year(), current_year),
+                    line_index,
+                    start,
+                    date: candidate_date,
+                });
+            }
+        }
+
+        for captures in re_compact_date().captures_iter(&normalized_line) {
+            let year = captures.get(2).and_then(|m| m.as_str().parse::<i32>().ok());
+            let month = captures.get(3).and_then(|m| m.as_str().parse::<i32>().ok());
+            let day = captures.get(4).and_then(|m| m.as_str().parse::<i32>().ok());
+            let start = captures.get(2).map(|m| m.start()).unwrap_or(0);
+            if let (Some(year), Some(month), Some(day)) = (year, month, day) {
+                if let Some(compact_date) =
+                    Date::new(year, u32::try_from(month).ok()?, u32::try_from(day).ok()?)
+                {
+                    ranked_candidates.push(RankedDateCandidate {
+                        score: 30 + hint_bonus + year_score(compact_date.year(), current_year),
+                        line_index,
+                        start,
+                        date: compact_date,
+                    });
+                }
+            }
+        }
+
+        for captures in re_month_name_date().captures_iter(&normalized_line) {
+            let month = captures
+                .get(1)
+                .and_then(|m| month_number_from_name(m.as_str()));
+            let day = captures.get(2).and_then(|m| m.as_str().parse::<i32>().ok());
+            let year = captures.get(3).and_then(|m| m.as_str().parse::<i32>().ok());
+            let start = captures.get(1).map(|m| m.start()).unwrap_or(0);
+            if let (Some(month), Some(day), Some(year)) = (month, day, year) {
+                if let Some(parsed) =
+                    Date::new(year, u32::try_from(month).ok()?, u32::try_from(day).ok()?)
+                {
+                    ranked_candidates.push(RankedDateCandidate {
+                        score: 26 + hint_bonus + year_score(parsed.year(), current_year),
+                        line_index,
+                        start,
+                        date: parsed,
+                    });
+                }
+            }
+        }
+
+        for captures in re_dmy_month_name_date().captures_iter(&normalized_line) {
+            let day = captures.get(1).and_then(|m| m.as_str().parse::<i32>().ok());
+            let month = captures
+                .get(2)
+                .and_then(|m| month_number_from_name(m.as_str()));
+            let year = captures.get(3).and_then(|m| m.as_str().parse::<i32>().ok());
+            let start = captures.get(1).map(|m| m.start()).unwrap_or(0);
+            if let (Some(month), Some(day), Some(year)) = (month, day, year) {
+                if let Some(parsed) =
+                    Date::new(year, u32::try_from(month).ok()?, u32::try_from(day).ok()?)
+                {
+                    ranked_candidates.push(RankedDateCandidate {
+                        score: 26 + hint_bonus + year_score(parsed.year(), current_year),
+                        line_index,
+                        start,
+                        date: parsed,
+                    });
+                }
+            }
+        }
+    }
+
+    if ranked_candidates.is_empty() {
+        return None;
+    }
+
+    ranked_candidates.sort_by(compare_ranked_candidates);
+    ranked_candidates.first().map(|candidate| candidate.date)
 }
 
 #[cfg(test)]
@@ -1673,225 +1894,4 @@ mod tests {
         assert_eq!(tendered_net_cents(&lines, &tenders), 2_500);
         assert!(!tenders_reconcile(&lines, &tenders, 46_668));
     }
-}
-
-fn to_four_digit_year(year: i32) -> i32 {
-    if year < 100 {
-        if year <= 69 {
-            2000 + year
-        } else {
-            1900 + year
-        }
-    } else {
-        year
-    }
-}
-
-fn numeric_date_candidates(part1: &str, part2: &str, part3: &str) -> Vec<(Date, &'static str)> {
-    let a = match part1.parse::<i32>() {
-        Ok(value) => value,
-        Err(_) => return Vec::new(),
-    };
-    let b = match part2.parse::<i32>() {
-        Ok(value) => value,
-        Err(_) => return Vec::new(),
-    };
-    let c = match part3.parse::<i32>() {
-        Ok(value) => value,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut candidates = Vec::new();
-    let mut add = |year: i32, month: i32, day: i32, kind: &'static str| {
-        let (Ok(month), Ok(day)) = (u32::try_from(month), u32::try_from(day)) else {
-            return;
-        };
-        if let Some(parsed) = Date::new(year, month, day) {
-            candidates.push((parsed, kind));
-        }
-    };
-
-    if part1.len() == 4 {
-        add(a, b, c, "ymd4");
-        return candidates;
-    }
-
-    if part3.len() == 4 {
-        if a > 12 && b <= 12 {
-            add(c, b, a, "dmy4");
-        } else if b > 12 && a <= 12 {
-            add(c, a, b, "mdy4");
-        } else {
-            add(c, a, b, "mdy4");
-            add(c, b, a, "dmy4");
-        }
-        return candidates;
-    }
-
-    let year_a = to_four_digit_year(a);
-    let year_c = to_four_digit_year(c);
-
-    if b <= 12 && c <= 31 {
-        add(year_a, b, c, "ymd2");
-    }
-    if a <= 12 && b <= 31 {
-        add(year_c, a, b, "mdy2");
-    }
-    if b <= 12 && a <= 31 {
-        add(year_c, b, a, "dmy2");
-    }
-
-    candidates
-}
-
-fn year_score(candidate_year: i32, current_year: i32) -> i32 {
-    10 - (candidate_year - current_year).abs().min(10)
-}
-
-fn kind_base_score(kind: &str) -> i32 {
-    match kind {
-        "ymd4" => 35,
-        "ymd2" => 28,
-        "mdy4" => 25,
-        "dmy4" => 24,
-        "mdy2" => 22,
-        "dmy2" => 20,
-        _ => 0,
-    }
-}
-
-fn compare_ranked_candidates(left: &RankedDateCandidate, right: &RankedDateCandidate) -> Ordering {
-    right
-        .score
-        .cmp(&left.score)
-        .then_with(|| left.line_index.cmp(&right.line_index))
-        .then_with(|| left.start.cmp(&right.start))
-}
-
-pub fn extract_date(lines: &[String], full_text: &str, current_year: i32) -> Option<Date> {
-    if lines.is_empty() && full_text.is_empty() {
-        return None;
-    }
-
-    let source_lines: Vec<String> = if lines.is_empty() {
-        full_text
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(str::to_string)
-            .collect()
-    } else {
-        lines.to_vec()
-    };
-    let current_yy = current_year.rem_euclid(100);
-    let mut ranked_candidates = Vec::new();
-
-    for (line_index, line) in source_lines.iter().enumerate() {
-        let normalized_line = normalize_decimal_spacing(line);
-        let hint_bonus = if re_date_context_hint().is_match(&normalized_line) {
-            40
-        } else {
-            0
-        };
-        let prefer_year_first = hint_bonus > 0;
-
-        for captures in re_separated_date().captures_iter(&normalized_line) {
-            let part1 = captures.get(2).map(|m| m.as_str()).unwrap_or("");
-            let part2 = captures.get(3).map(|m| m.as_str()).unwrap_or("");
-            let part3 = captures.get(4).map(|m| m.as_str()).unwrap_or("");
-            let start = captures.get(2).map(|m| m.start()).unwrap_or(0);
-            for (candidate_date, kind) in numeric_date_candidates(part1, part2, part3) {
-                if kind == "ymd2" {
-                    let year_token = match part1.parse::<i32>() {
-                        Ok(value) => value,
-                        Err(_) => continue,
-                    };
-                    if !(prefer_year_first && (20..=current_yy + 1).contains(&year_token)) {
-                        continue;
-                    }
-                }
-                let mut base = kind_base_score(kind);
-                if kind == "mdy2" {
-                    base += 2;
-                }
-                if kind == "ymd2" && prefer_year_first {
-                    base += 3;
-                }
-                ranked_candidates.push(RankedDateCandidate {
-                    score: base + hint_bonus + year_score(candidate_date.year(), current_year),
-                    line_index,
-                    start,
-                    date: candidate_date,
-                });
-            }
-        }
-
-        for captures in re_compact_date().captures_iter(&normalized_line) {
-            let year = captures.get(2).and_then(|m| m.as_str().parse::<i32>().ok());
-            let month = captures.get(3).and_then(|m| m.as_str().parse::<i32>().ok());
-            let day = captures.get(4).and_then(|m| m.as_str().parse::<i32>().ok());
-            let start = captures.get(2).map(|m| m.start()).unwrap_or(0);
-            if let (Some(year), Some(month), Some(day)) = (year, month, day) {
-                if let Some(compact_date) =
-                    Date::new(year, u32::try_from(month).ok()?, u32::try_from(day).ok()?)
-                {
-                    ranked_candidates.push(RankedDateCandidate {
-                        score: 30 + hint_bonus + year_score(compact_date.year(), current_year),
-                        line_index,
-                        start,
-                        date: compact_date,
-                    });
-                }
-            }
-        }
-
-        for captures in re_month_name_date().captures_iter(&normalized_line) {
-            let month = captures
-                .get(1)
-                .and_then(|m| month_number_from_name(m.as_str()));
-            let day = captures.get(2).and_then(|m| m.as_str().parse::<i32>().ok());
-            let year = captures.get(3).and_then(|m| m.as_str().parse::<i32>().ok());
-            let start = captures.get(1).map(|m| m.start()).unwrap_or(0);
-            if let (Some(month), Some(day), Some(year)) = (month, day, year) {
-                if let Some(parsed) =
-                    Date::new(year, u32::try_from(month).ok()?, u32::try_from(day).ok()?)
-                {
-                    ranked_candidates.push(RankedDateCandidate {
-                        score: 26 + hint_bonus + year_score(parsed.year(), current_year),
-                        line_index,
-                        start,
-                        date: parsed,
-                    });
-                }
-            }
-        }
-
-        for captures in re_dmy_month_name_date().captures_iter(&normalized_line) {
-            let day = captures.get(1).and_then(|m| m.as_str().parse::<i32>().ok());
-            let month = captures
-                .get(2)
-                .and_then(|m| month_number_from_name(m.as_str()));
-            let year = captures.get(3).and_then(|m| m.as_str().parse::<i32>().ok());
-            let start = captures.get(1).map(|m| m.start()).unwrap_or(0);
-            if let (Some(month), Some(day), Some(year)) = (month, day, year) {
-                if let Some(parsed) =
-                    Date::new(year, u32::try_from(month).ok()?, u32::try_from(day).ok()?)
-                {
-                    ranked_candidates.push(RankedDateCandidate {
-                        score: 26 + hint_bonus + year_score(parsed.year(), current_year),
-                        line_index,
-                        start,
-                        date: parsed,
-                    });
-                }
-            }
-        }
-    }
-
-    if ranked_candidates.is_empty() {
-        return None;
-    }
-
-    ranked_candidates.sort_by(compare_ranked_candidates);
-    ranked_candidates.first().map(|candidate| candidate.date)
 }

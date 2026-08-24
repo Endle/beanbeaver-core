@@ -338,8 +338,10 @@ pub fn process_receipt(
     tax_account: &str,
     image_sha256: Option<&str>,
 ) -> ProcessedReceipt {
-    let mut options = ProcessOptions::default();
-    options.known_merchants = known_merchants;
+    let options = ProcessOptions {
+        known_merchants,
+        ..Default::default()
+    };
     process_receipt_with_options(
         detections,
         padded_width,

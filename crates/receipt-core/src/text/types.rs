@@ -50,6 +50,16 @@ pub(crate) struct QuantityModifier {
     pub(crate) pattern_type: QuantityPatternType,
 }
 
+/// Which shape of quantity expression a row printed.
+///
+/// The shared `Price` suffix is load-bearing rather than noise, so
+/// `enum_variant_names` is allowed here: each name says what is measured *and*
+/// how it relates to the amount — "2 @ $1.99" is a count at a unit price,
+/// "0.41 lb @ $1.98/lb" is a weight at a unit price, "3 for $5" is a multiple
+/// for one price. Trimming to `Count` / `Weight` / `MultiFor` would drop the
+/// half that distinguishes a unit price from a bundle price, which is exactly
+/// what `validate_quantity_price` keys on.
+#[allow(clippy::enum_variant_names)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum QuantityPatternType {
     CountAtPrice,

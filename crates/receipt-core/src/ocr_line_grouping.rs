@@ -772,14 +772,13 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
     for &mid_index in &middle {
         let mut best_line: Option<usize> = None;
         let mut best_score: Option<(u8, f64, f64)> = None;
-        for line_idx in 0..lines.len() {
-            let overlap_ratio = line_overlap_ratio(dets, mid_index, &lines[line_idx]);
-            let center_distance =
-                (dets[mid_index].center_y - line_center_y(dets, &lines[line_idx])).abs();
+        for (line_idx, line) in lines.iter().enumerate() {
+            let overlap_ratio = line_overlap_ratio(dets, mid_index, line);
+            let center_distance = (dets[mid_index].center_y - line_center_y(dets, line)).abs();
             if overlap_ratio < overlap_threshold && center_distance > y_threshold {
                 continue;
             }
-            if !centers_agree(dets, mid_index, &lines[line_idx]) {
+            if !centers_agree(dets, mid_index, line) {
                 continue;
             }
             let score = (
@@ -788,7 +787,7 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
                 } else {
                     1
                 },
-                distance_to_line_span(dets, mid_index, &lines[line_idx]),
+                distance_to_line_span(dets, mid_index, line),
                 center_distance,
             );
             if best_score.is_none() || score_less(score, best_score.unwrap()) {
