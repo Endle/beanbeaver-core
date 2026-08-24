@@ -798,8 +798,6 @@ fn run_single(
     Some((score(name, &expected, d, mapping), timings))
 }
 
-/// A directory: run every `<stem>.jpg` that has a `<stem>.expected.json`.
-#[allow(clippy::too_many_arguments)]
 /// Recursively collect scorable `<stem>.jpg` under `dir`, counting every jpg
 /// seen so the header can still report how many lacked an `expected.json`.
 fn collect_jpgs(dir: &Path, all_jpg: &mut usize, out: &mut Vec<PathBuf>) {

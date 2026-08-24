@@ -539,7 +539,7 @@ pub fn looks_like_quantity_expression(text: &str) -> bool {
 pub fn extract_price_word(text: &str) -> Option<String> {
     let normalized = normalize_decimal_spacing(text.trim());
     let normalized = normalized
-        .trim_start_matches(|ch: char| ch == 'W' || ch == 'w')
+        .trim_start_matches(['W', 'w'])
         .trim_start()
         .to_string();
     let captures = re_price_word().captures(&normalized)?;

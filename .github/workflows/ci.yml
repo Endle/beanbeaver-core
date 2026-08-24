@@ -65,10 +65,17 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: clippy
-        # Correctness is a hard gate. Style/perf/suspicious warnings remain
-        # allowed until god-modules shrink (regex-in-loop, items-after-test,
-        # too-many-arguments). Tighten toward `-D warnings` over time.
-        run: cargo clippy --workspace --all-targets -- -D clippy::correctness
+        # Correctness and style are both hard gates. Style joined when the god
+        # modules were split (#84, #85) — the findings it had been holding back
+        # (items-after-test, needless-range-loop, field-reassign-with-default)
+        # were all consequences of functions too big to see the end of.
+        #
+        # Perf and complexity are still only warnings: what remains under them
+        # is regex-in-loop and the wide `process_receipt` / `parse_detections`
+        # signatures, and narrowing those means changing the FFI surface, which
+        # is a core-tag rollout rather than a lint fix. Tighten toward
+        # `-D warnings` when that rollout happens anyway.
+        run: cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::style
 
       - name: cargo-deny (licenses)
         uses: EmbarkStudios/cargo-deny-action@v2
