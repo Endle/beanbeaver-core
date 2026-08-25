@@ -248,7 +248,14 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0021"
-keywords = ["POTATO CHIPS", "CHIP", "CHIPS", "POPCORN", "PRETZEL", "NUTS", "ALMONDS", "CASHEWS", "PEANUTS", "WALNUTS", "PISTACHIOS", "TRAIL MIX", "GRANOLA BAR", "PROTEIN BAR", "ENERGY BAR", "CANDY", "CHOCOLATE", "GUMMY", "GUMMIES", "SKITTLES", "M&M", "SNICKERS", "TWIX", "KITKAT", "REESE", "OREO", "GOLDFISH", "CHEETOS", "DORITOS", "PRINGLES", "LAYS", "RUFFLES", "TOSTITOS", "CHEEZ-IT", "RITZ", "SENBEI", "RICE CRACKER"]
+# "SACHIMA" (沙琪瑪) is a fried-dough snack bar. It is here because the only
+# other keyword its description contains is "EGG": Foody Mart prints "HFC - Egg
+# Crispy Sachima", so legacy_0002's dairy rule was the sole match and a snack
+# filed to Dairy. No priority is needed — "SACHIMA" (7) beats "EGG" (3) on
+# `keyword_length` at equal priority — and no reordering either: snacks is
+# declared after dairy, so `grocery/snacks` is the last tag in the union and the
+# label the app leads with.
+keywords = ["POTATO CHIPS", "CHIP", "CHIPS", "POPCORN", "PRETZEL", "NUTS", "ALMONDS", "CASHEWS", "PEANUTS", "WALNUTS", "PISTACHIOS", "TRAIL MIX", "GRANOLA BAR", "PROTEIN BAR", "ENERGY BAR", "CANDY", "CHOCOLATE", "GUMMY", "GUMMIES", "SKITTLES", "M&M", "SNICKERS", "TWIX", "KITKAT", "REESE", "OREO", "GOLDFISH", "CHEETOS", "DORITOS", "PRINGLES", "LAYS", "RUFFLES", "TOSTITOS", "CHEEZ-IT", "RITZ", "SENBEI", "RICE CRACKER", "SACHIMA"]
 tags = ["grocery/snacks"]
 priority = 0
 exact_only = false
