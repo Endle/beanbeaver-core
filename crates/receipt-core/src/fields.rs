@@ -558,13 +558,24 @@ const TAX_PLAUSIBLE_MAX_FRAC: f64 = 0.25;
 ///   drifted up a row, so `HST` claimed 10.79 and the tax equalled the subtotal.
 /// - Walmart's `HST` merged onto the TOTAL row as `HST TOTAL $58.94`, so the tax
 ///   equalled the total.
+/// - Foody Mart prints `Sub Total 117.56 / HST 1.82 / hst5% 0.00 / Total after
+///   Tax 119.38`, and OCR read the HST amount as `11:82` — no decimal point, so
+///   no amount at all. [`sum_summary_block_tax_rows`] then summed the one row it
+///   could read and returned the `hst5%` bucket's **0.00**, which is not a
+///   near-miss: the receipt charged 1.82 and the entry carried none of it.
 ///
-/// Only those two impossibilities (and a tax exceeding
-/// [`TAX_PLAUSIBLE_MAX_FRAC`] of the subtotal) trigger a repair, and only when
-/// `total - subtotal` is itself a plausible tax. A tax that is merely
-/// *inconsistent* by a few cents is left alone: deposits, bottle fees and
-/// post-subtotal discounts all break the identity legitimately, and this must not
-/// start rewriting those.
+/// A zero tax is only impossible *because* `total > subtotal` — the guard above
+/// — and that is what separates it from the ordinary untaxed receipt, which
+/// prints 0.00 and a total equal to its subtotal. It is the one repair here that
+/// fires on a well-formed amount rather than a mangled one, which is why the
+/// parser reports it (`ReceiptWarningKind::PriceAutoCorrected`) instead of
+/// swallowing it.
+///
+/// Only those impossibilities (and a tax exceeding [`TAX_PLAUSIBLE_MAX_FRAC`] of
+/// the subtotal) trigger a repair, and only when `total - subtotal` is itself a
+/// plausible tax. A tax that is merely *inconsistent* by a few cents is left
+/// alone: deposits, bottle fees and post-subtotal discounts all break the
+/// identity legitimately, and this must not start rewriting those.
 fn reconcile_tax(tax: Option<i64>, subtotal: Option<i64>, total: i64) -> Option<i64> {
     // Both `None` arms return `tax` untouched rather than propagating: no
     // subtotal means nothing to check against, which is a reason to leave the
@@ -576,7 +587,7 @@ fn reconcile_tax(tax: Option<i64>, subtotal: Option<i64>, total: i64) -> Option<
         return Some(tax);
     }
     let ceiling = (subtotal as f64 * TAX_PLAUSIBLE_MAX_FRAC) as i64;
-    let impossible = tax == total || tax == subtotal || tax > ceiling;
+    let impossible = tax == total || tax == subtotal || tax > ceiling || tax == 0;
     if !impossible {
         return Some(tax);
     }
@@ -588,9 +599,32 @@ fn reconcile_tax(tax: Option<i64>, subtotal: Option<i64>, total: i64) -> Option<
     }
 }
 
+/// The tax as the receipt printed it, and the tax after [`reconcile_tax`].
+///
+/// Both readings, because a repair the caller cannot see is a repair nobody can
+/// audit: the parser compares them and reports the difference. `printed` is what
+/// the summary block yielded — `None` when no tax row was readable at all.
+pub struct TaxReading {
+    pub cents: Option<i64>,
+    pub printed_cents: Option<i64>,
+}
+
+impl TaxReading {
+    /// True when [`reconcile_tax`] replaced the printed reading with a derived
+    /// one. A `None` printed reading is not a repair — there was nothing to
+    /// contradict.
+    pub fn was_repaired(&self) -> bool {
+        self.printed_cents.is_some() && self.cents != self.printed_cents
+    }
+}
+
 /// [`extract_tax`], with the summary-block repair above applied.
-pub fn extract_tax_reconciled(lines: &[String], total: i64) -> Option<i64> {
-    reconcile_tax(extract_tax(lines), extract_subtotal(lines), total)
+pub fn extract_tax_reconciled(lines: &[String], total: i64) -> TaxReading {
+    let printed_cents = extract_tax(lines);
+    TaxReading {
+        cents: reconcile_tax(printed_cents, extract_subtotal(lines), total),
+        printed_cents,
+    }
 }
 
 /// Sum of the tax rows printed between the subtotal and the total.
@@ -1176,9 +1210,9 @@ pub fn extract_date(lines: &[String], full_text: &str, current_year: i32) -> Opt
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_change, extract_date, extract_subtotal, extract_tax, extract_tenders,
-        extract_total, normalize_decimal_spacing, reconcile_tax, tendered_net_cents,
-        tenders_reconcile,
+        extract_change, extract_date, extract_subtotal, extract_tax, extract_tax_reconciled,
+        extract_tenders, extract_total, normalize_decimal_spacing, reconcile_tax,
+        tendered_net_cents, tenders_reconcile,
     };
 
     #[test]
@@ -1198,6 +1232,55 @@ mod tests {
     fn implausibly_large_tax_is_rederived() {
         // Half the subtotal is not a Canadian tax rate.
         assert_eq!(reconcile_tax(Some(5000), Some(10000), 11300), Some(1300));
+    }
+
+    #[test]
+    fn zero_tax_under_a_larger_total_is_rederived() {
+        // Foody Mart 2026-08-22: OCR read "HST 1.82" as "11:82" — no parseable
+        // amount — so the summed buckets returned the hst5% row's 0.00 while the
+        // receipt charged 1.82 on its hot-food line.
+        assert_eq!(reconcile_tax(Some(0), Some(11756), 11938), Some(182));
+    }
+
+    #[test]
+    fn zero_tax_on_an_untaxed_receipt_is_left_alone() {
+        // The ordinary zero-rated grocery basket: 0.00 tax printed, and the total
+        // agrees with the subtotal. There is nothing to derive and nothing wrong.
+        assert_eq!(reconcile_tax(Some(0), Some(4210), 4210), Some(0));
+    }
+
+    #[test]
+    fn zero_tax_is_left_alone_when_the_gap_is_too_large_to_be_tax() {
+        // A gap of 40% of the subtotal is a mis-read total or a missing summary
+        // line, not a tax rate — deriving from it would invent an amount.
+        assert_eq!(reconcile_tax(Some(0), Some(1000), 1400), Some(0));
+    }
+
+    #[test]
+    fn a_repaired_tax_is_reported_as_repaired() {
+        let lines = vec![
+            "Sub Total 117.56".to_string(),
+            "HST 11:82".to_string(),
+            "hst5% 0.00".to_string(),
+            "Total after Tax 119.38".to_string(),
+        ];
+        let reading = extract_tax_reconciled(&lines, 11938);
+        assert_eq!(reading.printed_cents, Some(0));
+        assert_eq!(reading.cents, Some(182));
+        assert!(reading.was_repaired());
+    }
+
+    #[test]
+    fn an_untouched_tax_is_not_reported_as_repaired() {
+        let lines = vec![
+            "Sub Total 181.32".to_string(),
+            "HST 2.36".to_string(),
+            "hst5% 0.09".to_string(),
+            "Total after Tax 183.77".to_string(),
+        ];
+        let reading = extract_tax_reconciled(&lines, 18377);
+        assert_eq!(reading.cents, Some(245));
+        assert!(!reading.was_repaired());
     }
 
     #[test]

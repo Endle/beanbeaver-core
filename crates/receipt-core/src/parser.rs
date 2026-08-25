@@ -263,8 +263,8 @@ pub fn parse_receipt(
     // `fields` still returns raw i64 cents; convert once, here, so
     // nothing below this line carries an untyped amount.
     let total_cents = Money::from_cents(fields::extract_total(&lines));
-    let tax_cents =
-        fields::extract_tax_reconciled(&lines, total_cents.cents()).map(Money::from_cents);
+    let tax_reading = fields::extract_tax_reconciled(&lines, total_cents.cents());
+    let tax_cents = tax_reading.cents.map(Money::from_cents);
     let subtotal_cents = fields::extract_subtotal(&lines).map(Money::from_cents);
 
     let mut summary_amounts = HashSet::new();
@@ -375,6 +375,26 @@ pub fn parse_receipt(
             item
         })
         .collect();
+
+    // A tax the summary block could not state coherently was derived from
+    // `SUBTOTAL + TAX = TOTAL` (see `fields::reconcile_tax`). Say so: the
+    // derived amount is better than what was printed, but it is still an amount
+    // this parser chose rather than read, and a silent rewrite of a money field
+    // is exactly the kind of thing a reader should be able to check against the
+    // photo.
+    if tax_reading.was_repaired() {
+        if let (Some(printed), Some(cents)) = (tax_reading.printed_cents, tax_reading.cents) {
+            warnings.push(ParsedReceiptWarning {
+                kind: ReceiptWarningKind::PriceAutoCorrected,
+                message: format!(
+                    "tax read as {} but the receipt's own subtotal and total imply {} — using the implied amount",
+                    Money::from_cents(printed),
+                    Money::from_cents(cents),
+                ),
+                after_item_index: None,
+            });
+        }
+    }
 
     // Postings that overshoot the receipt total cannot balance, and until now
     // nothing said so. `formatter` closes an *undershoot* with an
@@ -692,6 +712,56 @@ mod tests {
 
         assert!(
             implausible(&parsed).is_empty(),
+            "warnings were {:?}",
+            parsed.warnings
+        );
+    }
+
+    #[test]
+    fn reports_a_tax_derived_from_the_summary_identity() {
+        // Foody Mart 2026-08-22: "HST 1.82" came back as "11:82", which carries
+        // no parseable amount, so the tax read as the hst5% bucket's 0.00 and
+        // 1.82 vanished from the entry without a word.
+        let parsed = parse_text(
+            "FOODY MART\n\
+             Hot Food 13.99H\n\
+             Sub Total 13.99\n\
+             HST 11:82\n\
+             hst5% 0.00\n\
+             Total after Tax 15.81\n",
+        );
+
+        assert_eq!(parsed.tax, Some(Money::from_decimal_str("1.82")));
+        let repaired: Vec<_> = parsed
+            .warnings
+            .iter()
+            .filter(|w| w.kind == ReceiptWarningKind::PriceAutoCorrected)
+            .collect();
+        assert_eq!(repaired.len(), 1, "warnings were {:?}", parsed.warnings);
+        assert!(
+            repaired[0].message.contains("0.00") && repaired[0].message.contains("1.82"),
+            "message should name both the printed and the derived tax: {}",
+            repaired[0].message
+        );
+    }
+
+    #[test]
+    fn does_not_report_a_repair_when_the_tax_reads_cleanly() {
+        let parsed = parse_text(
+            "FOODY MART\n\
+             Hot Food 13.99H\n\
+             Sub Total 13.99\n\
+             HST 1.82\n\
+             hst5% 0.00\n\
+             Total after Tax 15.81\n",
+        );
+
+        assert_eq!(parsed.tax, Some(Money::from_decimal_str("1.82")));
+        assert!(
+            !parsed
+                .warnings
+                .iter()
+                .any(|w| w.kind == ReceiptWarningKind::PriceAutoCorrected),
             "warnings were {:?}",
             parsed.warnings
         );
