@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "bb-receipt-ffi"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "image",
  "receipt-core",
@@ -1058,7 +1058,7 @@ dependencies = [
 
 [[package]]
 name = "ocr-paddle"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "geo",
  "image",
@@ -1336,7 +1336,7 @@ dependencies = [
 
 [[package]]
 name = "receipt-core"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "regex",
  "serde",
@@ -1346,7 +1346,7 @@ dependencies = [
 
 [[package]]
 name = "receipt-image"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "image",
  "thiserror 2.0.18",
@@ -1437,7 +1437,7 @@ dependencies = [
 
 [[package]]
 name = "scan"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "image",
  "ocr-paddle",
