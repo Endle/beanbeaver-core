@@ -268,6 +268,41 @@ fn parse_quantity_modifier(line: &str) -> Option<QuantityModifier> {
     None
 }
 
+/// Whether a quantity row's own arithmetic proves the amount at its end is
+/// that row's total rather than a unit price.
+///
+/// This is the reconciliation half of `has_trailing_total`. The regex half
+/// cannot see a `$`-prefixed amount — T&T prints "0.428 kg @ $29.92/kg
+/// W $12.81 G F" — and cannot be taught to without turning every
+/// "6 @ $0.98" into a phantom item. Arithmetic separates the two cleanly:
+/// 0.428 × 29.92 = 12.81 is the row's total, while 6 × 0.98 = 5.88 ≠ 0.98
+/// says 0.98 was only the unit price.
+///
+/// The rate must be readable. `validate_quantity_price` gives an unreadable
+/// one the benefit of the doubt (always-own-total), which is the right call
+/// where it is used to *price* a row that was already going to be kept, but
+/// here it would hand that benefit to every weight row on every receipt.
+fn qty_row_owns_trailing_total(line: &str) -> bool {
+    let Some((price_cents, _, _)) = extract_trailing_price_cents(line) else {
+        return false;
+    };
+    if price_cents <= Money::ZERO {
+        return false;
+    }
+    parse_quantity_modifier(line)
+        .map(|modifier| {
+            // A rate equal to the trailing amount reconciles tautologically —
+            // "1 @ $1.99  1.99" multiplies by one, and a 1.00 kg weight row
+            // does the same. That row's amount is its unit price and its total
+            // at once, so the arithmetic distinguishes nothing and the regex
+            // half stays the only witness. Without this guard every "1 @ $X"
+            // row qualifies and emits a phantom item named "1 @ $".
+            modifier.unit_price.is_some_and(|unit| unit != price_cents)
+                && validate_quantity_price(price_cents, &modifier)
+        })
+        .unwrap_or(false)
+}
+
 fn validate_quantity_price(total_price: Money, modifier: &QuantityModifier) -> bool {
     let tolerance = 2i64;
     match modifier.pattern_type {
@@ -1973,7 +2008,8 @@ pub fn extract_text_items(
         }
 
         let is_qty_line = looks_like_quantity_expression(line);
-        let has_trailing_total = re_trailing_total_presence().is_match(line);
+        let has_trailing_total =
+            re_trailing_total_presence().is_match(line) || qty_row_owns_trailing_total(line);
         if is_qty_line {
             if let Some(pairing) = orphan_qty_pairing(
                 i,

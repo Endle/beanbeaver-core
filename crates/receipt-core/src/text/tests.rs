@@ -907,3 +907,43 @@ fn ocr_noise_between_weight_unit_and_at_still_prices_item_above() {
         "weight row leaked as an item: {observed:?}"
     );
 }
+
+#[test]
+fn recovers_weighed_item_with_space_separated_tax_flags() {
+    // T&T 2026-08-25_t_t_supermarket_14_48: the food-court row prints its
+    // name on one line and the weight breakdown on the next, with the price
+    // and TWO space-separated flags at the end — "W $12.81 G F".
+    //
+    // `TAX_FLAG_CLASS` used to match a single contiguous letter run, so the
+    // " F" left the line with no recognizable trailing price. That made it a
+    // quantity row with no total, which `extract_text_items` drops outright —
+    // taking the receipt's only item with it and leaving the whole 12.81
+    // unaccounted.
+    let lines: Vec<String> = [
+        "FOOD",
+        "HOT SPICY DIP",
+        "0.428 kg @ $29.92/kg W $12.81 G F",
+        "SUB TOTAL $12.81",
+        "HST (TOTAL GST+PST) $1.67",
+        "TOTAL $14.48",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let summary_amounts = HashSet::from([
+        Money::from_cents(1448),
+        Money::from_cents(1281),
+        Money::from_cents(167),
+    ]);
+
+    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    assert!(
+        items
+            .iter()
+            .any(|it| it.description.contains("HOT SPICY DIP")
+                && it.price == Money::from_cents(1281)),
+        "weighed item lost to its trailing flags: {items:?}"
+    );
+    // The weight row must not also leak as an item of its own.
+    assert_eq!(items.len(), 1, "{items:?}");
+}

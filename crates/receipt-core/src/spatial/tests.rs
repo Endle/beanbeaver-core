@@ -49,6 +49,12 @@ fn parses_tt_price_with_gst_pst_tax_flags() {
     assert_eq!(is_price_word("W $13.97"), Some(139_700));
     assert_eq!(is_price_word("6.87 G"), Some(68_700));
     assert_eq!(is_price_word("5.00- H"), Some(-50_000));
+    // F (food, zero-rated) is a flag too, and T&T pairs it with G on its
+    // food-court rows: 2026-08-25_t_t_supermarket_14_48 prints the whole
+    // token "W $12.81 G F" as ONE OCR box. Without F in the class the row
+    // carries no price at all and the receipt's only item disappears.
+    assert_eq!(is_price_word("W $12.81 G F"), Some(128_100));
+    assert_eq!(is_price_word("$12.81 F"), Some(128_100));
 }
 
 fn word(text: &str, left: f64, top: f64, right: f64, bottom: f64) -> OcrWord {
