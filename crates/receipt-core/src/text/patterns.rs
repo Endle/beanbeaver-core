@@ -17,7 +17,11 @@ use crate::common::{WEIGHT_UNIT_AT_SEP, WEIGHT_UNIT_CLASS};
 // Some merchants print a '*' immediately before the tax letter(s) — e.g.
 // FreshCo's "$25.96*HC" — so an optional leading asterisk is tolerated; without
 // it the whole price token fails to parse and the line is silently dropped.
-pub(crate) const TAX_FLAG_CLASS: &str = r"(?:\*?[BbCcFfGgHhJjPpTtXx]{1,3}\d{0,2})?";
+// T&T prints its flags as separate space-separated letters — "W $12.81 G F"
+// arrives as ONE OCR token — so the group repeats over whitespace rather than
+// matching a single contiguous run. `*` (not `+`) keeps the whole class
+// optional, which is what every call site assumed when this was `?`.
+pub(crate) const TAX_FLAG_CLASS: &str = r"(?:\*?[BbCcFfGgHhJjPpTtXx]{1,3}\d{0,2}\s*)*";
 
 // When the parser sees a bare standalone-price line (e.g. `$8.95` on its own)
 // it walks back up to 5 lines looking for the description that goes with it.
@@ -83,6 +87,11 @@ pub(crate) fn re_trailing_price() -> &'static Regex {
     RE.get_or_init(|| Regex::new(&format!(r"(\d+\.\d{{2}})(-?)\s*{TAX_FLAG_CLASS}\s*$")).unwrap())
 }
 
+// Deliberately requires whitespace — not `\$?` — before the amount. A
+// `$`-prefixed tail here would make every "6 @ $0.98" unit-price row look
+// like it carries a total, and each would emit a phantom "6 @ $" item.
+// A qty row that genuinely owns its trailing amount proves it by
+// arithmetic instead; see `qty_row_owns_trailing_total`.
 pub(crate) fn re_trailing_total_presence() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(&format!(r"\s+\d+\.\d{{2}}\s*{TAX_FLAG_CLASS}\s*$")).unwrap())

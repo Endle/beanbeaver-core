@@ -502,6 +502,27 @@ priority = 0
 exact_only = false
 
 [[rules]]
+id = "hot_spicy_dip"
+# T&T's food-court hot bar, sold by weight (2026-08-25: "HOT SPICY DIP" /
+# "0.428 kg @ $29.92/kg", the receipt's own subtext 麻辣燙 — mala tang). Same
+# reasoning as `dim_sum` above, from the same kind of evidence: the receipt's
+# only tax is "HST (TOTAL GST+PST) $1.67" on a $12.81 subtotal — a full 13%,
+# with no point-of-sale rebate, so this is ready-to-eat prepared food and not
+# zero-rated basic groceries. The cashier field reads "Foodcourt" and the
+# section header is "FOOD" rather than "GROCERY", which agrees.
+#
+# `grocery/prepared_meal` rather than a restaurant path: every supermarket
+# prepared-food rule here lands there, and the bare `restaurant` tag has no
+# entry in [accounts], so tagging it that way would book the line to FIXME.
+#
+# Narrow on purpose — one merchant's SKU wording, no evidence yet of other
+# spellings. Widen it when a second receipt shows one.
+keywords = ["HOT SPICY DIP"]
+tags = ["grocery/prepared_meal"]
+priority = 0
+exact_only = false
+
+[[rules]]
 id = "legacy_0049"
 keywords = ["FRUIT (FT)"]
 tags = ["grocery/fruit"]

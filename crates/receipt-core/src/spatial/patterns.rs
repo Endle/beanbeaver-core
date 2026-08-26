@@ -190,9 +190,9 @@ pub(crate) fn re_price_word() -> &'static Regex {
     // discount lines (e.g. "Member Pricing MRJ -1.49"). Either marks the
     // amount as negative. The optional trailing letters are tax flags that
     // can fuse with the price into a single OCR token: Costco's H/T/J and
-    // T&T's G (GST) / P (PST), and T&T may print several space-separated
-    // (e.g. "$6.87 G P").
-    RE.get_or_init(|| Regex::new(r"^(-?)\$?(\d+\.\d{2})(-?)(?:\s*[HhTtJjGgPp])*$").unwrap())
+    // T&T's G (GST) / P (PST) / F (food, zero-rated), and T&T may print
+    // several space-separated (e.g. "$6.87 G P", "$12.81 G F").
+    RE.get_or_init(|| Regex::new(r"^(-?)\$?(\d+\.\d{2})(-?)(?:\s*[HhTtJjGgPpFf])*$").unwrap())
 }
 
 pub(crate) fn re_embedded_trailing_price_word() -> &'static Regex {
