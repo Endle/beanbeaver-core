@@ -341,7 +341,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0028"
-keywords = ["COORS", "SMIRNOFF", "BEER", "WINE", "VODKA", "WHISKEY", "WHISKY", "RUM", "GIN", "TEQUILA", "COGNAC", "CHAMPAGNE", "PROSECCO", "CIDER", "SAKE", "SOJU", "LIQUOR", "LIQUEUR", "LAGER", "STOUT", "PORTER"]
+keywords = ["COORS", "SMIRNOFF", "SLEEMAN", "BEER", "WINE", "VODKA", "WHISKEY", "WHISKY", "RUM", "GIN", "TEQUILA", "COGNAC", "CHAMPAGNE", "PROSECCO", "CIDER", "SAKE", "SOJU", "LIQUOR", "LIQUEUR", "LAGER", "STOUT", "PORTER"]
 tags = ["alcohol/beverage"]
 priority = 1
 exact_only = false
@@ -426,7 +426,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0041"
-keywords = ["KS IBU", "KIRKLAND IBU", "IBUPROFEN", "IBU 400M", "LUTEIN", "IRONKIDS", "MULTIVITAMIN", "VITAMIN", "VIT B100", "VIT B12", "VICKS", "SINUS", "TYLENOL", "ADVIL"]
+keywords = ["KS IBU", "KIRKLAND IBU", "IBUPROFEN", "IBU 400M", "LUTEIN", "IRONKIDS", "MULTIVITAMIN", "VITAMIN", "VIT B100", "VIT B12", "VITAFUSION", "JAM BIOTIN", "BIOTIN", "VICKS", "SINUS", "TYLENOL", "ADVIL"]
 tags = ["health/pharmacy"]
 priority = 0
 exact_only = false
@@ -947,7 +947,41 @@ keywords = [
   "NIGHT CREAM",
   "DAY CREAM",
   "RETINOL",
+  # Brands whose description carries no product word at all, so nothing else
+  # here could ever reach them. grace+stella is skin care (eye masks, serums);
+  # Costco prints it as the bare brand, "1897598 GRACE+STELLA".
+  "GRACE+STELLA",
+  "GRACE STELLA",
 ]
 tags = ["personal_care"]
+priority = 0
+exact_only = false
+
+# Costco sells Schwartz's Montreal smoked meat under the bare brand name --
+# "1012120 SCHWARTZ'S", with no product word for the meat rule (`legacy_0001`)
+# to match. It is the deli meat and not the same-named spice line: the receipt
+# charges it no HST, and on 2026-08-26_costco_737_56 the taxable items sum to
+# $230.91 against the $30.02 of tax at 13% ($230.92), which accounts for every
+# taxable line and leaves this one zero-rated -- i.e. basic groceries.
+[[rules]]
+id = "schwartzs_smoked_meat"
+keywords = ["SCHWARTZ'S", "SCHWARTZS", "SCHWARTZ"]
+tags = ["grocery/meat"]
+priority = 0
+exact_only = false
+
+# Cosequin is Nutramax's joint supplement **for dogs** (Costco item 1512752
+# prints "COSEQUIN180C" -- the 180-count chewable tub), which is why this tags
+# `pet` rather than joining the supplements in `legacy_0041`. The tax flag
+# cannot make that call for you: pet supplies and human supplements are both
+# taxable, and this line is inside the $230.91 taxable set above.
+#
+# Deliberately not widened toward "COSE..." -- the human-facing sibling product
+# is a different brand spelled COSAMIN, and a shortened keyword would fuzzy
+# across the two at `FUZZY_THRESHOLD_LONG`.
+[[rules]]
+id = "cosequin_pet_joint"
+keywords = ["COSEQUIN"]
+tags = ["pet"]
 priority = 0
 exact_only = false
