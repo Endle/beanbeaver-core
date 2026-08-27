@@ -587,8 +587,7 @@ fn reconcile_tax(tax: Option<i64>, subtotal: Option<i64>, total: i64) -> Option<
         return Some(tax);
     }
     let ceiling = (subtotal as f64 * TAX_PLAUSIBLE_MAX_FRAC) as i64;
-    let impossible = tax == total || tax == subtotal || tax > ceiling || tax == 0;
-    if !impossible {
+    if !tax_is_impossible(tax, subtotal, total) {
         return Some(tax);
     }
     let derived = total - subtotal;
@@ -597,6 +596,157 @@ fn reconcile_tax(tax: Option<i64>, subtotal: Option<i64>, total: i64) -> Option<
     } else {
         Some(tax)
     }
+}
+
+/// Repair a summary block whose labels and amounts are off by a whole row.
+///
+/// [`reconcile_tax`] fixes **one** wrong summary field by deriving it from the
+/// other two. This handles the case where that is not enough because *two* of
+/// them are wrong at once: the label column and the amount column have slipped
+/// by a row, so every label holds its neighbour's amount and the identity has no
+/// clean anchor left to derive from.
+///
+/// It is a whole family, not one receipt. `pair_columns` walks the label rows in
+/// reading order and takes the **first** amount clearing its overlap gate, and
+/// detection boxes are taller than the row pitch — 44-51px against 38-42px on the
+/// Costco corpus — so a label already overlaps its neighbour's amount by ~0.2
+/// before the receipt has leaned at all. Perhaps 3px of column lean is enough to
+/// push that past the gate, at which point the label claims the row above's
+/// amount and the whole block slides down one. Five corpus receipts do this
+/// (`2026-04-26_costco_173_15`, `2026-05-20_costco_74_22`,
+/// `2026-06-20_costco_122_04`, `2026-07-08_costco_112_95`,
+/// `2026-08-26_costco_737_56`), and on the last of those a 96%-of-total tax
+/// reached the ledger.
+///
+/// **Fixing this in the geometry was measured and rejected.** The lean exceeds
+/// that budget on 63 of 125 corpus receipts while only 7 actually misparse, so
+/// the geometric signal is necessary but nowhere near sufficient — any change to
+/// the gate perturbs the 63 that currently survive. The deskew declines on all
+/// five, each at a different estimator gate, because a Costco summary block
+/// offers it 10-29 candidate pairs and 1-3 inliers to fit from.
+///
+/// So this repairs arithmetically instead, from two independent readings the
+/// receipt already carries, and only where the printed reading is impossible:
+///
+/// 1. **The trailer tax echo.** Costco restates the tax below the total, broken
+///    down by code (`P (H)HST 13% 30.02`, `TOTAL TAX 30.02`).
+///    [`sum_summary_block_tax_rows`] deliberately stops at the total line so it
+///    never *sums* that restatement — but as a second reading of the same figure
+///    it is exactly what the shifted block lost. Across the corpus it is present
+///    on 15 receipts: it agrees with the parsed tax on all 11 that parse right,
+///    and contradicts all 4 that do not, correctly every time.
+/// 2. **An identity search**, when no echo is readable (OCR mangles it on
+///    `173_15`). `SUBTOTAL + TAX = TOTAL`, so look for the one pair of amounts
+///    printed in the summary block that satisfies it.
+///
+/// Both require the derived subtotal to be an amount **printed on the receipt**,
+/// so the repair only ever re-assigns figures the receipt actually carries — it
+/// never invents one. The identity search additionally refuses when more than one
+/// pair fits: on `112_95` a $100.00 gift card plus a $12.95 card payment sum to
+/// the total exactly as subtotal-plus-tax does, and a split tender is not
+/// something arithmetic alone can tell apart from a summary block. The echo
+/// resolves that receipt; ambiguity alone never does.
+fn reconcile_summary_shift(
+    lines: &[String],
+    subtotal: Option<i64>,
+    tax: Option<i64>,
+    total: i64,
+) -> Option<(i64, i64)> {
+    let (subtotal, tax) = (subtotal?, tax?);
+    if total <= 0 || subtotal <= 0 || total <= subtotal {
+        return None;
+    }
+    // Already consistent, or off by an amount a deposit or fee can explain —
+    // both are reasons to leave a money field alone.
+    if subtotal + tax == total || !tax_is_impossible(tax, subtotal, total) {
+        return None;
+    }
+
+    let printed = summary_block_amounts(lines, total);
+    let plausible = |derived_subtotal: i64, derived_tax: i64| {
+        derived_tax > 0
+            && derived_subtotal > 0
+            && derived_tax <= (derived_subtotal as f64 * TAX_PLAUSIBLE_MAX_FRAC) as i64
+            && printed.contains(&derived_subtotal)
+    };
+
+    if let Some(echo) = trailer_tax_echo(lines, total) {
+        let derived_subtotal = total - echo;
+        if plausible(derived_subtotal, echo) {
+            return Some((derived_subtotal, echo));
+        }
+    }
+
+    let mut fits = printed
+        .iter()
+        .filter(|&&candidate_subtotal| plausible(candidate_subtotal, total - candidate_subtotal))
+        .copied();
+    let only = fits.next()?;
+    fits.next().is_none().then_some((only, total - only))
+}
+
+/// The impossibility test [`reconcile_tax`] repairs on, named so
+/// [`reconcile_summary_shift`] can ask the same question rather than restate it.
+fn tax_is_impossible(tax: i64, subtotal: i64, total: i64) -> bool {
+    tax == total
+        || tax == subtotal
+        || tax > (subtotal as f64 * TAX_PLAUSIBLE_MAX_FRAC) as i64
+        || tax == 0
+}
+
+/// Every amount printed in the summary block — the rows from the subtotal label
+/// through the total, plus a little slack either side, because the shift this
+/// serves is precisely a block whose amounts have slid out of their own rows.
+fn summary_block_amounts(lines: &[String], total: i64) -> Vec<i64> {
+    let labelled: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| {
+            let upper = line.to_ascii_uppercase();
+            re_subtotal_label().is_match(&upper) || upper.contains("TOTAL")
+        })
+        .map(|(idx, _)| idx)
+        .collect();
+    let (Some(&first), Some(&last)) = (labelled.first(), labelled.last()) else {
+        return Vec::new();
+    };
+    let mut amounts: Vec<i64> = lines[first.saturating_sub(2)..(last + 3).min(lines.len())]
+        .iter()
+        .flat_map(|line| prices_in_line(line))
+        .filter(|&amount| amount > 0 && amount < total)
+        .collect();
+    amounts.sort_unstable();
+    amounts.dedup();
+    amounts
+}
+
+/// The tax figure a receipt restates *below* its total line, as a rate breakdown
+/// (`P (H)HST 13% 30.02`) or a roll-up (`TOTAL TAX 30.02`).
+///
+/// Below the total is what makes it a restatement rather than a component — the
+/// same boundary [`sum_summary_block_tax_rows`] uses from the other side, for the
+/// same reason. Amounts at or above the total are rejected: the trailer also
+/// carries the charged amount, and a tax is by definition a part of the whole.
+fn trailer_tax_echo(lines: &[String], total: i64) -> Option<i64> {
+    let total_idx = lines
+        .iter()
+        .position(|line| line.to_ascii_uppercase().contains("TOTAL"))?;
+    lines[total_idx + 1..].iter().find_map(|line| {
+        let upper = line.to_ascii_uppercase();
+        let is_echo = re_tax_rate_breakdown().is_match(&upper) || upper.contains("TOTAL TAX");
+        (is_echo)
+            .then(|| prices_in_line(line))
+            .and_then(|amounts| amounts.last().copied())
+            .filter(|&amount| amount > 0 && amount < total)
+    })
+}
+
+/// A tax row that names its own rate — `P (H)HST 13%`, `H=HST 13%`, `hst5%`.
+/// The rate is required: it is what separates a restatement of the tax charged
+/// from the registration number in the header (`HST#…RT0001`).
+fn re_tax_rate_breakdown() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(HST|GST|PST|QST)\s*\d{1,2}(\.\d+)?\s*%").unwrap())
 }
 
 /// The tax as the receipt printed it, and the tax after [`reconcile_tax`].
@@ -618,12 +768,51 @@ impl TaxReading {
     }
 }
 
-/// [`extract_tax`], with the summary-block repair above applied.
-pub fn extract_tax_reconciled(lines: &[String], total: i64) -> TaxReading {
-    let printed_cents = extract_tax(lines);
-    TaxReading {
-        cents: reconcile_tax(printed_cents, extract_subtotal(lines), total),
-        printed_cents,
+/// The subtotal and tax the receipt printed, and what they are after both
+/// summary repairs: [`reconcile_tax`] for a single wrong field, then
+/// [`reconcile_summary_shift`] for a whole block that slipped a row.
+///
+/// One entry point because the two repairs share a precondition — an
+/// impossible printed reading — and reading them apart is how a caller ends up
+/// applying the second to a receipt the first already fixed.
+pub struct SummaryReading {
+    pub subtotal_cents: Option<i64>,
+    pub tax: TaxReading,
+    pub printed_subtotal_cents: Option<i64>,
+}
+
+impl SummaryReading {
+    /// True when the whole block was re-assigned, as opposed to the tax alone
+    /// being derived. Reported separately because it rewrites *two* money
+    /// fields, so it deserves its own line in the warnings.
+    pub fn shift_repaired(&self) -> bool {
+        self.printed_subtotal_cents.is_some() && self.subtotal_cents != self.printed_subtotal_cents
+    }
+}
+
+/// [`extract_subtotal`] and [`extract_tax`], with both summary repairs applied.
+pub fn extract_summary_reconciled(lines: &[String], total: i64) -> SummaryReading {
+    let printed_subtotal_cents = extract_subtotal(lines);
+    let printed_tax_cents = extract_tax(lines);
+    let tax_cents = reconcile_tax(printed_tax_cents, printed_subtotal_cents, total);
+
+    match reconcile_summary_shift(lines, printed_subtotal_cents, tax_cents, total) {
+        Some((subtotal, tax)) => SummaryReading {
+            subtotal_cents: Some(subtotal),
+            tax: TaxReading {
+                cents: Some(tax),
+                printed_cents: printed_tax_cents,
+            },
+            printed_subtotal_cents,
+        },
+        None => SummaryReading {
+            subtotal_cents: printed_subtotal_cents,
+            tax: TaxReading {
+                cents: tax_cents,
+                printed_cents: printed_tax_cents,
+            },
+            printed_subtotal_cents,
+        },
     }
 }
 
@@ -1210,7 +1399,7 @@ pub fn extract_date(lines: &[String], full_text: &str, current_year: i32) -> Opt
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_change, extract_date, extract_subtotal, extract_tax, extract_tax_reconciled,
+        extract_change, extract_date, extract_subtotal, extract_summary_reconciled, extract_tax,
         extract_tenders, extract_total, normalize_decimal_spacing, reconcile_tax,
         tendered_net_cents, tenders_reconcile,
     };
@@ -1264,7 +1453,7 @@ mod tests {
             "hst5% 0.00".to_string(),
             "Total after Tax 119.38".to_string(),
         ];
-        let reading = extract_tax_reconciled(&lines, 11938);
+        let reading = extract_summary_reconciled(&lines, 11938).tax;
         assert_eq!(reading.printed_cents, Some(0));
         assert_eq!(reading.cents, Some(182));
         assert!(reading.was_repaired());
@@ -1278,9 +1467,125 @@ mod tests {
             "hst5% 0.09".to_string(),
             "Total after Tax 183.77".to_string(),
         ];
-        let reading = extract_tax_reconciled(&lines, 18377);
+        let reading = extract_summary_reconciled(&lines, 18377).tax;
         assert_eq!(reading.cents, Some(245));
         assert!(!reading.was_repaired());
+    }
+
+    #[test]
+    fn summary_block_off_by_a_row_is_re_read_from_the_trailer_echo() {
+        // costco/2026-08-26_costco_737_56. SUBTOTAL merged onto the DEPOSIT VL
+        // row and took its 4.00, so TAX took the subtotal's 707.54 and TOTAL the
+        // tax's 30.02. `reconcile_tax` alone cannot save this: it derives
+        // 737.56 - 4.00 = 733.56, which is not a plausible tax either, because
+        // the subtotal it derives from is wrong too.
+        let lines = vec![
+            "SUBTOTAL DEPOSIT VL 4.00".to_string(),
+            "TAX 707.54".to_string(),
+            "***TOTAL 30.02".to_string(),
+            "737.56".to_string(),
+            "MasterCard 737.56".to_string(),
+            "P (H)HST 13% 30.02".to_string(),
+            "TOTAL TAX 30.02".to_string(),
+        ];
+        let reading = extract_summary_reconciled(&lines, 73756);
+        assert_eq!(reading.subtotal_cents, Some(70754));
+        assert_eq!(reading.tax.cents, Some(3002));
+        assert!(reading.shift_repaired());
+    }
+
+    #[test]
+    fn summary_block_off_by_a_row_is_re_read_from_the_identity() {
+        // costco/2026-04-26_costco_173_15: the SUBTCTAL row absorbed two
+        // amounts and the parser took the second. Its trailer echo is mangled
+        // ("(HOHST 13% 12" carries no readable amount), so only the identity
+        // search can place these — and exactly one pair of the printed amounts
+        // satisfies it.
+        let lines = vec![
+            "SUBTCTAL 159.08 14.07".to_string(),
+            "TAX 173.15".to_string(),
+            "**** TOTAL".to_string(),
+            "AMOUNT: 173.15".to_string(),
+            "(HOHST 13% 12".to_string(),
+        ];
+        let reading = extract_summary_reconciled(&lines, 17315);
+        assert_eq!(reading.subtotal_cents, Some(15908));
+        assert_eq!(reading.tax.cents, Some(1407));
+    }
+
+    #[test]
+    fn a_split_tender_summing_to_the_total_does_not_pass_for_a_summary_block() {
+        // costco/2026-07-08_costco_112_95 pays with a $100.00 gift card and
+        // $12.95 on a card, and those sum to the total exactly as subtotal plus
+        // tax does. Arithmetic alone cannot separate the two readings, so the
+        // identity search must decline — the echo is what settles this receipt.
+        let lines = vec![
+            "TOTAL NUMBER OF ITEMS SOLD = 9 104.77".to_string(),
+            "SUBTOTAL 8.18".to_string(),
+            "TAX 112.95".to_string(),
+            "**** TOTAL".to_string(),
+            "Shop Card AMOUNT: $100.00 Resp: Approved".to_string(),
+            "Shop Card 100.00".to_string(),
+            "AMOUNT: 12.95".to_string(),
+        ];
+        let ambiguous = extract_summary_reconciled(&lines, 11295);
+        assert_eq!(ambiguous.subtotal_cents, Some(818));
+        assert!(!ambiguous.shift_repaired());
+
+        let mut with_echo = lines.clone();
+        with_echo.push("P (H)HST 13% 8.18".to_string());
+        let reading = extract_summary_reconciled(&with_echo, 11295);
+        assert_eq!(reading.subtotal_cents, Some(10477));
+        assert_eq!(reading.tax.cents, Some(818));
+    }
+
+    #[test]
+    fn a_consistent_summary_block_is_never_reshuffled() {
+        // The identity holds, so nothing here is impossible and no repair may
+        // fire — even though 70.32 + 3.90 is not the only pair on the receipt.
+        let lines = vec![
+            "SUBTOTAL 70.32".to_string(),
+            "TAX 3.90".to_string(),
+            "**** TOTAL 74.22".to_string(),
+            "P (H)HST 13% 3.90".to_string(),
+        ];
+        let reading = extract_summary_reconciled(&lines, 7422);
+        assert_eq!(reading.subtotal_cents, Some(7032));
+        assert_eq!(reading.tax.cents, Some(390));
+        assert!(!reading.shift_repaired());
+    }
+
+    #[test]
+    fn a_deposit_breaking_the_identity_is_not_a_shift() {
+        // subtotal + tax falls short of the total by a bottle deposit charged
+        // after the subtotal. The tax is plausible, so this is a receipt doing
+        // something legitimate, not a block that slipped.
+        let lines = vec![
+            "SUBTOTAL 10.00".to_string(),
+            "TAX 1.30".to_string(),
+            "DEPOSIT 0.20".to_string(),
+            "**** TOTAL 11.50".to_string(),
+        ];
+        let reading = extract_summary_reconciled(&lines, 1150);
+        assert_eq!(reading.subtotal_cents, Some(1000));
+        assert_eq!(reading.tax.cents, Some(130));
+        assert!(!reading.shift_repaired());
+    }
+
+    #[test]
+    fn a_derived_subtotal_the_receipt_never_printed_is_refused() {
+        // The echo says 30.02, which would imply a 707.54 subtotal — but no such
+        // amount is printed here. The repair re-assigns figures the receipt
+        // carries; it never invents one.
+        let lines = vec![
+            "SUBTOTAL 4.00".to_string(),
+            "TAX 900.00".to_string(),
+            "**** TOTAL".to_string(),
+            "P (H)HST 13% 30.02".to_string(),
+        ];
+        let reading = extract_summary_reconciled(&lines, 73756);
+        assert_eq!(reading.subtotal_cents, Some(400));
+        assert!(!reading.shift_repaired());
     }
 
     #[test]

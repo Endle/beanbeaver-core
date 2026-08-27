@@ -920,3 +920,34 @@ keywords = ["PANDA COOKIE"]
 tags = ["grocery/snacks"]
 priority = 20
 exact_only = false
+
+# Skin care sold beside the groceries. "CREAM" is a dairy keyword
+# (`legacy_0000`), so every cream that is not dairy lands in the fridge:
+# costco/2026-08-26 books a $44.99 `WRINKL CREAM` to
+# `Expenses:Food:Grocery:Dairy`. Naming the products fixes it without touching
+# the dairy rule, because `compare_match_rank` breaks an equal-priority tie on
+# **keyword length** and every keyword here is longer than "CREAM".
+#
+# Priority is deliberately left at 0. Raising it would also outrank the rules
+# that legitimately beat "CREAM" on length today — "SHAVING" (`legacy_0030`)
+# already wins "SHAVING CREAM" that way — and the tie-break is enough on its
+# own. If a future skin-care item is ever *shorter* than the generic word it
+# collides with, that is the case that needs a priority, not this one.
+[[rules]]
+id = "semantic_tag_0107"
+keywords = [
+  "WRINKL CREAM",
+  "WRINKLE CREAM",
+  "ANTI-AGING",
+  "ANTI AGING",
+  "FACE CREAM",
+  "EYE CREAM",
+  "HAND CREAM",
+  "SKIN CREAM",
+  "NIGHT CREAM",
+  "DAY CREAM",
+  "RETINOL",
+]
+tags = ["personal_care"]
+priority = 0
+exact_only = false

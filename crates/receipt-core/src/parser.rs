@@ -263,9 +263,10 @@ pub fn parse_receipt(
     // `fields` still returns raw i64 cents; convert once, here, so
     // nothing below this line carries an untyped amount.
     let total_cents = Money::from_cents(fields::extract_total(&lines));
-    let tax_reading = fields::extract_tax_reconciled(&lines, total_cents.cents());
+    let summary_reading = fields::extract_summary_reconciled(&lines, total_cents.cents());
+    let tax_reading = &summary_reading.tax;
     let tax_cents = tax_reading.cents.map(Money::from_cents);
-    let subtotal_cents = fields::extract_subtotal(&lines).map(Money::from_cents);
+    let subtotal_cents = summary_reading.subtotal_cents.map(Money::from_cents);
 
     let mut summary_amounts = HashSet::new();
     if total_cents != Money::ZERO {
@@ -382,7 +383,30 @@ pub fn parse_receipt(
     // this parser chose rather than read, and a silent rewrite of a money field
     // is exactly the kind of thing a reader should be able to check against the
     // photo.
-    if tax_reading.was_repaired() {
+    //
+    // The whole-block repair gets its own wording rather than reusing the line
+    // below. It rewrites the subtotal *and* the tax, and it does so because the
+    // block's labels and amounts came apart — not because the identity implied a
+    // better figure — so describing it as "the receipt's own subtotal implies"
+    // would name as evidence the very field it just replaced.
+    if summary_reading.shift_repaired() {
+        if let (Some(printed), Some(subtotal), Some(tax)) = (
+            summary_reading.printed_subtotal_cents,
+            summary_reading.subtotal_cents,
+            tax_reading.cents,
+        ) {
+            warnings.push(ParsedReceiptWarning {
+                kind: ReceiptWarningKind::PriceAutoCorrected,
+                message: format!(
+                    "the summary block's labels and amounts are off by a row (subtotal read as {}) — re-read as subtotal {} and tax {}",
+                    Money::from_cents(printed),
+                    Money::from_cents(subtotal),
+                    Money::from_cents(tax),
+                ),
+                after_item_index: None,
+            });
+        }
+    } else if tax_reading.was_repaired() {
         if let (Some(printed), Some(cents)) = (tax_reading.printed_cents, tax_reading.cents) {
             warnings.push(ParsedReceiptWarning {
                 kind: ReceiptWarningKind::PriceAutoCorrected,
