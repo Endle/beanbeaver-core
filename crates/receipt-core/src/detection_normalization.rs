@@ -220,11 +220,75 @@ pub fn filter_low_quality(detections: &[Detection]) -> Vec<usize> {
     detections
         .iter()
         .enumerate()
-        .filter(|(_, det)| {
-            det.confidence >= MIN_CONFIDENCE && det.text.trim().chars().count() >= MIN_TEXT_LENGTH
+        .filter(|(index, det)| {
+            det.text.trim().chars().count() >= MIN_TEXT_LENGTH
+                && (det.confidence >= MIN_CONFIDENCE
+                    || is_only_description_of_a_priced_row(detections, *index))
         })
         .map(|(index, _)| index)
         .collect()
+}
+
+/// The one shape where dropping a sub-floor detection costs an entire item: it
+/// is the **description** of a row that also carries an item code and a price.
+///
+/// [`MIN_CONFIDENCE`] is at its optimum and must not move — swept live over the
+/// 130-receipt corpus it gives 933 critical items at 0.70 against 932 at 0.65,
+/// 930 at 0.60 and 924 at 0.50, and the 0.65 step is not even a real gain but a
+/// churn of three receipts down and two up. So the floor stays, and this carves
+/// out the single case it gets wrong.
+///
+/// What makes that case different is that the *rest of the row survives*. On
+/// costco/2026-08-26 a pen stroke crosses the receipt beside `1789729 ZIPLOC M
+/// 18.99` and pushes the description to 0.66; the code and the price are read
+/// perfectly at 1.00. Losing the description leaves a row of digits, whose alpha
+/// ratio is 0, so nothing downstream will accept it as an item — the row is
+/// dropped, its $18.99 is stranded as a `PossibleMissedItem`, and the receipt
+/// silently comes up one item short. Keeping a slightly-doubted description is a
+/// far smaller risk than that: it is at worst a misspelling in a line comment,
+/// and the price it lets through is exact.
+///
+/// Every clause is there to keep this from becoming a general loosening, and the
+/// measurement says they work: replayed over all 131 corpus receipts, this
+/// rescues **exactly one** detection — the ZIPLOC description it was built for.
+/// The nearest miss is a `TP` fragment on costco/2026-03-05, which a description
+/// of two letters cannot pass.
+fn is_only_description_of_a_priced_row(detections: &[Detection], index: usize) -> bool {
+    let candidate = &detections[index];
+    // A description, not a smudge: mostly letters, and the engine's own floor
+    // still applies underneath (it emits nothing below 0.5).
+    if !text_is_wordlike(&candidate.text) {
+        return false;
+    }
+    let row = detections
+        .iter()
+        .enumerate()
+        .filter(|(other, det)| *other != index && boxes_overlap_y(candidate, det, 0.3));
+    let (mut has_code, mut has_price, mut has_other_description) = (false, false, false);
+    for (_, det) in row {
+        let text = det.text.trim();
+        // Only confident row-mates count as evidence. Two sub-floor detections
+        // vouching for each other is not corroboration.
+        if det.confidence < MIN_CONFIDENCE {
+            continue;
+        }
+        if price_text_re().is_match(text) {
+            has_price = true;
+        } else if text.len() >= 3 && text.chars().all(|c| c.is_ascii_digit()) {
+            has_code = true;
+        } else if text_is_wordlike(text) {
+            has_other_description = true;
+        }
+    }
+    has_code && has_price && !has_other_description
+}
+
+/// Mostly letters — the shape of a product name rather than a code, a price, or
+/// detector noise.
+fn text_is_wordlike(text: &str) -> bool {
+    let trimmed = text.trim();
+    let letters = trimmed.chars().filter(|c| c.is_alphabetic()).count();
+    letters >= 3 && letters * 2 >= trimmed.chars().count()
 }
 
 /// Drop Costco BOB markers that overlap real item rows. Returns kept indices.
@@ -900,6 +964,57 @@ mod tests {
         dets.push(det("x", 200.0, 9500.0, 200.0)); // single char -> dropped
         let kept = filter_low_quality(&dets);
         assert_eq!(kept, vec![0, 1]);
+    }
+
+    #[test]
+    fn a_doubted_description_survives_when_its_row_has_a_code_and_a_price() {
+        // costco/2026-08-26: a pen stroke pushes `ZIploc m` to 0.66 while the
+        // code and price beside it read at 1.00. Dropping it leaves a row of
+        // digits and strands the 18.99.
+        let mut dets = vec![
+            det("1789729", 250.0, 1270.0, 130.0),
+            det("ZIploc m", 380.0, 1274.0, 170.0),
+            det("18.99", 660.0, 1278.0, 90.0),
+        ];
+        dets[1].confidence = 0.66;
+        assert_eq!(filter_low_quality(&dets), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn a_doubted_description_is_still_dropped_when_the_row_already_has_one() {
+        // The rescue exists to stop a price being stranded. A row that can name
+        // itself without this detection is not at risk, so the floor applies.
+        let mut dets = vec![
+            det("1789729", 250.0, 1270.0, 130.0),
+            det("ZIPLOC BAGS", 380.0, 1272.0, 170.0),
+            det("smudge", 520.0, 1274.0, 90.0),
+            det("18.99", 660.0, 1278.0, 90.0),
+        ];
+        dets[2].confidence = 0.66;
+        assert_eq!(filter_low_quality(&dets), vec![0, 1, 3]);
+    }
+
+    #[test]
+    fn a_doubted_description_is_still_dropped_without_a_price_to_strand() {
+        let mut dets = vec![
+            det("1789729", 250.0, 1270.0, 130.0),
+            det("ZIploc m", 380.0, 1274.0, 170.0),
+        ];
+        dets[1].confidence = 0.66;
+        assert_eq!(filter_low_quality(&dets), vec![0]);
+    }
+
+    #[test]
+    fn a_doubted_row_mate_cannot_vouch_for_a_doubted_description() {
+        // Two sub-floor detections corroborating each other is not evidence.
+        let mut dets = vec![
+            det("1789729", 250.0, 1270.0, 130.0),
+            det("ZIploc m", 380.0, 1274.0, 170.0),
+            det("18.99", 660.0, 1278.0, 90.0),
+        ];
+        dets[1].confidence = 0.66;
+        dets[2].confidence = 0.60;
+        assert_eq!(filter_low_quality(&dets), vec![0]);
     }
 
     #[test]
