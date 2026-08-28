@@ -12,7 +12,11 @@
 #           damage at all — the receipt is printed and read correctly, and
 #           GINGER/FINGER are simply one letter apart in English, which is a
 #           neighbor the fuzzy stage should never have entertained.
-exact_only_keywords = ["DANDAN", "GINGER"]
+#   PRESERVED VEG
+#           (seasoning, legacy_0019) fuzzy-matched "Preserved duck $" at a T&T
+#           deli counter and filed the duck as a seasoning. 榨菜 is always
+#           printed in full, so requiring a literal match costs nothing.
+exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG"]
 
 # RULE IDS ARE A COMPATIBILITY SURFACE — FROZEN AND ADDITIVE.
 #
@@ -234,6 +238,20 @@ priority = 0
 exact_only = false
 
 [[rules]]
+# "ROCK SUGAR" is here for the same reason "SALT" is: it is bought to season
+# with, not as a pantry bulk food. It beats legacy_0017's "SUGAR" (staple) on
+# `keyword_length` at equal priority — the same tiebreak "SUGAR BABY" relies on
+# two rules up — so plain "SUGAR" lines are untouched and only the rock variety
+# moves. Corpus: FOODY MART "Merilin - Rock Sugar" and T&T "CRYSTAL ROCK SUGAR".
+#
+# "PRESERVED VEG" (榨菜, pickled mustard stem) joins "YUQUAN FRESH PRESERVED",
+# which is the same product under a brand name. It has to be a keyword rather
+# than a brand exclusion because the line that needs it is FOODY MART's
+# "Fish Well - Preserved Veg": "FISH" (legacy_0002) matches inside the BRAND and
+# books pickles as seafood. At 13 characters this beats it on `keyword_length`
+# at equal priority. Suppressing the brand alone would only turn a wrong
+# category into no category — nothing else in the line matches anything.
+#
 # "SALT" is here, not with the staples: table salt is a seasoning, not a
 # pantry bulk food. It moved out of legacy_0017 after a FOODY MART scan filed
 # "Windsor - Table Salt" under Staple. Substring matching means it also claims
@@ -241,7 +259,7 @@ exact_only = false
 # were equally wrong as Staple before — neither list is right for those, and
 # no fixture asserts them.
 id = "legacy_0019"
-keywords = ["VEGETABLE OIL", "CORN OIL", "SESAME OIL", "SESAMEOIL", "GARLIC", "GINGER", "GREEN ONION", "GREEN ONIONS", "CHILI PEPPER", "RED CHILI PEPPER", "CHILLI", "DRIED CHILLI", "CRUSHED CHILLI", "SPICE", "SEASONING", "SALT", "PAPRIKA", "CUMIN", "CORIANDER", "TURMERIC", "CINNAMON", "NUTMEG", "OREGANO", "THYME", "ROSEMARY", "BAY LEAF", "CURRY", "CHILI POWDER", "CAYENNE", "SOY SAUCE", "BEAN SAUCE", "FISH SAUCE", "OYSTER SAUCE", "HOISIN", "WASABI", "SRIRACHA", "HOT SAUCE", "KETCHUP", "MUSTARD", "MAYONNAISE", "MAYO", "RELISH", "BBQ SAUCE", "TERIYAKI", "WORCESTERSHIRE", "PERICARPIUM ZANTHOXYLI", "PERICARPIURN ZANTHOXYLI", "SALSA", "HUMMUS", "GUACAMOLE", "PESTO", "CHINA TIME HONORED BRAND", "YUQUAN FRESH PRESERVED", "SOYBEAN PASTE", "MONOSODIUM", "MSG", "VEGOIL"]
+keywords = ["VEGETABLE OIL", "CORN OIL", "SESAME OIL", "SESAMEOIL", "GARLIC", "GINGER", "GREEN ONION", "GREEN ONIONS", "CHILI PEPPER", "RED CHILI PEPPER", "CHILLI", "DRIED CHILLI", "CRUSHED CHILLI", "SPICE", "SEASONING", "SALT", "ROCK SUGAR", "PAPRIKA", "CUMIN", "CORIANDER", "TURMERIC", "CINNAMON", "NUTMEG", "OREGANO", "THYME", "ROSEMARY", "BAY LEAF", "CURRY", "CHILI POWDER", "CAYENNE", "SOY SAUCE", "BEAN SAUCE", "FISH SAUCE", "OYSTER SAUCE", "HOISIN", "WASABI", "SRIRACHA", "HOT SAUCE", "KETCHUP", "MUSTARD", "MAYONNAISE", "MAYO", "RELISH", "BBQ SAUCE", "TERIYAKI", "WORCESTERSHIRE", "PERICARPIUM ZANTHOXYLI", "PERICARPIURN ZANTHOXYLI", "SALSA", "HUMMUS", "GUACAMOLE", "PESTO", "CHINA TIME HONORED BRAND", "YUQUAN FRESH PRESERVED", "SOYBEAN PASTE", "MONOSODIUM", "MSG", "VEGOIL", "PRESERVED VEG"]
 tags = ["grocery/seasoning"]
 priority = 0
 exact_only = false
