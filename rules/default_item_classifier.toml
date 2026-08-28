@@ -18,6 +18,35 @@
 #           printed in full, so requiring a literal match costs nothing.
 exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG"]
 
+# BRANDS — text that names the maker, blanked out before any keyword is matched.
+#
+# A brand is not a product word, so letting the keyword lists read it is a pure
+# false-positive source. Both entries below were real corpus defects:
+#
+#   Fish Well    "Fish Well - Preserved Veg" matched FISH (legacy_0002) inside
+#                the BRAND and filed 榨菜 pickles under Seafood:Fish.
+#   Meat Corner  "Meat Corner - AA Beef Pla" matched CORN inside "Meat CORNer"
+#                and filed AA beef under Vegetable — 4 corpus lines.
+#
+# The span is matched wherever it occurs, case- and whitespace-insensitively,
+# and never by splitting on " - ": only 19% of corpus item lines have that
+# separator (Costco and Walmart never do) and it is not reliably a brand
+# boundary — "GROUND PORK - REGULAR" is a product on the left.
+#
+# Exact matches only, no fuzzy stage: brand names are short and brand-ish, the
+# same neighbourhood `exact_only_keywords` exists to keep out of it.
+#
+# NOT every brand belongs here yet. Several bundled keywords are brands that
+# *carry* a category and are the only signal on a truncated line — NATREL (6
+# corpus lines of "Natrel - 2% Partly Skimme", where nothing else matches),
+# SHODOSHIMA, HEYTEA, TROPICANA, NISSIN, NONGFU. Moving those here would book
+# them to FIXME. They can migrate once a brand entry can declare its own tags.
+[[brands]]
+name = "Fish Well"
+
+[[brands]]
+name = "Meat Corner"
+
 # RULE IDS ARE A COMPATIBILITY SURFACE — FROZEN AND ADDITIVE.
 #
 # An override document may write `disables = ["legacy_0000"]` to void a bundled
