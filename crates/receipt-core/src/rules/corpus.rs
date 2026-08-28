@@ -45,8 +45,21 @@ struct DocumentToml {
     accounts: HashMap<String, String>,
     #[serde(default)]
     exact_only_keywords: StringOrList,
+    /// Brand names blanked out of an item description before its keywords are
+    /// matched. See [`crate::categories::mask_brands`].
+    #[serde(default)]
+    brands: Vec<BrandToml>,
     #[serde(default)]
     rules: Vec<RuleToml>,
+}
+
+/// One brand entry. A bare `name` today; the field exists as a table rather
+/// than a bare string so a brand can later declare its own tags — several
+/// bundled keywords (`NATREL`, `SHODOSHIMA`) are brands that *carry* a
+/// category, and they cannot move here until it can be expressed.
+#[derive(Debug, Deserialize)]
+struct BrandToml {
+    name: String,
 }
 
 /// The bundled tag vocabulary plus its default tag-path -> account mapping.
@@ -205,6 +218,12 @@ struct RuleToml {
 fn to_build_config(parsed: &DocumentToml) -> BuildClassifierConfig {
     BuildClassifierConfig {
         exact_only_keywords: parsed.exact_only_keywords.clone().into_trimmed(),
+        brands: parsed
+            .brands
+            .iter()
+            .map(|brand| brand.name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect(),
         rules: parsed
             .rules
             .iter()

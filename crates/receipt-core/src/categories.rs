@@ -84,6 +84,9 @@ pub struct CategoryRule {
 pub struct CategoryRuleLayers {
     pub rules: Vec<CategoryRule>,
     pub exact_only_keywords: HashSet<String>,
+    /// Brand names whose matched span is blanked out before any keyword is
+    /// matched. See [`mask_brands`].
+    pub brands: Vec<String>,
     /// Tag path -> beancount account. Ledger policy, overridable.
     pub account_mapping: HashMap<String, String>,
     /// The declared tag vocabulary these rules are validated against.
@@ -111,6 +114,8 @@ pub struct BuildRuleEntry {
 #[derive(Clone, Debug)]
 pub struct BuildClassifierConfig {
     pub exact_only_keywords: Vec<String>,
+    /// Brand names to blank out before matching. See [`mask_brands`].
+    pub brands: Vec<String>,
     pub rules: Vec<BuildRuleEntry>,
 }
 
@@ -359,7 +364,92 @@ fn fuzzy_contains(keyword: &str, description: &str, threshold: Option<f64>) -> (
     }
 }
 
+/// Locate `brand` in `description`, ignoring ASCII case and any whitespace on
+/// either side of the comparison, and return the matched span as char indices.
+///
+/// Whitespace-insensitive because OCR splits and joins words freely
+/// ("WHOLESALE" -> "WHOL ESALE" is a corpus regular), and anchored on word
+/// boundaries because the short entries are the dangerous ones: an unanchored
+/// two-letter brand would eat the middle of an unrelated product word.
+fn brand_span(description: &[char], brand: &[char]) -> Option<(usize, usize)> {
+    if brand.is_empty() {
+        return None;
+    }
+    let alnum_at = |index: usize| description.get(index).is_some_and(|c| c.is_alphanumeric());
+    for start in 0..description.len() {
+        if description[start].is_whitespace() {
+            continue;
+        }
+        if start > 0 && alnum_at(start - 1) && description[start].is_alphanumeric() {
+            continue;
+        }
+        let mut cursor = start;
+        let mut matched = 0;
+        while matched < brand.len() && cursor < description.len() {
+            let ch = description[cursor];
+            if ch.is_whitespace() {
+                cursor += 1;
+                continue;
+            }
+            if ch.to_ascii_uppercase() != brand[matched] {
+                break;
+            }
+            cursor += 1;
+            matched += 1;
+        }
+        if matched == brand.len() && !alnum_at(cursor) {
+            return Some((start, cursor));
+        }
+    }
+    None
+}
+
+/// Blank out every declared brand name in `description` before the item
+/// keywords are matched against it.
+///
+/// A brand is text that names the *maker*, not the product, so letting keywords
+/// read it is a pure false-positive source. Two corpus lines paid for this:
+/// FOODY MART's "Fish Well - Preserved Veg" matched `FISH` inside the brand and
+/// filed pickles under Seafood:Fish, and "Meat Corner - AA Beef Pla" matched
+/// `CORN` inside "Meat **Corn**er" and filed beef under Vegetable.
+///
+/// Deliberately NOT a split on " - ". Only 19% of corpus item lines carry that
+/// separator at all — Costco and Walmart never do — and where it appears it is
+/// not reliably a brand/product boundary ("GROUND PORK - REGULAR" is a product
+/// on the left). Matching the brand wherever it occurs and removing exactly
+/// that span is the only form that works on every merchant.
+///
+/// The span becomes spaces rather than being deleted so word boundaries survive:
+/// deleting would fuse the two sides into a new token that matches nothing real.
+///
+/// Matching is exact (case- and whitespace-insensitive), never fuzzy. Brand
+/// names are short and brand-ish, which is the same neighbourhood
+/// `exact_only_keywords` exists to keep out of the fuzzy stage.
+pub fn mask_brands(description: &str, brands: &[String]) -> String {
+    if brands.is_empty() {
+        return description.to_string();
+    }
+    let mut chars: Vec<char> = description.chars().collect();
+    for brand in brands {
+        let needle: Vec<char> = brand
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .map(|ch| ch.to_ascii_uppercase())
+            .collect();
+        // A brand can legitimately appear more than once on one line; each pass
+        // blanks the first remaining occurrence, so this terminates.
+        while let Some((start, end)) = brand_span(&chars, &needle) {
+            for slot in &mut chars[start..end] {
+                *slot = ' ';
+            }
+        }
+    }
+    chars.into_iter().collect()
+}
+
 pub fn find_all_matches(description: &str, rule_layers: &CategoryRuleLayers) -> Vec<RuleMatch> {
+    let masked = mask_brands(description, &rule_layers.brands);
+    let description = masked.as_str();
     let mut matches = Vec::new();
 
     for (rule_index, rule) in rule_layers.rules.iter().enumerate() {
@@ -473,10 +563,17 @@ pub fn build_rule_layers(
     }
 
     let mut exact_only_keywords = HashSet::new();
+    let mut brands: Vec<String> = Vec::new();
     let mut rules = Vec::new();
 
     for (idx, config) in classifier_configs.into_iter().enumerate() {
         let layer_priority = ((idx + 1) as i32) * 100;
+        for brand in config.brands {
+            let cleaned = brand.trim().to_ascii_uppercase();
+            if !cleaned.is_empty() && !brands.contains(&cleaned) {
+                brands.push(cleaned);
+            }
+        }
         for keyword in config.exact_only_keywords {
             let cleaned = keyword.trim();
             if !cleaned.is_empty() {
@@ -520,6 +617,7 @@ pub fn build_rule_layers(
     CategoryRuleLayers {
         rules,
         exact_only_keywords,
+        brands,
         account_mapping,
         tag_vocabulary,
     }
@@ -705,7 +803,7 @@ pub fn sorted_matches_for_debug(
 mod tests {
     use super::{
         build_rule_layers, classify_item_key, classify_item_tags, list_item_categories,
-        resolve_account_target, BuildClassifierConfig, BuildRuleEntry, TagNode,
+        mask_brands, resolve_account_target, BuildClassifierConfig, BuildRuleEntry, TagNode,
     };
     use crate::rules::{default_category_accounts, default_parser_rule_layers};
     use std::collections::HashMap;
@@ -1061,12 +1159,61 @@ mod tests {
         );
     }
 
+    /// The mask removes exactly the brand's own span, leaving the product text
+    /// — and its word boundaries — intact for the keyword stage.
+    #[test]
+    fn mask_brands_blanks_the_brand_span_only() {
+        let brands = vec!["FISH WELL".to_string()];
+        assert_eq!(
+            mask_brands("Fish Well - Preserved Veg", &brands),
+            "          - Preserved Veg"
+        );
+        // Whitespace on either side is ignored, because OCR splits and joins
+        // words freely.
+        assert_eq!(mask_brands("FishWell Sauce", &brands), "         Sauce");
+        assert_eq!(mask_brands("Fish  Well Sauce", &brands), "           Sauce");
+        // Every occurrence goes, not just the first.
+        assert_eq!(
+            mask_brands("Fish Well Fish Well", &brands),
+            "                   "
+        );
+    }
+
+    /// Short brands are the dangerous ones, so a brand only matches on word
+    /// boundaries — otherwise "LA" would eat the middle of "SALAD".
+    #[test]
+    fn mask_brands_requires_word_boundaries() {
+        let brands = vec!["LA".to_string()];
+        assert_eq!(mask_brands("Fresh Salad Mix", &brands), "Fresh Salad Mix");
+        assert_eq!(mask_brands("LA - Rice Stick", &brands), "   - Rice Stick");
+    }
+
+    /// The two defects the brand table was introduced for: a keyword matching
+    /// inside a brand name and claiming the whole line.
+    #[test]
+    fn brands_stop_keywords_matching_inside_the_maker_name() {
+        let layers = default_parser_rule_layers();
+        let key = |d: &str| classify_item_key(d, &layers.category_rules, None);
+
+        // FISH (legacy_0002) matches "Fish Well"; PRESERVED VEG must win the line.
+        assert_eq!(
+            key("Fish Well - Preserved Veg").as_deref(),
+            Some("grocery/seasoning")
+        );
+        // CORN matches inside "Meat Corner"; BEEF must win the line.
+        assert_eq!(
+            key("Meat Corner - AA Beef Pla").as_deref(),
+            Some("grocery/meat")
+        );
+    }
+
     /// `list_item_categories` returns path-sorted (path, account) pairs drawn
     /// from both the account map and the rules. Mirrors the desktop test.
     #[test]
     fn list_item_categories_returns_sorted_key_account_pairs() {
         let config = BuildClassifierConfig {
             exact_only_keywords: vec![],
+            brands: vec![],
             rules: vec![BuildRuleEntry {
                 id: None,
                 keywords: vec!["CUSTOM DIRECT ACCOUNT".to_string()],
@@ -1112,6 +1259,7 @@ mod tests {
     fn project_rule_key_maps_via_account_config() {
         let config = BuildClassifierConfig {
             exact_only_keywords: vec![],
+            brands: vec![],
             rules: vec![BuildRuleEntry {
                 id: None,
                 keywords: vec!["CUSTOM NOODLE BRAND".to_string()],
