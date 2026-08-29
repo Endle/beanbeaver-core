@@ -10,6 +10,7 @@
 use crate::date::Date;
 use crate::money::Money;
 use std::borrow::Cow;
+use std::collections::HashMap;
 
 use crate::common::ReceiptWarningKind;
 use crate::formatter::{
@@ -18,7 +19,10 @@ use crate::formatter::{
 };
 use crate::merchant_match::{MerchantFamily, MerchantMatch, MerchantMatchStatus};
 use crate::ocr_transform::{transform, RawDetection};
-use crate::parser::{parse_receipt, ParsedReceiptData, ParsedReceiptItem, ParserRuleLayers};
+use crate::parser::{
+    balance_warnings, classified_item, item_with_tag_path, parse_receipt, uncategorized_warnings,
+    ParsedReceiptData, ParsedReceiptItem, ParsedReceiptWarning, ParserRuleLayers,
+};
 use crate::rules::RuleBook;
 
 const DEFAULT_ITEM_ACCOUNT: &str = "Expenses:FIXME";
@@ -83,9 +87,41 @@ pub struct ReceiptCorrections {
     pub merchant: Option<String>,
     /// ISO `YYYY-MM-DD`. When set, clears the placeholder flag.
     pub date_iso: Option<String>,
-    /// Parallel to items: `Some(account)` overrides that item's posting account.
-    /// Length may be shorter than items (trailing items keep auto accounts).
-    pub item_accounts: Vec<Option<String>>,
+    /// When `Some`, the item block the user wants recorded — replacing the
+    /// parse's own. `None` leaves the items exactly as parsed.
+    ///
+    /// A whole-list replacement rather than positional patches, because the
+    /// edits that matter most change the list's *shape*: adding the line a
+    /// dropped price belongs to, deleting a banner row the parser mistook for
+    /// an item. Positional patches against a shifting list is index arithmetic
+    /// at the FFI boundary, and it is the kind of arithmetic that silently
+    /// applies an edit to the wrong row.
+    pub items: Option<Vec<ItemCorrection>>,
+    /// Summary amounts, as decimal strings. `None` keeps what was parsed.
+    ///
+    /// Editable because OCR misreads them like anything else, and because they
+    /// are the yardstick the item block is measured against: a receipt whose
+    /// printed total was misread can never be made to balance by fixing items.
+    pub total: Option<String>,
+    pub tax: Option<String>,
+    pub subtotal: Option<String>,
+}
+
+/// One line of the item block as the user wants it recorded.
+#[derive(Clone, Debug)]
+pub struct ItemCorrection {
+    pub description: String,
+    /// Decimal string, matching how prices cross the FFI.
+    pub price: String,
+    pub quantity: i32,
+    /// The tag path the user picked (`grocery/snacks`), or empty to classify
+    /// `description` with the rules in force.
+    ///
+    /// Empty is the common case and the right default: a renamed line should be
+    /// re-classified from its new text. A non-empty path is the user overruling
+    /// the classifier for this line, which is the only way a retag can show up
+    /// on the item's chips as well as in the ledger.
+    pub tag_path: String,
 }
 
 /// Round a decimal string to 2 places using banker's rounding (round-half-even),
@@ -251,14 +287,16 @@ fn format_from_parsed(
             (date_iso(parsed, today), parsed.date_is_placeholder)
         };
 
+    // Every item carries its own account by the time it reaches here — the
+    // classifier resolved it at parse time, and `reformat_parsed_receipt`
+    // re-resolves it for any line the user edited. This used to also consult a
+    // positional override list on `corrections`, which changed the beancount
+    // posting while leaving `item.category` and the item's tags saying something
+    // else; the two could not be told apart by any consumer.
     let item_accounts: Vec<String> = parsed
         .items
         .iter()
-        .enumerate()
-        .map(|(idx, item)| {
-            if let Some(Some(account)) = corrections.and_then(|c| c.item_accounts.get(idx)) {
-                return account.clone();
-            }
+        .map(|item| {
             item.account
                 .clone()
                 .unwrap_or_else(|| DEFAULT_ITEM_ACCOUNT.to_string())
@@ -424,6 +462,55 @@ pub fn process_receipt_with_options(
     })
 }
 
+/// The findings that survive an edit, plus the ones the edit changed.
+///
+/// A finding is a claim about a receipt, and an edit can falsify a claim. Left
+/// alone, a `TotalMismatch` outlives the mismatch it describes and the app
+/// badges a receipt that now balances — which is the difference between "this
+/// app tells me which line to check" and "this app is permanently unhappy".
+///
+/// Three groups:
+///
+/// - **Recomputed** from the corrected numbers: the arithmetic findings, and the
+///   per-item "no rule matched", which a retag is precisely the edit that clears.
+/// - **Dropped when the item block was replaced**: `PossibleMissedItem` and
+///   `DroppedImplausiblePrice` are statements about the *parser's* item list. Once
+///   the user has rewritten that list, they describe something that no longer
+///   exists — and a user who has just added the missing line should not still be
+///   told a line is missing.
+/// - **Kept**: everything else, including `PriceAutoCorrected` (an audit note
+///   about a repair that did happen) and `TenderMismatch`. The tender finding is
+///   the one loose end: it compares the payment block against the total, so
+///   editing the total can strand it, and recomputing it needs the OCR lines,
+///   which this path does not have.
+fn refreshed_warnings(
+    parsed: &ParsedReceiptData,
+    items_replaced: bool,
+) -> Vec<ParsedReceiptWarning> {
+    let mut warnings: Vec<ParsedReceiptWarning> = parsed
+        .warnings
+        .iter()
+        .filter(|warning| match warning.kind {
+            ReceiptWarningKind::TotalMismatch
+            | ReceiptWarningKind::SubtotalMismatch
+            | ReceiptWarningKind::ImplausibleSummary
+            | ReceiptWarningKind::UncategorizedItem => false,
+            ReceiptWarningKind::PossibleMissedItem
+            | ReceiptWarningKind::DroppedImplausiblePrice => !items_replaced,
+            _ => true,
+        })
+        .cloned()
+        .collect();
+    warnings.extend(balance_warnings(
+        &parsed.items,
+        parsed.total,
+        parsed.tax,
+        parsed.subtotal,
+    ));
+    warnings.extend(uncategorized_warnings(&parsed.items));
+    warnings
+}
+
 /// Re-render beancount from an existing parse with optional user corrections
 /// (no OCR). Uses the same default rule layers as a fresh process unless
 /// `options` supplies classifier overrides (for account resolution only).
@@ -461,9 +548,76 @@ pub fn reformat_parsed_receipt(
         parsed_out.date = Some(parse_iso_ymd(iso)?);
         parsed_out.date_is_placeholder = false;
     }
-    // Item account overrides are applied only when formatting beancount
-    // (`format_from_parsed` reads `corrections.item_accounts`). Keep
-    // `item.category` as the classifier key so UI mapping stays intact.
+    if let Some(items) = &corrections.items {
+        // **Only text the user actually changed is re-classified.** A line they
+        // left alone keeps the classification the parse gave it, because
+        // re-deriving it from the description we get back is not the same
+        // computation.
+        //
+        // `build_item` classifies the *printed* text and only falls back to the
+        // merchant-vocabulary expansion, and separately appends that expansion
+        // to the description for display. So "TIDE CQLDWTR" arrives back here as
+        // "TIDE CQLDWTR (Cold Water)" — and classifying that matches the `WATER`
+        // drink keyword and files laundry detergent as a beverage. The
+        // vocabulary marks `CQLDWTR` as `classify = false` for exactly this
+        // reason, and that marking is upstream of the string this path is
+        // handed. Editing one line's price would otherwise re-file another.
+        //
+        // Matched on description rather than by index, so it survives an insert
+        // or a delete anywhere in the list.
+        let previous: HashMap<&str, &ParsedReceiptItem> = parsed
+            .items
+            .iter()
+            .map(|item| (item.description.as_str(), item))
+            .collect();
+
+        let mut rebuilt = Vec::with_capacity(items.len());
+        for item in items {
+            let price = Money::from_decimal_str(&item.price);
+            // A line has to be worth at least one of something. Quantity is
+            // display-only here (prices on a receipt are already extended), so
+            // clamping cannot move an amount.
+            let quantity = item.quantity.max(1);
+            rebuilt.push(if !item.tag_path.is_empty() {
+                item_with_tag_path(
+                    item.description.clone(),
+                    price,
+                    quantity,
+                    &item.tag_path,
+                    rule_layers,
+                )?
+            } else if let Some(prior) = previous.get(item.description.as_str()) {
+                ParsedReceiptItem {
+                    description: item.description.clone(),
+                    price,
+                    quantity,
+                    category: prior.category.clone(),
+                    account: prior.account.clone(),
+                    tags: prior.tags.clone(),
+                }
+            } else {
+                classified_item(item.description.clone(), price, quantity, rule_layers)
+            });
+        }
+        parsed_out.items = rebuilt;
+    }
+    if let Some(total) = &corrections.total {
+        parsed_out.total = Money::from_decimal_str(total);
+    }
+    if let Some(tax) = &corrections.tax {
+        parsed_out.tax = Some(Money::from_decimal_str(tax));
+    }
+    if let Some(subtotal) = &corrections.subtotal {
+        parsed_out.subtotal = Some(Money::from_decimal_str(subtotal));
+    }
+
+    if corrections.items.is_some()
+        || corrections.total.is_some()
+        || corrections.tax.is_some()
+        || corrections.subtotal.is_some()
+    {
+        parsed_out.warnings = refreshed_warnings(&parsed_out, corrections.items.is_some());
+    }
 
     let confidence = field_confidence(&parsed_out);
     let (beancount, beanbeaver_id, document_relpath) = format_from_parsed(
@@ -486,17 +640,6 @@ pub fn reformat_parsed_receipt(
         confidence,
         detections: Vec::new(),
     })
-}
-
-/// Apply a single item-account override for callers that only tweak one line.
-///
-/// Note: this writes the beancount account into `category` for legacy callers.
-/// Prefer [`ReceiptCorrections::item_accounts`] + [`reformat_parsed_receipt`]
-/// which keep the classifier key separate from the posting account.
-pub fn override_item_account(items: &mut [ParsedReceiptItem], index: usize, account: String) {
-    if let Some(item) = items.get_mut(index) {
-        item.category = Some(account);
-    }
 }
 
 #[cfg(test)]
@@ -550,7 +693,10 @@ mod tests {
         let corrections = ReceiptCorrections {
             merchant: Some("Costco Wholesale".into()),
             date_iso: Some("2026-03-01".into()),
-            item_accounts: vec![Some("Expenses:Food:Grocery:Dairy".into())],
+            items: None,
+            total: None,
+            tax: None,
+            subtotal: None,
         };
         let out = reformat_parsed_receipt(
             &parsed,
@@ -568,8 +714,7 @@ mod tests {
         assert!(!out.parsed.date_is_placeholder);
         assert!(out.beancount.contains("Costco Wholesale"));
         assert!(out.beancount.contains("2026-03-01"));
-        assert!(out.beancount.contains("Expenses:Food:Grocery:Dairy"));
-        // Classifier key preserved; account override only affects beancount.
+        // Items untouched by a header-only correction.
         assert_eq!(
             out.parsed.items[0].category.as_deref(),
             Some("grocery/dairy")
@@ -582,13 +727,274 @@ mod tests {
         assert!(!out.confidence.needs_review);
     }
 
+    /// No corrections at all — the shape every new field has to leave alone.
+    fn no_corrections() -> ReceiptCorrections {
+        ReceiptCorrections {
+            merchant: None,
+            date_iso: None,
+            items: None,
+            total: None,
+            tax: None,
+            subtotal: None,
+        }
+    }
+
+    fn reformat(parsed: &ParsedReceiptData, corrections: &ReceiptCorrections) -> ProcessedReceipt {
+        reformat_parsed_receipt(
+            parsed,
+            Date::new(2026, 7, 1).unwrap(),
+            "Liabilities:CreditCard",
+            "CAD",
+            "Expenses:Tax:HST",
+            None,
+            corrections,
+            None,
+        )
+        .expect("reformat")
+    }
+
+    fn item(description: &str, price: &str, tag_path: &str) -> ItemCorrection {
+        ItemCorrection {
+            description: description.into(),
+            price: price.into(),
+            quantity: 1,
+            tag_path: tag_path.into(),
+        }
+    }
+
+    fn has(warnings: &[ParsedReceiptWarning], kind: ReceiptWarningKind) -> bool {
+        warnings.iter().any(|w| w.kind == kind)
+    }
+
+    #[test]
+    fn a_renamed_line_is_reclassified_from_its_new_text() {
+        let parsed = sample_parsed();
+        let corrections = ReceiptCorrections {
+            items: Some(vec![item("BONELESS CHICKEN THIGH", "10.00", "")]),
+            ..no_corrections()
+        };
+        let out = reformat(&parsed, &corrections);
+        // The fixture line was Milk/dairy. Keeping those tags after a rename is
+        // the exact failure this path exists to prevent.
+        assert!(
+            out.parsed.items[0].tags.iter().any(|t| t == "grocery/meat"),
+            "expected meat tags, got {:?}",
+            out.parsed.items[0].tags
+        );
+        assert!(!out.parsed.items[0]
+            .tags
+            .iter()
+            .any(|t| t == "grocery/dairy"));
+        assert!(out.beancount.contains("Expenses:Food:Grocery:Meat"));
+    }
+
+    /// The failure `build_item`'s own comment warns about, reached from the
+    /// other side: the expansion it deliberately keeps out of the classifier is
+    /// in the description it hands back.
+    #[test]
+    fn a_line_the_user_left_alone_keeps_the_classification_the_parse_gave_it() {
+        let mut parsed = sample_parsed();
+        parsed.items[0] = ParsedReceiptItem {
+            description: "TIDE CQLDWTR (Cold Water)".into(),
+            price: "10.00".into(),
+            quantity: 1,
+            category: Some("Expenses:Home:HouseholdSupply".into()),
+            account: Some("Expenses:Home:HouseholdSupply".into()),
+            tags: vec!["household".into(), "household/supply".into()],
+        };
+
+        // Same text, new price — the shape of "I edited a different line".
+        let corrections = ReceiptCorrections {
+            items: Some(vec![item("TIDE CQLDWTR (Cold Water)", "12.00", "")]),
+            ..no_corrections()
+        };
+        let out = reformat(&parsed, &corrections);
+
+        assert_eq!(out.parsed.items[0].price, "12.00".into());
+        assert_eq!(
+            out.parsed.items[0].tags,
+            vec!["household".to_string(), "household/supply".to_string()],
+            "re-classifying the round-tripped description would match WATER and \
+             file detergent as a beverage"
+        );
+        assert_eq!(
+            out.parsed.items[0].account.as_deref(),
+            Some("Expenses:Home:HouseholdSupply")
+        );
+
+        // And the hazard is real rather than hypothetical — this is what the
+        // guard is avoiding. If the rules ever stop matching here, this line
+        // fails and the guard's justification needs re-reading.
+        let book = resolve_rule_book(&ProcessOptions::default()).expect("bundled rules");
+        let naive = classified_item(
+            "TIDE CQLDWTR (Cold Water)".into(),
+            "12.00".into(),
+            1,
+            book.layers(),
+        );
+        assert!(
+            naive.tags.iter().any(|t| t.starts_with("grocery/drink")),
+            "expected the naive classification to reach a drink tag, got {:?}",
+            naive.tags
+        );
+    }
+
+    #[test]
+    fn a_chosen_tag_path_overrules_the_classifier_and_reaches_the_tags() {
+        let parsed = sample_parsed();
+        let corrections = ReceiptCorrections {
+            // Text the snacks rules do not match, filed by hand.
+            items: Some(vec![item("WHITE RABBIT", "10.00", "grocery/snacks")]),
+            ..no_corrections()
+        };
+        let out = reformat(&parsed, &corrections);
+        assert_eq!(
+            out.parsed.items[0].tags,
+            vec!["grocery".to_string(), "grocery/snacks".to_string()]
+        );
+        assert_eq!(
+            out.parsed.items[0].account.as_deref(),
+            Some("Expenses:Food:Grocery:Snacks")
+        );
+        assert!(out.beancount.contains("Expenses:Food:Grocery:Snacks"));
+    }
+
+    /// 11 of the 42 bundled tags carry no account of their own; a rule stack
+    /// covers that with a broader rule, and a hand-picked tag has nothing to
+    /// lean on. Without the ancestor walk this files to `Expenses:FIXME`.
+    #[test]
+    fn a_chosen_tag_with_no_account_takes_its_nearest_mapped_ancestor() {
+        let parsed = sample_parsed();
+        let corrections = ReceiptCorrections {
+            items: Some(vec![item("Whatever", "10.00", "grocery/meat/chicken")]),
+            ..no_corrections()
+        };
+        let out = reformat(&parsed, &corrections);
+        assert_eq!(
+            out.parsed.items[0].account.as_deref(),
+            Some("Expenses:Food:Grocery:Meat")
+        );
+        // The specific tag still shows — the walk buys an account, not a demotion.
+        assert!(out.parsed.items[0]
+            .tags
+            .iter()
+            .any(|t| t == "grocery/meat/chicken"));
+    }
+
+    #[test]
+    fn an_undeclared_tag_path_is_an_error() {
+        let parsed = sample_parsed();
+        let corrections = ReceiptCorrections {
+            items: Some(vec![item("Milk", "10.00", "grocery/nonsuch")]),
+            ..no_corrections()
+        };
+        let err = reformat_parsed_receipt(
+            &parsed,
+            Date::new(2026, 7, 1).unwrap(),
+            "Liabilities:CreditCard",
+            "CAD",
+            "Expenses:Tax:HST",
+            None,
+            &corrections,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.contains("grocery/nonsuch"), "{err}");
+    }
+
+    /// The whole point of the edit screen: fix the receipt and it stops warning.
+    #[test]
+    fn adding_the_missing_line_clears_the_arithmetic_finding() {
+        let mut parsed = sample_parsed();
+        // One 5.00 line against a printed subtotal and total of 10.00.
+        parsed.items[0].price = "5.00".into();
+
+        let short = ReceiptCorrections {
+            items: Some(vec![item("Milk", "5.00", "")]),
+            ..no_corrections()
+        };
+        let before = reformat(&parsed, &short);
+        assert!(
+            has(
+                &before.parsed.warnings,
+                ReceiptWarningKind::SubtotalMismatch
+            ),
+            "fixture should start out short: {:?}",
+            before.parsed.warnings
+        );
+
+        let fixed = ReceiptCorrections {
+            items: Some(vec![item("Milk", "5.00", ""), item("Bread", "5.00", "")]),
+            ..no_corrections()
+        };
+        let after = reformat(&parsed, &fixed);
+        assert!(
+            !has(&after.parsed.warnings, ReceiptWarningKind::SubtotalMismatch),
+            "a receipt the user made add up should stop saying it does not: {:?}",
+            after.parsed.warnings
+        );
+    }
+
+    #[test]
+    fn replacing_the_item_block_drops_findings_about_the_old_one() {
+        let mut parsed = sample_parsed();
+        parsed.warnings.push(ParsedReceiptWarning {
+            kind: ReceiptWarningKind::PossibleMissedItem,
+            message: "a price with no description".into(),
+            after_item_index: None,
+        });
+
+        let untouched = reformat(&parsed, &no_corrections());
+        assert!(
+            has(
+                &untouched.parsed.warnings,
+                ReceiptWarningKind::PossibleMissedItem
+            ),
+            "a header-only edit must not touch findings about the items"
+        );
+
+        let replaced = ReceiptCorrections {
+            items: Some(vec![item("Milk", "10.00", "")]),
+            ..no_corrections()
+        };
+        let out = reformat(&parsed, &replaced);
+        assert!(
+            !has(&out.parsed.warnings, ReceiptWarningKind::PossibleMissedItem),
+            "it describes a list the user has replaced: {:?}",
+            out.parsed.warnings
+        );
+    }
+
+    #[test]
+    fn correcting_a_misread_total_is_what_makes_the_receipt_balance() {
+        let mut parsed = sample_parsed();
+        parsed.total = "100.00".into();
+        parsed.subtotal = Some("100.00".into());
+
+        let corrections = ReceiptCorrections {
+            total: Some("10.00".into()),
+            subtotal: Some("10.00".into()),
+            ..no_corrections()
+        };
+        let out = reformat(&parsed, &corrections);
+        assert_eq!(out.parsed.total, "10.00".into());
+        assert!(out.beancount.contains("10.00"));
+        assert!(!has(
+            &out.parsed.warnings,
+            ReceiptWarningKind::SubtotalMismatch
+        ));
+    }
+
     #[test]
     fn reformat_rejects_invalid_date_iso() {
         let parsed = sample_parsed();
         let corrections = ReceiptCorrections {
             merchant: None,
             date_iso: Some("not-a-date".into()),
-            item_accounts: vec![],
+            items: None,
+            total: None,
+            tax: None,
+            subtotal: None,
         };
         let err = reformat_parsed_receipt(
             &parsed,
