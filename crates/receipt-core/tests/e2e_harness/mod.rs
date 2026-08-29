@@ -41,6 +41,37 @@ fn normalize_merchant(s: &str) -> String {
         .collect()
 }
 
+/// Merchant details come directly from OCR, so typography is not semantic:
+/// phone punctuation, postal-code spacing, address punctuation, and case may
+/// differ while the extracted value is the same. OCR character substitutions
+/// are deliberately *not* corrected here.
+fn detail_matches(key: &str, expected: &str, actual: &str) -> bool {
+    let normalized_expected = normalize_merchant(expected);
+    let normalized_actual = normalize_merchant(actual);
+    if normalized_expected == normalized_actual {
+        return true;
+    }
+    if key != "region" {
+        return false;
+    }
+    fn canonical_region(value: &str) -> &str {
+        match value {
+            "ALBERTA" => "AB",
+            "BRITISHCOLUMBIA" => "BC",
+            "MANITOBA" => "MB",
+            "NEWBRUNSWICK" => "NB",
+            "NEWFOUNDLAND" | "NEWFOUNDLANDANDLABRADOR" => "NL",
+            "NOVASCOTIA" => "NS",
+            "ONTARIO" => "ON",
+            "PRINCEEDWARDISLAND" => "PE",
+            "QUEBEC" => "QC",
+            "SASKATCHEWAN" => "SK",
+            other => other,
+        }
+    }
+    canonical_region(&normalized_expected) == canonical_region(&normalized_actual)
+}
+
 fn levenshtein(a: &[u8], b: &[u8]) -> usize {
     let mut prev: Vec<usize> = (0..=b.len()).collect();
     let mut cur = vec![0usize; b.len() + 1];
@@ -346,14 +377,21 @@ pub fn run_cached_corpus_in(
                 ("phone_number", &parsed.merchant_details.phone_number),
                 ("store_number", &parsed.merchant_details.store_number),
             ] {
-                let Some(want) = details.get(key).and_then(Value::as_str) else {
+                let Some(want) = details.get(key) else {
                     continue;
                 };
-                if actual.as_deref() != Some(want) {
+                let matches = match want {
+                    Value::Null => actual.is_none(),
+                    Value::String(want) => actual
+                        .as_deref()
+                        .is_some_and(|actual| detail_matches(key, want, actual)),
+                    _ => panic!("merchant_details.{key} must be a string or null"),
+                };
+                if !matches {
                     failed.insert("merchant_details");
                     if !known.contains("merchant_details") {
                         case_fail.push(format!(
-                            "merchant_details.{key} expected '{want}', got {actual:?}"
+                            "merchant_details.{key} expected {want}, got {actual:?}"
                         ));
                     }
                 }
