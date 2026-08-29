@@ -193,6 +193,34 @@ pub struct MerchantMatch {
     pub score: f64,
 }
 
+/// Contact and branch details exactly as inferred from the receipt OCR. This is
+/// not a verified geographic location and is intentionally not rendered into
+/// Beancount by core.
+#[derive(uniffi::Record)]
+pub struct MerchantDetails {
+    pub street_address: Option<String>,
+    pub city: Option<String>,
+    pub region: Option<String>,
+    pub postal_code: Option<String>,
+    pub phone_number: Option<String>,
+    pub store_number: Option<String>,
+    pub raw_lines: Vec<String>,
+}
+
+impl From<receipt_core::merchant_details::MerchantDetails> for MerchantDetails {
+    fn from(details: receipt_core::merchant_details::MerchantDetails) -> Self {
+        Self {
+            street_address: details.street_address,
+            city: details.city,
+            region: details.region,
+            postal_code: details.postal_code,
+            phone_number: details.phone_number,
+            store_number: details.store_number,
+            raw_lines: details.raw_lines,
+        }
+    }
+}
+
 impl From<CoreMerchantMatch> for MerchantMatch {
     fn from(m: CoreMerchantMatch) -> Self {
         let status = match m.status {
@@ -282,6 +310,7 @@ pub struct ReceiptResult {
     pub merchant: String,
     /// Full merchant resolution (raw OCR, canonical family, confidence).
     pub merchant_match: MerchantMatch,
+    pub merchant_details: MerchantDetails,
     /// ISO `YYYY-MM-DD`, or `None` if the parser found no date.
     pub date: Option<String>,
     pub date_is_placeholder: bool,
@@ -892,6 +921,7 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
     ReceiptResult {
         merchant: d.merchant,
         merchant_match: d.merchant_match.into(),
+        merchant_details: d.merchant_details.into(),
         date: d.date.map(|d| d.to_string()),
         date_is_placeholder: d.date_is_placeholder,
         // The FFI seam is the only place money becomes text.
@@ -1008,6 +1038,15 @@ fn receipt_result_to_parsed(r: &ReceiptResult) -> ParsedReceiptData {
             status,
             score: r.merchant_match.score,
         },
+        merchant_details: receipt_core::merchant_details::MerchantDetails {
+            street_address: r.merchant_details.street_address.clone(),
+            city: r.merchant_details.city.clone(),
+            region: r.merchant_details.region.clone(),
+            postal_code: r.merchant_details.postal_code.clone(),
+            phone_number: r.merchant_details.phone_number.clone(),
+            store_number: r.merchant_details.store_number.clone(),
+            raw_lines: r.merchant_details.raw_lines.clone(),
+        },
         date,
         date_is_placeholder: r.date_is_placeholder,
         total: Money::from_decimal_str(&r.total),
@@ -1083,6 +1122,15 @@ mod tests {
                 canonical: Some("COSTCO".into()),
                 status: MerchantMatchStatus::Exact,
                 score: 1.0,
+            },
+            merchant_details: MerchantDetails {
+                street_address: Some("123 Example Street".into()),
+                city: Some("Markham".into()),
+                region: Some("ON".into()),
+                postal_code: Some("L3R 1A1".into()),
+                phone_number: Some("905-555-0100".into()),
+                store_number: Some("123".into()),
+                raw_lines: vec!["123 Example Street".into(), "Markham, ON L3R 1A1".into()],
             },
             date: Some("2026-02-18".into()),
             date_is_placeholder: false,
@@ -1181,6 +1229,13 @@ mod tests {
         assert_eq!(edited.raw_text, "COSTCO\n**** 1234\nTOTAL 10.00");
         assert_eq!(edited.image_filename, "costco.jpg");
         assert_eq!(edited.tenders.len(), 1);
+        assert_eq!(
+            edited.merchant_details.postal_code.as_deref(),
+            Some("L3R 1A1")
+        );
+        assert_eq!(edited.merchant_details.store_number.as_deref(), Some("123"));
+        assert!(!edited.beancount.contains("123 Example Street"));
+        assert!(!edited.beancount.contains("L3R 1A1"));
         assert!(!edited.confidence.needs_review);
         // Classifier key preserved despite account override in beancount.
         assert_eq!(

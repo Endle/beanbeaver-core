@@ -513,6 +513,7 @@ mod tests {
                 status: MerchantMatchStatus::Exact,
                 score: 1.0,
             },
+            merchant_details: Default::default(),
             date: Date::new(2026, 2, 18),
             date_is_placeholder: false,
             total: "10.00".into(),

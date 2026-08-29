@@ -26,6 +26,7 @@ pub mod date;
 pub(crate) mod detection_normalization;
 pub(crate) mod fields;
 pub(crate) mod formatter;
+pub mod merchant_details;
 pub mod merchant_match;
 pub(crate) mod merchant_vocab;
 pub mod money;
