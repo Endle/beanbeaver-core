@@ -204,6 +204,265 @@ fn build_item(
     }
 }
 
+/// Build one item the way a scan does: classify `description` with the rules in
+/// force and take the account that classification resolves to.
+///
+/// Public for the reformat path. A renamed line has to be re-classified by the
+/// same rules a scanned one is, or it would keep the tags of the text it
+/// replaced — which is the whole failure the user was correcting.
+///
+/// No merchant-vocabulary expansion, unlike [`build_item`]: expansion recovers a
+/// chain's fixed-width shorthand, and a description the user typed is not
+/// shorthand.
+pub fn classified_item(
+    description: String,
+    price: Money,
+    quantity: i32,
+    rule_layers: &ParserRuleLayers,
+) -> ParsedReceiptItem {
+    let category = categorize_description(&description, rule_layers);
+    let account = categories::resolve_account_target(
+        category.as_deref(),
+        &rule_layers.category_rules.account_mapping,
+        None,
+    );
+    ParsedReceiptItem {
+        description: description.clone(),
+        price,
+        quantity,
+        category,
+        account,
+        tags: item_tags(&description, rule_layers),
+    }
+}
+
+/// The account a **user-chosen** tag path posts to: the path's own mapping, else
+/// the nearest mapped ancestor's.
+///
+/// The ancestor walk is deliberate and is scoped to this entry point. Rule
+/// authors get exact lookup (see [`categories::resolve_account_target`]) because
+/// they can declare precisely what they mean, and 11 of the 42 bundled tags are
+/// intentionally account-less — `grocery/meat/chicken` and `grocery/dairy/milk`
+/// among them, which carry display detail while a broader rule supplies the
+/// account. A person picking "Chicken" in a category list has no such second
+/// rule to lean on, and exact lookup would file their correction to
+/// `Expenses:FIXME`.
+///
+/// Roots with no mapping at all (`grocery`, `household`, `health`, `shopping`,
+/// `restaurant`, `alcohol`, `gift_card`) still resolve to nothing and fall back
+/// to the default account. That is a gap in the bundled account map rather than
+/// in this walk.
+fn account_for_chosen_tag(tag_path: &str, rule_layers: &ParserRuleLayers) -> Option<String> {
+    let mut path = Some(tag_path);
+    while let Some(candidate) = path {
+        if let Some(account) = categories::resolve_account_target(
+            Some(candidate),
+            &rule_layers.category_rules.account_mapping,
+            None,
+        ) {
+            return Some(account);
+        }
+        path = categories::TagNode::parent(candidate);
+    }
+    None
+}
+
+/// Build one item carrying the tag the user picked, bypassing the classifier.
+///
+/// `tag_path` must be declared by the rule corpus in force. An unknown path is
+/// an error for the same reason a rule document naming one is: silently
+/// dropping it would hand back a line tagged with nothing, which reads as the
+/// edit having been ignored.
+pub fn item_with_tag_path(
+    description: String,
+    price: Money,
+    quantity: i32,
+    tag_path: &str,
+    rule_layers: &ParserRuleLayers,
+) -> Result<ParsedReceiptItem, String> {
+    if !rule_layers
+        .category_rules
+        .tag_vocabulary
+        .iter()
+        .any(|node| node.path == tag_path)
+    {
+        return Err(format!(
+            "unknown tag path \"{tag_path}\" — not declared by the rules in force"
+        ));
+    }
+    let account = account_for_chosen_tag(tag_path, rule_layers);
+    Ok(ParsedReceiptItem {
+        description,
+        price,
+        quantity,
+        category: account.clone(),
+        account,
+        tags: categories::expand_tag_paths(std::slice::from_ref(&tag_path.to_string())),
+    })
+}
+
+/// The findings that follow from arithmetic alone — the item block against the
+/// summary amounts — and so are the findings a user edit can invalidate.
+///
+/// Lifted out of [`parse_receipt`] verbatim so [`crate::process::reformat_parsed_receipt`]
+/// can recompute them after the user rewrites the item list. That is what lets a
+/// corrected receipt stop warning: left as parsed, a `TotalMismatch` would
+/// outlive the mismatch it describes and the app would badge a receipt that now
+/// balances.
+///
+/// Emission order is the order `parse_receipt` has always used, and callers rely
+/// on it — the arithmetic findings come before the tender finding and before the
+/// per-item ones.
+pub fn balance_warnings(
+    items: &[ParsedReceiptItem],
+    total_cents: Money,
+    tax_cents: Option<Money>,
+    subtotal_cents: Option<Money>,
+) -> Vec<ParsedReceiptWarning> {
+    let mut warnings: Vec<ParsedReceiptWarning> = Vec::new();
+
+    // Postings that overshoot the receipt total cannot balance, and until now
+    // nothing said so. `formatter` closes an *undershoot* with an
+    // `Expenses:FIXME` remainder — the ordinary "we missed an item" case, 26 of
+    // 125 corpus receipts — but has no answer for the other direction and
+    // silently emits a transaction beancount will reject. Overshoot is always a
+    // defect: an item is duplicated, or a summary amount was parsed as an item.
+    // It is also rare and specific — 6 of 125 receipts, every one genuinely
+    // wrong — so warning on it is a signal, not noise.
+    // Every balance check below is gated on `total_cents > 0`, which reads as a
+    // guard and behaves as an off switch: a receipt whose total came back zero
+    // doesn't fail those checks, it skips them. A C&C slip parsed 23 items and a
+    // $0.00 total and reported nothing at all — the one shape where the entry is
+    // certainly wrong was the one shape that stayed quiet.
+    //
+    // Items alone are enough to know a total was expected. A genuinely zero
+    // receipt has nothing to post, so it never reaches here with items in hand.
+    if total_cents == Money::ZERO && !items.is_empty() {
+        warnings.push(ParsedReceiptWarning {
+            kind: ReceiptWarningKind::ImplausibleSummary,
+            message: format!(
+                "no receipt total could be read, but {} item{} parsed totalling {} — the entry cannot be trusted to balance",
+                items.len(),
+                if items.len() == 1 { " was" } else { "s were" },
+                items.iter().map(|item| item.price).sum::<Money>(),
+            ),
+            after_item_index: None,
+        });
+    }
+
+    // Subtotal equal to tax is not a near-miss, it is arithmetically impossible:
+    // it says the receipt taxed at 100%. What it really means is that one amount
+    // was handed to both labels, which happens when the label column and the
+    // amount column drift apart — on the C&C slip a single `153.55` overlapped
+    // both `Sub Total` and `HST` while the true total sat unclaimed a row below.
+    //
+    // Nothing is repaired. Which label should have kept the amount is not
+    // recoverable from the arithmetic, exactly as with `TenderMismatch`, and the
+    // real fix is in grouping. Zero is excluded: a genuinely untaxed receipt
+    // prints 0.00 for both, and that is a fact rather than a fault.
+    if let (Some(subtotal), Some(tax)) = (subtotal_cents, tax_cents) {
+        if subtotal == tax && subtotal != Money::ZERO {
+            warnings.push(ParsedReceiptWarning {
+                kind: ReceiptWarningKind::ImplausibleSummary,
+                message: format!(
+                    "subtotal and tax both read {} — they cannot both be right, so one of the summary amounts is misread",
+                    subtotal,
+                ),
+                after_item_index: None,
+            });
+        }
+    }
+
+    if total_cents > Money::ZERO {
+        let posted_cents =
+            items.iter().map(|item| item.price).sum::<Money>() + tax_cents.unwrap_or(Money::ZERO);
+        if posted_cents > total_cents {
+            warnings.push(ParsedReceiptWarning {
+                kind: ReceiptWarningKind::TotalMismatch,
+                message: format!(
+                    "items{} total {} but the receipt total is {} — {} too much, so this transaction will not balance",
+                    if tax_cents.is_some() { " and tax" } else { "" },
+                    posted_cents,
+                    total_cents,
+                    posted_cents - total_cents,
+                ),
+                after_item_index: None,
+            });
+        }
+
+        // Undershoot is the other half, and it used to say nothing at all: the
+        // formatter quietly closes the gap with an `Expenses:FIXME` remainder,
+        // so a receipt could be *entirely* mis-paired and still report clean.
+        // A No Frills scan lost one item and gave the remaining three their
+        // neighbours' prices, and the only trace was a 3.78 plug nobody saw.
+        //
+        // Warning on every undershoot is noise — 23 of 122 receipts, most of
+        // them a few cents. What makes it a signal is asking the question
+        // against the printed SUBTOTAL instead of the total: fees, deposits,
+        // rounding and tax defects all live *between* subtotal and total, so
+        // measuring there is what mixes them into the item-block question.
+        //
+        // Measured over the corpus, the two deltas triangulate:
+        //
+        //   items != subtotal, posted != total -> the item block is wrong (16)
+        //   items != subtotal, posted == total -> the SUBTOTAL was misread (2)
+        //   items == subtotal, posted != total -> items fine, tax/fees (9)
+        //
+        // Only the first is a missing or spurious line, and requiring both to
+        // disagree is what removes the entire sub-dollar noise band — every
+        // 9c/10c/15c/20c case in the corpus lands in the third bucket.
+        if let Some(subtotal_cents) = subtotal_cents {
+            let items_cents = posted_cents - tax_cents.unwrap_or(Money::ZERO);
+            let item_block_delta = items_cents - subtotal_cents;
+            if item_block_delta != Money::ZERO && posted_cents != total_cents {
+                let (verb, amount) = if item_block_delta < Money::ZERO {
+                    ("short of", -item_block_delta)
+                } else {
+                    ("more than", item_block_delta)
+                };
+                warnings.push(ParsedReceiptWarning {
+                    kind: ReceiptWarningKind::SubtotalMismatch,
+                    message: format!(
+                        "items total {}, {} the receipt's subtotal of {} by {} — a line was probably {}",
+                        items_cents,
+                        verb,
+                        subtotal_cents,
+                        amount,
+                        if item_block_delta < Money::ZERO { "missed" } else { "counted twice" },
+                    ),
+                    after_item_index: None,
+                });
+            }
+        }
+    }
+
+    warnings
+}
+
+/// "This line matched no classifier rule", per item. Also recomputed on the
+/// reformat path: retagging a line is precisely the edit that clears it.
+pub fn uncategorized_warnings(items: &[ParsedReceiptItem]) -> Vec<ParsedReceiptWarning> {
+    let mut warnings: Vec<ParsedReceiptWarning> = Vec::new();
+
+    // "This line matched no classifier rule" is a finding like any other, and
+    // the parser is the only layer that knows it first-hand. It used to be
+    // re-derived by each client from `tags.is_empty()`, which is how a
+    // perfectly-parsed discount line ended up indistinguishable from a product
+    // nobody has written a rule for. Reported last so the arithmetic warnings —
+    // which are about the receipt as a whole — keep their existing position.
+    for (index, item) in items.iter().enumerate() {
+        if item.tags.is_empty() {
+            warnings.push(ParsedReceiptWarning {
+                kind: ReceiptWarningKind::UncategorizedItem,
+                message: format!("no classifier rule matched \"{}\"", item.description),
+                after_item_index: Some(index),
+            });
+        }
+    }
+
+    warnings
+}
+
 pub fn parse_receipt(
     doc: &crate::ocr_document::OcrDocument,
     rule_layers: &ParserRuleLayers,
@@ -424,120 +683,12 @@ pub fn parse_receipt(
         }
     }
 
-    // Postings that overshoot the receipt total cannot balance, and until now
-    // nothing said so. `formatter` closes an *undershoot* with an
-    // `Expenses:FIXME` remainder — the ordinary "we missed an item" case, 26 of
-    // 125 corpus receipts — but has no answer for the other direction and
-    // silently emits a transaction beancount will reject. Overshoot is always a
-    // defect: an item is duplicated, or a summary amount was parsed as an item.
-    // It is also rare and specific — 6 of 125 receipts, every one genuinely
-    // wrong — so warning on it is a signal, not noise.
-    // Every balance check below is gated on `total_cents > 0`, which reads as a
-    // guard and behaves as an off switch: a receipt whose total came back zero
-    // doesn't fail those checks, it skips them. A C&C slip parsed 23 items and a
-    // $0.00 total and reported nothing at all — the one shape where the entry is
-    // certainly wrong was the one shape that stayed quiet.
-    //
-    // Items alone are enough to know a total was expected. A genuinely zero
-    // receipt has nothing to post, so it never reaches here with items in hand.
-    if total_cents == Money::ZERO && !items.is_empty() {
-        warnings.push(ParsedReceiptWarning {
-            kind: ReceiptWarningKind::ImplausibleSummary,
-            message: format!(
-                "no receipt total could be read, but {} item{} parsed totalling {} — the entry cannot be trusted to balance",
-                items.len(),
-                if items.len() == 1 { " was" } else { "s were" },
-                items.iter().map(|item| item.price).sum::<Money>(),
-            ),
-            after_item_index: None,
-        });
-    }
-
-    // Subtotal equal to tax is not a near-miss, it is arithmetically impossible:
-    // it says the receipt taxed at 100%. What it really means is that one amount
-    // was handed to both labels, which happens when the label column and the
-    // amount column drift apart — on the C&C slip a single `153.55` overlapped
-    // both `Sub Total` and `HST` while the true total sat unclaimed a row below.
-    //
-    // Nothing is repaired. Which label should have kept the amount is not
-    // recoverable from the arithmetic, exactly as with `TenderMismatch`, and the
-    // real fix is in grouping. Zero is excluded: a genuinely untaxed receipt
-    // prints 0.00 for both, and that is a fact rather than a fault.
-    if let (Some(subtotal), Some(tax)) = (subtotal_cents, tax_cents) {
-        if subtotal == tax && subtotal != Money::ZERO {
-            warnings.push(ParsedReceiptWarning {
-                kind: ReceiptWarningKind::ImplausibleSummary,
-                message: format!(
-                    "subtotal and tax both read {} — they cannot both be right, so one of the summary amounts is misread",
-                    subtotal,
-                ),
-                after_item_index: None,
-            });
-        }
-    }
-
-    if total_cents > Money::ZERO {
-        let posted_cents =
-            items.iter().map(|item| item.price).sum::<Money>() + tax_cents.unwrap_or(Money::ZERO);
-        if posted_cents > total_cents {
-            warnings.push(ParsedReceiptWarning {
-                kind: ReceiptWarningKind::TotalMismatch,
-                message: format!(
-                    "items{} total {} but the receipt total is {} — {} too much, so this transaction will not balance",
-                    if tax_cents.is_some() { " and tax" } else { "" },
-                    posted_cents,
-                    total_cents,
-                    posted_cents - total_cents,
-                ),
-                after_item_index: None,
-            });
-        }
-
-        // Undershoot is the other half, and it used to say nothing at all: the
-        // formatter quietly closes the gap with an `Expenses:FIXME` remainder,
-        // so a receipt could be *entirely* mis-paired and still report clean.
-        // A No Frills scan lost one item and gave the remaining three their
-        // neighbours' prices, and the only trace was a 3.78 plug nobody saw.
-        //
-        // Warning on every undershoot is noise — 23 of 122 receipts, most of
-        // them a few cents. What makes it a signal is asking the question
-        // against the printed SUBTOTAL instead of the total: fees, deposits,
-        // rounding and tax defects all live *between* subtotal and total, so
-        // measuring there is what mixes them into the item-block question.
-        //
-        // Measured over the corpus, the two deltas triangulate:
-        //
-        //   items != subtotal, posted != total -> the item block is wrong (16)
-        //   items != subtotal, posted == total -> the SUBTOTAL was misread (2)
-        //   items == subtotal, posted != total -> items fine, tax/fees (9)
-        //
-        // Only the first is a missing or spurious line, and requiring both to
-        // disagree is what removes the entire sub-dollar noise band — every
-        // 9c/10c/15c/20c case in the corpus lands in the third bucket.
-        if let Some(subtotal_cents) = subtotal_cents {
-            let items_cents = posted_cents - tax_cents.unwrap_or(Money::ZERO);
-            let item_block_delta = items_cents - subtotal_cents;
-            if item_block_delta != Money::ZERO && posted_cents != total_cents {
-                let (verb, amount) = if item_block_delta < Money::ZERO {
-                    ("short of", -item_block_delta)
-                } else {
-                    ("more than", item_block_delta)
-                };
-                warnings.push(ParsedReceiptWarning {
-                    kind: ReceiptWarningKind::SubtotalMismatch,
-                    message: format!(
-                        "items total {}, {} the receipt's subtotal of {} by {} — a line was probably {}",
-                        items_cents,
-                        verb,
-                        subtotal_cents,
-                        amount,
-                        if item_block_delta < Money::ZERO { "missed" } else { "counted twice" },
-                    ),
-                    after_item_index: None,
-                });
-            }
-        }
-    }
+    warnings.extend(balance_warnings(
+        &items,
+        total_cents,
+        tax_cents,
+        subtotal_cents,
+    ));
 
     // The payment block is an independent witness to the total: when a receipt
     // prints its tenders, they partition the total rather than echoing it, so
@@ -564,21 +715,7 @@ pub fn parse_receipt(
         });
     }
 
-    // "This line matched no classifier rule" is a finding like any other, and
-    // the parser is the only layer that knows it first-hand. It used to be
-    // re-derived by each client from `tags.is_empty()`, which is how a
-    // perfectly-parsed discount line ended up indistinguishable from a product
-    // nobody has written a rule for. Reported last so the arithmetic warnings —
-    // which are about the receipt as a whole — keep their existing position.
-    for (index, item) in items.iter().enumerate() {
-        if item.tags.is_empty() {
-            warnings.push(ParsedReceiptWarning {
-                kind: ReceiptWarningKind::UncategorizedItem,
-                message: format!("no classifier rule matched \"{}\"", item.description),
-                after_item_index: Some(index),
-            });
-        }
-    }
+    warnings.extend(uncategorized_warnings(&items));
 
     let tenders = tender_lines
         .into_iter()

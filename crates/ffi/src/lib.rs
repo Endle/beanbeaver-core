@@ -25,8 +25,8 @@ use receipt_core::parser::{
     ParsedReceiptData, ParsedReceiptItem, ParsedReceiptTender, ParsedReceiptWarning,
 };
 use receipt_core::process::{
-    process_receipt_with_options, reformat_parsed_receipt, FieldConfidence, ProcessOptions,
-    ProcessedReceipt, ReceiptCorrections,
+    process_receipt_with_options, reformat_parsed_receipt, FieldConfidence, ItemCorrection,
+    ProcessOptions, ProcessedReceipt, ReceiptCorrections,
 };
 use receipt_core::rules::RuleBook as CoreRuleBook;
 use scan::{process_image_timed, Engine as OcrEngine, ScanTimings as CoreScanTimings};
@@ -380,13 +380,51 @@ pub struct ParseOptions {
 }
 
 /// User edits applied by [`reformat_receipt`] without re-running OCR.
+///
+/// Every field is "leave it alone" when absent, so a caller sends only what the
+/// user actually touched.
 #[derive(uniffi::Record)]
 pub struct ReceiptEdits {
     pub merchant: Option<String>,
     /// ISO `YYYY-MM-DD`.
     pub date_iso: Option<String>,
-    /// Parallel to items; empty string means “no override for this index”.
-    pub item_account_overrides: Vec<String>,
+    /// When present, the item block as the user wants it recorded — replacing
+    /// the parse's own, in this order.
+    ///
+    /// A whole list rather than positional patches: the edits that matter change
+    /// the list's shape (adding the line an orphaned price belongs to, deleting
+    /// a banner row read as an item), and patching by index against a list that
+    /// is itself shifting is how an edit lands on the wrong row.
+    ///
+    /// This replaces the positional `item_account_overrides` this record used to
+    /// carry. That field only ever reached the beancount posting — it left
+    /// `category` and the item's tags saying something different, so a retag
+    /// changed the ledger while the app went on showing the old category. No
+    /// consumer had called it.
+    pub items: Option<Vec<EditedItem>>,
+    /// Summary amounts as decimal strings; `None` keeps what was parsed. They
+    /// are editable because they are the yardstick: no amount of fixing line
+    /// items can balance a receipt whose printed total was misread.
+    pub total: Option<String>,
+    pub tax: Option<String>,
+    pub subtotal: Option<String>,
+}
+
+/// One line of the item block, as [`ReceiptEdits::items`] carries it.
+#[derive(uniffi::Record)]
+pub struct EditedItem {
+    pub description: String,
+    /// Decimal string, as [`ReceiptItem::price`] is.
+    pub price: String,
+    pub quantity: i32,
+    /// The tag path the user picked (`grocery/snacks`), or empty to classify
+    /// `description` with the rules in force.
+    ///
+    /// Empty is the ordinary case: a line the user renamed should be
+    /// re-classified from its new text. A path set here is the user overruling
+    /// the classifier, and it is what makes a retag show on the item's tags and
+    /// not only in the ledger. An undeclared path is a [`ScanError::Parse`].
+    pub tag_path: String,
 }
 
 /// One item-classifier rule as it is actually in force — priorities already
@@ -818,11 +856,16 @@ pub fn parse_detections(
     Ok(to_result(processed, ScanTimings::default()))
 }
 
-/// Re-render beancount after the user edits merchant / date / item accounts.
+/// Re-render a receipt after the user corrects it, without re-running OCR.
 ///
-/// Does not re-run OCR. Pass the fields from a previous [`ReceiptResult`] plus
-/// [`ReceiptEdits`]. Item account overrides are positional: index `i` applies
-/// to `items[i]` when non-empty.
+/// Pass a previous [`ReceiptResult`] plus [`ReceiptEdits`]. Edited and added
+/// lines are re-classified by the rules in force, so a renamed line gets the
+/// tags its new text earns rather than keeping the ones the OCR text had.
+///
+/// Findings are refreshed rather than carried over: the arithmetic ones are
+/// recomputed from the corrected numbers, and the ones that describe the
+/// parser's own item list are dropped once the user has replaced that list. A
+/// receipt the user has made balance stops reporting that it does not.
 ///
 /// Round-trip `raw_text`, `image_filename`, and `tenders` from the prior scan so
 /// multi-tender postings and card-last4 metadata survive the edit.
@@ -842,11 +885,20 @@ pub fn reformat_receipt(
     let corrections = ReceiptCorrections {
         merchant: edits.merchant,
         date_iso: edits.date_iso,
-        item_accounts: edits
-            .item_account_overrides
-            .into_iter()
-            .map(|s| if s.is_empty() { None } else { Some(s) })
-            .collect(),
+        items: edits.items.map(|items| {
+            items
+                .into_iter()
+                .map(|item| ItemCorrection {
+                    description: item.description,
+                    price: item.price,
+                    quantity: item.quantity,
+                    tag_path: item.tag_path,
+                })
+                .collect()
+        }),
+        total: edits.total,
+        tax: edits.tax,
+        subtotal: edits.subtotal,
     };
     let opts = to_process_options(&options);
     let processed = reformat_parsed_receipt(
@@ -1197,6 +1249,99 @@ mod tests {
         assert!(matches!(result, Err(ScanError::Parse { .. })));
     }
 
+    fn no_edits() -> ReceiptEdits {
+        ReceiptEdits {
+            merchant: None,
+            date_iso: None,
+            items: None,
+            total: None,
+            tax: None,
+            subtotal: None,
+        }
+    }
+
+    fn edits_with(items: Vec<EditedItem>) -> ReceiptEdits {
+        ReceiptEdits {
+            items: Some(items),
+            ..no_edits()
+        }
+    }
+
+    fn edited(description: &str, price: &str, tag_path: &str) -> EditedItem {
+        EditedItem {
+            description: description.into(),
+            price: price.into(),
+            quantity: 1,
+            tag_path: tag_path.into(),
+        }
+    }
+
+    fn reformat_with(edits: ReceiptEdits) -> Result<ReceiptResult, ScanError> {
+        reformat_receipt(
+            sample_previous(),
+            DateYmd {
+                year: 2026,
+                month: 2,
+                day: 18,
+            },
+            "Liabilities:CreditCard".into(),
+            "CAD".into(),
+            "Expenses:Tax:HST".into(),
+            None,
+            edits,
+            ParseOptions {
+                rule_documents: vec![],
+                known_merchants: vec![],
+            },
+        )
+    }
+
+    /// The seam carries the whole list, so the shape-changing edits — the ones
+    /// a positional patch could not express — have to survive the crossing.
+    #[test]
+    fn edited_items_cross_the_seam_with_their_new_tags() {
+        let edited_result = reformat_with(edits_with(vec![
+            edited("Milk", "6.69", ""),
+            edited("WHITE RABBIT", "3.31", "grocery/snacks"),
+        ]))
+        .expect("reformat");
+
+        assert_eq!(edited_result.items.len(), 2);
+        assert_eq!(edited_result.items[1].description, "WHITE RABBIT");
+        // `ItemTag` is what the app draws its chips from: a retag that does not
+        // reach here changes the ledger while the UI goes on showing the old
+        // category, which is the failure the tag path exists to prevent.
+        let paths: Vec<&str> = edited_result.items[1]
+            .tags
+            .iter()
+            .map(|t| t.path.as_str())
+            .collect();
+        assert_eq!(paths, vec!["grocery", "grocery/snacks"]);
+        assert_eq!(
+            edited_result.items[1].account.as_deref(),
+            Some("Expenses:Food:Grocery:Snacks")
+        );
+        assert!(edited_result
+            .beancount
+            .contains("Expenses:Food:Grocery:Snacks"));
+    }
+
+    #[test]
+    fn deleting_a_line_is_just_leaving_it_out() {
+        let edited_result =
+            reformat_with(edits_with(vec![])).expect("an empty item block is a legal edit");
+        assert!(edited_result.items.is_empty());
+    }
+
+    #[test]
+    fn reformat_receipt_rejects_an_undeclared_tag_path() {
+        let err = reformat_with(edits_with(vec![edited("Milk", "10.00", "grocery/nonsuch")]));
+        assert!(
+            matches!(err, Err(ScanError::Parse { .. })),
+            "expected Parse error for an undeclared tag path"
+        );
+    }
+
     #[test]
     fn reformat_receipt_changes_merchant_in_beancount() {
         let edited = reformat_receipt(
@@ -1213,7 +1358,7 @@ mod tests {
             ReceiptEdits {
                 merchant: Some("Costco Wholesale".into()),
                 date_iso: Some("2026-02-19".into()),
-                item_account_overrides: vec!["Expenses:Food:Grocery:Dairy".into()],
+                ..no_edits()
             },
             ParseOptions {
                 rule_documents: vec![],
@@ -1237,11 +1382,9 @@ mod tests {
         assert!(!edited.beancount.contains("123 Example Street"));
         assert!(!edited.beancount.contains("L3R 1A1"));
         assert!(!edited.confidence.needs_review);
-        // Classifier key preserved despite account override in beancount.
-        assert_eq!(
-            edited.items[0].account.as_deref(),
-            Some("Expenses:Food:Grocery:Dairy")
-        );
+        // A header-only edit leaves the item block alone.
+        assert_eq!(edited.items.len(), 1);
+        assert_eq!(edited.items[0].description, "Milk");
     }
 
     #[test]
@@ -1260,7 +1403,7 @@ mod tests {
             ReceiptEdits {
                 merchant: None,
                 date_iso: Some("bogus".into()),
-                item_account_overrides: vec![],
+                ..no_edits()
             },
             ParseOptions {
                 rule_documents: vec![],
