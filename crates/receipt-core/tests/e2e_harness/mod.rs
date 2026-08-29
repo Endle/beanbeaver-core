@@ -334,6 +334,32 @@ pub fn run_cached_corpus_in(
             }
         }
 
+        // Merchant contact/branch details are opt-in fixture assertions. They
+        // stay out of Beancount and UI, but the private corpus records what the
+        // receipt actually printed so extraction regressions are visible.
+        if let Some(details) = expected.get("merchant_details").and_then(Value::as_object) {
+            for (key, actual) in [
+                ("street_address", &parsed.merchant_details.street_address),
+                ("city", &parsed.merchant_details.city),
+                ("region", &parsed.merchant_details.region),
+                ("postal_code", &parsed.merchant_details.postal_code),
+                ("phone_number", &parsed.merchant_details.phone_number),
+                ("store_number", &parsed.merchant_details.store_number),
+            ] {
+                let Some(want) = details.get(key).and_then(Value::as_str) else {
+                    continue;
+                };
+                if actual.as_deref() != Some(want) {
+                    failed.insert("merchant_details");
+                    if !known.contains("merchant_details") {
+                        case_fail.push(format!(
+                            "merchant_details.{key} expected '{want}', got {actual:?}"
+                        ));
+                    }
+                }
+            }
+        }
+
         // date (exact)
         if let Some(dt) = expected.get("date").and_then(Value::as_str) {
             let actual = parsed.date.map(|d| d.to_string());

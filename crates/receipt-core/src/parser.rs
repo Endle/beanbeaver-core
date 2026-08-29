@@ -61,6 +61,9 @@ pub struct ParsedReceiptData {
     /// Full merchant resolution (raw OCR text, canonical family, confidence),
     /// for consumers that want to surface the correction to the user.
     pub merchant_match: crate::merchant_match::MerchantMatch,
+    /// Contact and branch details printed on the receipt. These are parsed
+    /// evidence, not a geocoded or otherwise verified location.
+    pub merchant_details: crate::merchant_details::MerchantDetails,
     pub date: Option<Date>,
     pub date_is_placeholder: bool,
     pub total: Money,
@@ -252,6 +255,7 @@ pub fn parse_receipt(
         merchant_families,
     );
     let merchant = merchant_match.display().to_string();
+    let merchant_details = crate::merchant_details::extract_merchant_details(&lines);
     // Scoped to the *canonical* family, not the raw OCR header: an unresolved
     // merchant gets no expansions, so the feature fails closed.
     let vocab = merchant_match.canonical.as_deref().and_then(|canonical| {
@@ -589,6 +593,7 @@ pub fn parse_receipt(
     ParsedReceiptData {
         merchant,
         merchant_match,
+        merchant_details,
         date,
         date_is_placeholder,
         total: total_cents,
