@@ -569,6 +569,14 @@ mod tests {
     }
 
     #[test]
+    fn falls_back_to_costco_warehouse_footer() {
+        let found = extract_merchant_details(&lines(
+            "COSTCO\n65 Kirkham Drive\nMarkham, ON L3S 0A9\nWhse:545 Trm:8",
+        ));
+        assert_eq!(found.store_number.as_deref(), Some("545"));
+    }
+
+    #[test]
     fn extracts_lcbo_terminal_store_and_spaced_phone() {
         let found = extract_merchant_details(&lines(
             "1571 Sandhurst Circle\nTORONTO-SCARBOROUGH, ON M1V-1V2\n( 416)291-1638\nST:0584",
@@ -584,7 +592,7 @@ mod tests {
     #[test]
     fn extracts_freshco_footer_store_and_ignores_terminal_id_as_phone() {
         let found = extract_merchant_details(&lines(
-            "9580 Mccowan Road\nMarkham (905) 887-4366\n0000008000\nTran Store Oper\n7574 3875 120 16:35:57",
+            "9580 Mccowan Road\nMarkham (905) 887-4366\n0000008000\n2026706720\nTerm Store Oper\nTran 20:15:16\n3993 3875 111",
         ));
         assert_eq!(found.city.as_deref(), Some("Markham"));
         assert_eq!(found.phone_number.as_deref(), Some("(905) 887-4366"));
