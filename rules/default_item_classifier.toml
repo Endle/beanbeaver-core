@@ -388,7 +388,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0028"
-keywords = ["COORS", "SMIRNOFF", "SLEEMAN", "BEER", "WINE", "VODKA", "WHISKEY", "WHISKY", "RUM", "GIN", "TEQUILA", "COGNAC", "CHAMPAGNE", "PROSECCO", "CIDER", "SAKE", "SOJU", "LIQUOR", "LIQUEUR", "LAGER", "STOUT", "PORTER"]
+keywords = ["COORS", "SMIRNOFF", "SLEEMAN", "BEER", "WINE", "VODKA", "WHISKEY", "WHISKY", "RUM", "GIN", "TEQUILA", "COGNAC", "CHAMPAGNE", "PROSECCO", "CIDER", "SAKE", "SOJU", "LIQUOR", "LIQUEUR", "TRIPLE SEC", "LAGER", "STOUT", "PORTER"]
 tags = ["alcohol/beverage"]
 priority = 1
 exact_only = false

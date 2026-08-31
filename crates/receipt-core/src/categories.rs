@@ -861,6 +861,7 @@ mod tests {
             ("YYH Chillies 80g", "Expenses:Food:Grocery:Seasoning"),
             // alcoholic
             ("COORS LIGHT 6 PK HQ", "Expenses:Food:AlcoholicBeverage"),
+            ("MEAGHERS TRIPLE SEC", "Expenses:Food:AlcoholicBeverage"),
             // pet
             ("2130150 HUGG WIPE", "Expenses:Pet:Supply"),
             // tooth care
