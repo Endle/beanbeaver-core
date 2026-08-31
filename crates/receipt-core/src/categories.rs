@@ -859,6 +859,17 @@ mod tests {
                 "Expenses:Food:Grocery:Seasoning",
             ),
             ("YYH Chillies 80g", "Expenses:Food:Grocery:Seasoning"),
+            (
+                "HD - Superior Qyster Sauc (",
+                "Expenses:Food:Grocery:Seasoning",
+            ),
+            (
+                "Choripdong - Hot Pepper P",
+                "Expenses:Food:Grocery:Seasoning",
+            ),
+            // Narrow aliases above must not reclassify the underlying foods.
+            ("Fresh Oyster Meat", "Expenses:Food:Grocery:Seafood"),
+            ("Hot Pepper Plant", "Expenses:Food:Grocery:Vegetable"),
             // alcoholic
             ("COORS LIGHT 6 PK HQ", "Expenses:Food:AlcoholicBeverage"),
             ("MEAGHERS TRIPLE SEC", "Expenses:Food:AlcoholicBeverage"),
