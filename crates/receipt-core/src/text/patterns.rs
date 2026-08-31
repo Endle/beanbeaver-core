@@ -21,7 +21,10 @@ use crate::common::{WEIGHT_UNIT_AT_SEP, WEIGHT_UNIT_CLASS};
 // arrives as ONE OCR token — so the group repeats over whitespace rather than
 // matching a single contiguous run. `*` (not `+`) keeps the whole class
 // optional, which is what every call site assumed when this was `?`.
-pub(crate) const TAX_FLAG_CLASS: &str = r"(?:\*?[BbCcFfGgHhJjPpTtXx]{1,3}\d{0,2}\s*)*";
+// Shoppers uses S in the same trailing column. It may be OCR'd as `5`; that
+// digit is repaired only with stronger row context in `normalize_tax_code_ocr`,
+// rather than admitted here as a generic flag.
+pub(crate) const TAX_FLAG_CLASS: &str = r"(?:\*?[BbCcFfGgHhJjPpSsTtXx]{1,3}\d{0,2}\s*)*";
 
 // When the parser sees a bare standalone-price line (e.g. `$8.95` on its own)
 // it walks back up to 5 lines looking for the description that goes with it.
@@ -106,7 +109,7 @@ pub(crate) fn re_trailing_total_presence() -> &'static Regex {
 pub(crate) fn re_embedded_unit_price_suffix() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"\s+\$?\d+\.\d{2}\s*\*?[CcFfGgHhJjPpTtXx]{1,3}\d{0,2}\s*$").unwrap()
+        Regex::new(r"\s+\$?\d+\.\d{2}\s*\*?[CcFfGgHhJjPpSsTtXx]{1,3}\d{0,2}\s*$").unwrap()
     })
 }
 

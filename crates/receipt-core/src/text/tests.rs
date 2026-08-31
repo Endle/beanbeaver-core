@@ -672,6 +672,38 @@ fn strips_embedded_unit_price_and_tax_flags_from_description() {
 }
 
 #[test]
+fn parses_shoppers_s_tax_code_and_contextual_ocr_confusion() {
+    use super::engine::extract_trailing_price_cents;
+
+    let lines = vec![
+        "CREST 3DW TTHP 9.99 GP 9.99 5".to_string(),
+        "MARC,ANTHONY C 9.99 GP 9.99 S".to_string(),
+        "SUBTOTAL: 19.98".to_string(),
+        "TOTAL: $22.58".to_string(),
+    ];
+    let summary_amounts = HashSet::from([Money::from_cents(1998), Money::from_cents(2258)]);
+
+    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+
+    assert!(
+        items.iter().any(
+            |item| item.description == "CREST 3DW TTHP" && item.price == Money::from_cents(999)
+        ),
+        "OCR-confused S suffix was not recovered: {items:?}"
+    );
+    assert!(
+        items.iter().any(
+            |item| item.description == "MARC,ANTHONY C" && item.price == Money::from_cents(999)
+        ),
+        "literal S suffix was not parsed: {items:?}"
+    );
+
+    // Keep the old ambiguity guard: without the earlier price + real tax flags,
+    // a bare trailing digit is not silently reinterpreted as a tax code.
+    assert_eq!(extract_trailing_price_cents("UNRELATED ITEM 9.99 5"), None);
+}
+
+#[test]
 fn comma_decimal_normalization_leaves_non_price_commas_untouched() {
     use super::engine::normalize_decimal_spacing;
     // Positive: a comma between a digit and exactly two fraction digits.

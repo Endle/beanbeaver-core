@@ -170,6 +170,7 @@ fn is_negative_amount(text: &str) -> bool {
 fn amount_claim(text: &str) -> AmountClaim {
     if is_code_stub_label(text)
         || is_transaction_id_label(text)
+        || is_self_checkout_header_label(text)
         || is_membership_label(text)
         || is_department_header_label(text)
         || is_priced_in_savings_label(text)
@@ -220,6 +221,21 @@ fn is_transaction_id_label(text: &str) -> bool {
     }
     let rest = trimmed[11..].trim_start_matches([' ', '#', ':']).trim();
     rest.len() >= 4 && rest.chars().all(|ch| ch.is_ascii_digit())
+}
+
+/// True for the self-checkout banner some POS systems print directly above the
+/// first item — `SCO CheckOut` (self-checkout).
+///
+/// Like a transaction-id header, this row never carries money. On Shoppers'
+/// 2026-03-08 receipt the right column leans upward just far enough that the
+/// banner overlaps CREST's tax-coded `9.99 5` before CREST does. First-fit then
+/// hands every item the following row's price and drops the last one. Keep the
+/// shape narrow and anchored: `SCO` plus `CHECKOUT`/`CHECK OUT` is structural;
+/// a product description that merely contains either word is not.
+fn is_self_checkout_header_label(text: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)^\s*SCO\s+CHECK\s*OUT\s*$").unwrap())
+        .is_match(text)
 }
 
 /// True for a warehouse-club membership header — Costco's
@@ -1178,6 +1194,34 @@ mod tests {
         );
         assert!(
             rendered.contains(&"FESHRIMP PASTE150g $11.92".to_string()),
+            "{rendered:?}"
+        );
+    }
+
+    #[test]
+    fn self_checkout_header_does_not_claim_first_items_tax_coded_price() {
+        // Shoppers 2026-03-08, real cached-OCR geometry, padded width 981.
+        // The banner overlaps CREST's 9.99 by 18px and appears first, while the
+        // tax suffix is joined to the amount in the same OCR detection.
+        let dets = vec![
+            det_box("SCO CheckOut", 30.0, 283.0, 413.0, 458.0),
+            det_box("9.99 5", 720.0, 857.0, 440.0, 487.0),
+            det_box("CREST 3DW TTHP", 32.0, 323.0, 453.0, 494.0),
+            det_box("2.00", 721.0, 813.0, 480.0, 525.0),
+            det_box("2 X CARNABY, SWEET", 32.0, 383.0, 489.0, 532.0),
+        ];
+
+        let rendered = render(&dets, &group_detections_into_lines(&dets, 981.0));
+        assert!(
+            rendered.contains(&"SCO CheckOut".to_string()),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.contains(&"CREST 3DW TTHP 9.99 5".to_string()),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.contains(&"2 X CARNABY, SWEET 2.00".to_string()),
             "{rendered:?}"
         );
     }
