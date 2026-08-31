@@ -65,6 +65,29 @@ fn re_dmy_month_name_date() -> &'static Regex {
     })
 }
 
+/// Whether a date is explicitly labelled as a return deadline rather than the
+/// transaction date.
+///
+/// The label can sit one or two OCR lines above the date itself (LCBO prints an
+/// English line, a French line, then the deadline), so inspecting only the
+/// candidate line is insufficient. A date between that label and the current
+/// line closes the context: it is the deadline itself, and a following date is
+/// free to be the transaction timestamp. Returning no date is safer than
+/// booking a purchase on the last day it may be returned.
+fn is_return_deadline_context(lines: &[String], line_index: usize) -> bool {
+    let start = line_index.saturating_sub(2);
+    let context = lines[start..=line_index].join(" ").to_ascii_uppercase();
+    let has_return_label =
+        context.contains("DATE") && (context.contains("RETURN") || context.contains("RETOUR"));
+    let has_intervening_date = lines[start..line_index].iter().any(|line| {
+        re_separated_date().is_match(line)
+            || re_compact_date().is_match(line)
+            || re_month_name_date().is_match(line)
+            || re_dmy_month_name_date().is_match(line)
+    });
+    has_return_label && !has_intervening_date
+}
+
 fn month_number_from_name(name: &str) -> Option<i32> {
     match name.get(..3).unwrap_or("").to_ascii_lowercase().as_str() {
         "jan" => Some(1),
@@ -1288,6 +1311,9 @@ pub fn extract_date(lines: &[String], full_text: &str, current_year: i32) -> Opt
 
     for (line_index, line) in source_lines.iter().enumerate() {
         let normalized_line = normalize_decimal_spacing(line);
+        if is_return_deadline_context(&source_lines, line_index) {
+            continue;
+        }
         let hint_bonus = if re_date_context_hint().is_match(&normalized_line) {
             40
         } else {
@@ -1698,6 +1724,28 @@ mod tests {
         let lines = vec!["22-May-2026 3:22:42p.m.".to_string()];
         let parsed = extract_date(&lines, "", 2026).expect("date should parse");
         assert_eq!(parsed.ymd(), (2026, 5, 22));
+    }
+
+    #[test]
+    fn return_deadline_does_not_outrank_the_transaction_date() {
+        let lines = vec![
+            "Last Valid Date for Return of Product Is:".to_string(),
+            "Date limite pour retour de produits".to_string(),
+            "26 SEP 2026".to_string(),
+            "V124.04 27 AUG 2026 04:11PM".to_string(),
+        ];
+        let parsed = extract_date(&lines, "", 2026).expect("transaction date should parse");
+        assert_eq!(parsed.to_string(), "2026-08-27");
+    }
+
+    #[test]
+    fn a_return_deadline_alone_is_not_a_purchase_date() {
+        let lines = vec![
+            "Last Valid Date for Return of Product Is:".to_string(),
+            "Date limite pour retour de produits".to_string(),
+            "26 SEP 2026".to_string(),
+        ];
+        assert_eq!(extract_date(&lines, "", 2026), None);
     }
 
     #[test]
