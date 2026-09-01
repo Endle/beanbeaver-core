@@ -24,6 +24,30 @@ fn summary_label_re() -> &'static Regex {
     })
 }
 
+/// Exact receipt-summary labels are row anchors on self-checkout layouts, not
+/// descriptions that should be absorbed into a neighbouring item.
+///
+/// Most receipts print these inside the LEFT transition band, where
+/// [`belongs_in_left_column`] already catches them. Shoppers 2026-06-30 is much
+/// wider: `SUBTOTAL` starts at x=0.35 and both amount columns at x=0.68, so the
+/// fixed RIGHT cut routes the entire block to MIDDLE. With no summary anchor,
+/// progressive middle attachment grows one line containing the item, its two
+/// prices and `SUBTOTAL`, and the summary filter then correctly drops it. Keep
+/// this exact and narrow so prose such as `TOTAL POINTS EARNED TODAY` remains a
+/// normal middle token. The caller requires the document-level `SCO CheckOut`
+/// banner: promoting centered summary labels globally changes valid LCBO and
+/// Pharmasave live layouts. It also limits anchors to the left of
+/// [`RIGHT_COLUMN_CUT`]: a far-right `Total` is an item-table column heading,
+/// as on Home Hardware, and must stay on the `SKU Qty Price Total` row.
+fn is_summary_anchor_label(text: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)^\s*(?:SUB\s*T[OCQDG0]TAL|SUBTOTAL|TOTAL|HST|GST|PST|TAX)\s*:?\s*$")
+            .unwrap()
+    })
+    .is_match(text)
+}
+
 /// Decide whether a detection sits in the LEFT (SKU/summary-label) column.
 ///
 /// `x_norm < 0.2` is unambiguously LEFT. In the 0.2-0.3 transition band the
@@ -739,11 +763,18 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
     let mut left: Vec<usize> = Vec::new();
     let mut middle: Vec<usize> = Vec::new();
     let mut right: Vec<usize> = Vec::new();
+    let has_self_checkout_header = dets
+        .iter()
+        .any(|det| is_self_checkout_header_label(&det.text));
     for (index, det) in dets.iter().enumerate() {
         let x_norm = det.min_x / image_width;
         if x_norm > RIGHT_COLUMN_CUT && is_amount_shaped(&det.text) {
             right.push(index);
-        } else if belongs_in_left_column(&det.text, x_norm) {
+        } else if belongs_in_left_column(&det.text, x_norm)
+            || (has_self_checkout_header
+                && x_norm <= RIGHT_COLUMN_CUT
+                && is_summary_anchor_label(&det.text))
+        {
             left.push(index);
         } else {
             middle.push(index);
@@ -1224,6 +1255,53 @@ mod tests {
             rendered.contains(&"2 X CARNABY, SWEET 2.00".to_string()),
             "{rendered:?}"
         );
+    }
+
+    #[test]
+    fn centered_summary_label_anchors_a_middle_only_amount_block() {
+        // Shoppers 2026-06-30, real de-padded cached-OCR geometry. The 1598px
+        // image puts both price columns at x=0.68, below RIGHT_COLUMN_CUT, and
+        // SUBTOTAL itself at x=0.35. Every token here therefore routes through
+        // MIDDLE unless the exact summary label becomes its own anchor.
+        let dets = vec![
+            det_box("SCO CheckOut", 8.0, 424.0, 872.0, 936.0),
+            det_box("DRIXORAL NASAL", 7.0, 472.0, 929.0, 1004.0),
+            det_box("13.29 GP", 664.0, 936.0, 908.0, 987.0),
+            det_box("13.29", 1080.0, 1257.0, 898.0, 976.0),
+            det_box("SUBTOTAL :", 563.0, 859.0, 977.0, 1053.0),
+            det_box("13.29", 1081.0, 1258.0, 959.0, 1041.0),
+        ];
+
+        let rendered = render(&dets, &group_detections_into_lines(&dets, 1598.0));
+        assert!(
+            rendered.contains(&"DRIXORAL NASAL 13.29 GP 13.29".to_string()),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.contains(&"SUBTOTAL : 13.29".to_string()),
+            "{rendered:?}"
+        );
+        assert!(
+            !is_summary_anchor_label("TOTAL POINTS EARNED TODAY:"),
+            "loyalty prose must not become a structural summary row"
+        );
+    }
+
+    #[test]
+    fn far_right_total_stays_on_the_item_table_header_row() {
+        // Home Hardware 2026-08-09 prints `Total` as the rightmost heading of
+        // `SKU Qty Price Total`. It starts at x=0.716, beyond the normal amount
+        // cut, so treating it as a summary anchor splits the header in two and
+        // prevents the spatial parser from recognising any item rows.
+        let dets = vec![
+            det_box("SKU", 45.0, 125.0, 500.0, 550.0),
+            det_box("Qty", 280.0, 350.0, 500.0, 550.0),
+            det_box("Price", 460.0, 560.0, 500.0, 550.0),
+            det_box("Total", 684.0, 795.0, 500.0, 550.0),
+        ];
+
+        let rendered = render(&dets, &group_detections_into_lines(&dets, 955.0));
+        assert_eq!(rendered, vec!["SKU Qty Price Total"]);
     }
 
     /// Render lines as text, the way the summary-block tests above do.
