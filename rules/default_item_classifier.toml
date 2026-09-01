@@ -388,7 +388,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0028"
-keywords = ["COORS", "SMIRNOFF", "SLEEMAN", "BEER", "WINE", "VODKA", "WHISKEY", "WHISKY", "RUM", "GIN", "TEQUILA", "COGNAC", "CHAMPAGNE", "PROSECCO", "CIDER", "SAKE", "SOJU", "LIQUOR", "LIQUEUR", "LAGER", "STOUT", "PORTER"]
+keywords = ["COORS", "SMIRNOFF", "SLEEMAN", "BEER", "WINE", "VODKA", "WHISKEY", "WHISKY", "RUM", "GIN", "TEQUILA", "COGNAC", "CHAMPAGNE", "PROSECCO", "CIDER", "SAKE", "SOJU", "LIQUOR", "LIQUEUR", "TRIPLE SEC", "LAGER", "STOUT", "PORTER"]
 tags = ["alcohol/beverage"]
 priority = 1
 exact_only = false
@@ -1032,3 +1032,27 @@ keywords = ["COSEQUIN"]
 tags = ["pet"]
 priority = 0
 exact_only = false
+
+# Oyster sauce is a condiment, but the generic OYSTER seafood rule has priority
+# 40 so it intentionally beats the broad priority-0 seasoning table. Give the
+# complete product phrase a narrowly higher priority instead of lifting every
+# seasoning keyword above seafood. Foody Mart truncates SAUCE to SAUC and OCR
+# reads the initial O as Q on the receipt that exposed this.
+[[rules]]
+id = "oyster_sauce_seasoning"
+keywords = ["OYSTER SAUCE", "OYSTER SAUC", "QYSTER SAUC"]
+tags = ["grocery/seasoning"]
+priority = 50
+exact_only = true
+
+# Gochujang is hot-pepper paste, not fresh produce. The full phrase covers
+# ordinary descriptions; the branded truncated spelling is exactly what Foody
+# Mart prints when its fixed-width item column cuts PASTE after the first P.
+# Keeping that truncated alias brand-qualified avoids swallowing products such
+# as a "Hot Pepper Plant" into seasoning.
+[[rules]]
+id = "hot_pepper_paste_seasoning"
+keywords = ["HOT PEPPER PASTE", "CHORIPDONG - HOT PEPPER P"]
+tags = ["grocery/seasoning"]
+priority = 10
+exact_only = true

@@ -78,6 +78,26 @@ pub(crate) fn normalize_decimal_spacing(text: &str) -> String {
     out
 }
 
+/// Repair a trailing Shoppers tax code that OCR confused with the digit `5`.
+///
+/// A bare `9.99 5` stays deliberately invalid: it could be a quantity or a
+/// neighbouring column merged into the line. The repair requires the chain's
+/// stronger row shape, `<unit price> <real tax flags> <extended price> 5`, so
+/// the earlier `GP` (or equivalent) corroborates that the final one-character
+/// column is another tax flag rather than money or quantity.
+fn normalize_tax_code_ocr(text: &str) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let trimmed = text.trim_end();
+    let shoppers_row = RE.get_or_init(|| {
+        Regex::new(r"(?i)\b\d+\.\d{2}\s*\*?[BCFGHJPTXS]{1,3}\d{0,2}\s+\$?\d+\.\d{2}\s+5$").unwrap()
+    });
+    if shoppers_row.is_match(trimmed) {
+        format!("{}S", &trimmed[..trimmed.len() - 1])
+    } else {
+        text.to_string()
+    }
+}
+
 fn parse_cents(token: &str) -> Option<Money> {
     let trimmed = token.trim();
     let (whole, frac) = trimmed.split_once('.')?;
@@ -1974,6 +1994,7 @@ pub fn extract_text_items(
     let normalized_lines: Vec<String> = lines
         .iter()
         .map(|line| normalize_decimal_spacing(line))
+        .map(|line| normalize_tax_code_ocr(&line))
         .collect();
     // Track description lines already consumed by an earlier price so a later
     // price's forward/backward search can't grab the same description. Without
