@@ -273,7 +273,7 @@ fn phase5_on_device_vs_expected() {
                             .iter()
                             .filter(|it| price_matches(price, it.price))
                             .any(|it| {
-                                it.category
+                                it.tag_path
                                     .as_deref()
                                     .is_some_and(|c| category_matches(cat, c, &account_mapping))
                             })

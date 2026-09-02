@@ -764,7 +764,7 @@ fn run_single(
                 "  {:>9}  {:<32}  {}",
                 it.price,
                 it.description,
-                it.category.as_deref().unwrap_or("-")
+                it.tag_path.as_deref().unwrap_or("-")
             );
         }
         println!("\n{}", pr.beancount);
@@ -1370,7 +1370,7 @@ fn score(
                         .iter()
                         .filter(|it| price_matches(price, it.price))
                         .any(|it| {
-                            it.category
+                            it.tag_path
                                 .as_deref()
                                 .is_some_and(|c| category_matches(cat, c, mapping))
                         })

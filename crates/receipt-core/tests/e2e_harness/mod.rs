@@ -114,8 +114,12 @@ fn item_desc_matches(actual: &str, expected: &str) -> bool {
     !e.is_empty() && (a.contains(&e) || e.contains(&a))
 }
 
-/// Expected `category` is an account; parsed `category` is an internal key.
+/// Fixtures assert a beancount **account**; the parse carries a **tag path**.
 /// Match on substring, else resolve both through the account mapping and compare.
+///
+/// The two-sided comparison is load-bearing rather than sloppy: the corpus was
+/// authored against accounts and the parser reports the classification that
+/// produced them, so one side has to be resolved into the other's terms.
 fn category_matches(expected: &str, actual: &str, mapping: &HashMap<String, String>) -> bool {
     let (e, a) = (expected.to_uppercase(), actual.to_uppercase());
     if e.contains(&a) || a.contains(&e) {
@@ -498,7 +502,7 @@ pub fn run_cached_corpus_in(
                         .iter()
                         .filter(|it| price_matches(price, it.price))
                         .any(|it| {
-                            it.category
+                            it.tag_path
                                 .as_deref()
                                 .is_some_and(|k| category_matches(c, k, &mapping))
                         })
@@ -511,7 +515,7 @@ pub fn run_cached_corpus_in(
                             (
                                 it.description.as_str(),
                                 it.price.to_string(),
-                                it.category.as_deref(),
+                                it.tag_path.as_deref(),
                             )
                         })
                         .collect();

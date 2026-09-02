@@ -355,7 +355,7 @@ fn public_live_e2e() {
                         .iter()
                         .filter(|it| price_matches(price, it.price))
                         .any(|it| {
-                            it.category
+                            it.tag_path
                                 .as_deref()
                                 .is_some_and(|k| category_matches(c, k, &account_mapping))
                         })
