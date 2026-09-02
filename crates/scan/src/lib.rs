@@ -20,6 +20,7 @@
 //! could drift and the simulator would stop simulating.
 
 use receipt_core::date::Date;
+use std::fmt;
 use std::time::Instant;
 
 use image::RgbImage;
@@ -29,7 +30,7 @@ use ocr_paddle::prep::resize_and_pad;
 // `ort`, so it re-exports the type for composition layers like this one.
 use ocr_paddle::Result as OcrResult;
 use receipt_core::ocr_transform::RawDetection;
-use receipt_core::process::{process_receipt, ProcessedReceipt};
+use receipt_core::process::{process_receipt_with_options, ProcessOptions, ProcessedReceipt};
 
 // Re-exported so the FFI seam (and the harnesses) can depend on `scan` alone
 // rather than reaching past it into `ocr-paddle`. Keeping the seam's dependency
@@ -39,6 +40,10 @@ pub use ocr_paddle::model_files;
 pub use ocr_paddle::prep::{
     resize_and_pad as prepare_image, MAX_IMAGE_DIMENSION, OCR_IMAGE_PADDING,
 };
+// The overlay knobs are part of this crate's entry point, so callers configure a
+// scan through `scan` alone rather than reaching into `receipt-core` for the
+// options type and into here for the function that consumes it.
+pub use receipt_core::process::ProcessOptions as ScanOptions;
 
 /// End-to-end per-stage timings (milliseconds) for one [`process_image`] call.
 /// `total_ms` is the whole Rust pipeline (prep → OCR → parse); it excludes the
@@ -54,6 +59,62 @@ pub struct ScanTimings {
     pub recognize_ms: f64,
     pub parse_ms: f64,
     pub total_ms: f64,
+}
+
+/// Everything about one scan except the pixels: what to call the receipt, what
+/// "today" is for date inference, and which ledger accounts the beancount is
+/// written against.
+///
+/// Grouping these is not cosmetic. They were six positional parameters, four of
+/// them `&str`, so any two could be swapped silently — `credit_card_account` and
+/// `tax_account` in particular are both accounts and both plausible in either
+/// slot. Named fields make a wrong call site a wrong *name*, which is visible.
+#[derive(Clone, Copy, Debug)]
+pub struct ScanRequest<'a> {
+    pub image_filename: &'a str,
+    pub today: Date,
+    pub credit_card_account: &'a str,
+    pub currency: &'a str,
+    pub tax_account: &'a str,
+    pub image_sha256: Option<&'a str>,
+}
+
+/// Why a composition failed.
+///
+/// Two genuinely different failures meet here: the OCR half can fail at the
+/// model/runtime level, and the parser half can reject the caller's rule
+/// overlays. Keeping them separate lets the FFI seam map each to the error the
+/// apps already distinguish, instead of flattening both to one string.
+#[derive(Debug)]
+pub enum ScanError {
+    /// OCR could not run: model load, session, or inference failure.
+    Ocr(ocr_paddle::Error),
+    /// The caller's item-classifier overlay TOML was not valid.
+    Rules(String),
+}
+
+impl fmt::Display for ScanError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ScanError::Ocr(e) => write!(f, "{e}"),
+            ScanError::Rules(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+impl std::error::Error for ScanError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ScanError::Ocr(e) => Some(e),
+            ScanError::Rules(_) => None,
+        }
+    }
+}
+
+impl From<ocr_paddle::Error> for ScanError {
+    fn from(e: ocr_paddle::Error) -> Self {
+        ScanError::Ocr(e)
+    }
 }
 
 /// Run the whole pipeline: image -> OCR -> parse/categorize/format.
@@ -96,6 +157,41 @@ pub fn process_image_timed(
     tax_account: &str,
     image_sha256: Option<&str>,
 ) -> OcrResult<(ProcessedReceipt, ScanTimings)> {
+    let request = ScanRequest {
+        image_filename,
+        today,
+        credit_card_account,
+        currency,
+        tax_account,
+        image_sha256,
+    };
+    match process_image_with_options(engine, img, request, &ProcessOptions::default()) {
+        Ok(out) => Ok(out),
+        Err(ScanError::Ocr(e)) => Err(e),
+        // Mirrors `receipt_core::process::process_receipt`, which makes the same
+        // claim with the same `expect`: the only way to fail rule loading is an
+        // overlay, and the default options carry none.
+        Err(ScanError::Rules(msg)) => {
+            unreachable!("default ScanOptions never fail rule loading: {msg}")
+        }
+    }
+}
+
+/// The composition, with rule/merchant overlays: **the one implementation** of
+/// prep -> OCR -> parse.
+///
+/// [`process_image`] and [`process_image_timed`] are thin wrappers over this.
+/// The FFI seam's overlay path used to be a second copy of this function; it
+/// drifted no further than duplication before being folded back in, but the
+/// layering test that forbids a second composition root can only read Cargo
+/// manifests, so nothing caught it. Whatever is added here must stay here —
+/// `device_sim` only reproduces device behaviour while there is one copy.
+pub fn process_image_with_options(
+    engine: &mut OcrEngine,
+    img: &RgbImage,
+    request: ScanRequest<'_>,
+    options: &ProcessOptions,
+) -> Result<(ProcessedReceipt, ScanTimings), ScanError> {
     let t_all = Instant::now();
 
     let t = Instant::now();
@@ -124,19 +220,20 @@ pub fn process_image_timed(
         .collect();
 
     let t = Instant::now();
-    let processed = process_receipt(
+    let processed = process_receipt_with_options(
         raw,
         prepared.width() as i64,
         prepared.height() as i64,
         OCR_IMAGE_PADDING as i64,
-        image_filename,
-        None, // bundled default known-merchants
-        today,
-        credit_card_account,
-        currency,
-        tax_account,
-        image_sha256,
-    );
+        request.image_filename,
+        request.today,
+        request.credit_card_account,
+        request.currency,
+        request.tax_account,
+        request.image_sha256,
+        options,
+    )
+    .map_err(ScanError::Rules)?;
     let parse_ms = ms_since(t);
 
     let timings = ScanTimings {
@@ -193,7 +290,7 @@ mod tests {
             p.items.len()
         );
         for it in &p.items {
-            eprintln!("  {:>8}  {}  [{:?}]", it.price, it.description, it.category);
+            eprintln!("  {:>8}  {}  [{:?}]", it.price, it.description, it.tag_path);
         }
         eprintln!("\n--- beancount ---\n{}", result.beancount);
 

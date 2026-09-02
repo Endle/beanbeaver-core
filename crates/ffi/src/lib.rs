@@ -29,7 +29,7 @@ use receipt_core::process::{
     ProcessOptions, ProcessedReceipt, ReceiptCorrections,
 };
 use receipt_core::rules::RuleBook as CoreRuleBook;
-use scan::{process_image_timed, Engine as OcrEngine, ScanTimings as CoreScanTimings};
+use scan::{Engine as OcrEngine, ScanRequest, ScanTimings as CoreScanTimings};
 
 uniffi::setup_scaffolding!();
 
@@ -709,112 +709,36 @@ impl OcrSession {
             msg: format!("engine lock poisoned: {e}"),
         })?;
 
-        // OCR with bundled defaults, then re-parse with overlays when requested.
-        // process_image_timed always uses default rules; when overlays are set we
-        // re-run parse from the same image by calling process_image_timed then
-        // discarding parse… Actually process_image_timed embeds process_receipt
-        // with defaults. For overlays, re-OCR is wasteful; we re-process by
-        // using process_image_timed for timings+OCR and, when options non-empty,
-        // we need detections. Simplest correct path: always use process_image_timed
-        // when options empty; when options non-empty, recognize then process_with_options.
-        let opts = to_process_options(&options);
-        let has_overlay =
-            !opts.item_classifier_override_tomls.is_empty() || opts.known_merchants.is_some();
-
-        if !has_overlay {
-            let (processed, timings) = process_image_timed(
-                &mut engine,
-                &img,
-                "receipt.jpg",
-                today_date(&today)?,
-                &credit_card_account,
-                &currency,
-                &tax_account,
-                Some(&image_sha256),
-            )
-            .map_err(|e| ScanError::Inference { msg: e.to_string() })?;
-            return Ok(to_result(
-                processed,
-                ScanTimings::from_core(timings, decode_ms),
-            ));
-        }
-
-        // Overlay path: reuse process_image_timed's prep/OCR by calling it, then
-        // re-format is insufficient for category overlays — need re-parse.
-        // Call timed path for stage timings, then re-parse detections via a second
-        // process is hard without exposing detections. Fall back to full
-        // process_image_timed (default rules) only for timings of OCR stages, and
-        // separately re-run OCR… That's double. Better: use engine.recognize after prep.
-        use receipt_core::ocr_transform::RawDetection as CoreRaw;
-        use scan::{prepare_image as resize_and_pad, OCR_IMAGE_PADDING};
-
-        let t = Instant::now();
-        let prepared = resize_and_pad(&img);
-        let prep_ms = t.elapsed().as_secs_f64() * 1e3;
-
-        let (detections, ocr) = engine
-            .recognize_image_timed(&prepared)
-            .map_err(|e| ScanError::Inference { msg: e.to_string() })?;
-
-        let raw: Vec<CoreRaw> = detections
-            .into_iter()
-            .map(|d| CoreRaw {
-                points: d
-                    .points
-                    .iter()
-                    .map(|p| (p[0] as f64, p[1] as f64))
-                    .collect(),
-                text: d.text,
-                confidence: d.confidence as f64,
-            })
-            .collect();
-
-        let t = Instant::now();
-        let processed = process_receipt_with_options(
-            raw,
-            prepared.width() as i64,
-            prepared.height() as i64,
-            OCR_IMAGE_PADDING as i64,
-            "receipt.jpg",
-            today_date(&today)?,
-            &credit_card_account,
-            &currency,
-            &tax_account,
-            Some(&image_sha256),
-            &opts,
-        )
-        .map_err(|msg| ScanError::Parse { msg })?;
-        let parse_ms = t.elapsed().as_secs_f64() * 1e3;
-
-        let timings = ScanTimings {
-            spans: vec![
-                PhaseSpan {
-                    phase: Phase::Decode,
-                    ms: decode_ms,
-                },
-                PhaseSpan {
-                    phase: Phase::Prep,
-                    ms: prep_ms,
-                },
-                PhaseSpan {
-                    phase: Phase::Detect,
-                    ms: ocr.detect_ms,
-                },
-                PhaseSpan {
-                    phase: Phase::Classify,
-                    ms: ocr.classify_ms,
-                },
-                PhaseSpan {
-                    phase: Phase::Recognize,
-                    ms: ocr.recognize_ms,
-                },
-                PhaseSpan {
-                    phase: Phase::Parse,
-                    ms: parse_ms,
-                },
-            ],
+        // One call, overlays or not. This used to branch: bundled rules went
+        // through `scan`, and anything with an overlay ran a hand-rolled copy of
+        // `scan::process_image_timed` right here — prep, OCR, detection
+        // conversion and parse, re-derived. The copy was the path a user with
+        // custom rules actually took, and it was the one path `device_sim` could
+        // not reproduce. `layering.rs` forbids exactly this and could not see it:
+        // it reads Cargo manifests, and the copy added no dependency.
+        let request = ScanRequest {
+            image_filename: "receipt.jpg",
+            today: today_date(&today)?,
+            credit_card_account: &credit_card_account,
+            currency: &currency,
+            tax_account: &tax_account,
+            image_sha256: Some(&image_sha256),
         };
-        Ok(to_result(processed, timings))
+        let (processed, timings) = scan::process_image_with_options(
+            &mut engine,
+            &img,
+            request,
+            &to_process_options(&options),
+        )
+        .map_err(|e| match e {
+            scan::ScanError::Ocr(e) => ScanError::Inference { msg: e.to_string() },
+            scan::ScanError::Rules(msg) => ScanError::Parse { msg },
+        })?;
+
+        Ok(to_result(
+            processed,
+            ScanTimings::from_core(timings, decode_ms),
+        ))
     }
 }
 
@@ -1109,10 +1033,11 @@ fn receipt_result_to_parsed(r: &ReceiptResult) -> ParsedReceiptData {
                 description: i.description.clone(),
                 price: Money::from_decimal_str(&i.price),
                 quantity: i.quantity,
-                // The round-trip keeps the most specific tag path as the
-                // category: it is the one that claimed the account, and the
-                // shallower entries are its ancestors.
-                category: i.tags.last().map(|t| t.path.clone()),
+                // The most specific tag path: it is the one that claimed the
+                // account, and the shallower entries are its ancestors. The FFI
+                // record carries `tags` and `account` but not the winning path
+                // itself, so it is recovered from the deepest tag.
+                tag_path: i.tags.last().map(|t| t.path.clone()),
                 account: i.account.clone(),
                 tags: i.tags.iter().map(|t| t.path.clone()).collect(),
             })
