@@ -932,13 +932,10 @@ pub fn extract_tax(lines: &[String]) -> Option<i64> {
                 if !is_total_value && idx + 2 < lines.len() {
                     let line_i2_upper = lines[idx + 2].to_ascii_uppercase();
                     if line_i2_upper.contains("TOTAL") && !line_i2_upper.contains("SUBTOTAL") {
-                        if idx + 3 < lines.len()
-                            && extract_price_from_line(&lines[idx + 3]).is_some()
-                        {
-                            is_total_value = false;
-                        } else {
-                            is_total_value = true;
-                        }
+                        // A price on the line after TOTAL means that price is
+                        // the total, so this earlier amount is not.
+                        is_total_value = !(idx + 3 < lines.len()
+                            && extract_price_from_line(&lines[idx + 3]).is_some());
                     }
                 }
 

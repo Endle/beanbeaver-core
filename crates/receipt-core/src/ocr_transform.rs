@@ -20,6 +20,13 @@ pub struct RawDetection {
     pub confidence: f64,
 }
 
+/// Not `f64::clamp`, which clippy suggests here: the two disagree on NaN.
+/// `NaN.max(0.0).min(1.0)` is `0.0` — `f64::max` returns the non-NaN operand —
+/// while `NaN.clamp(0.0, 1.0)` is NaN. The callers divide a fold seeded with
+/// ±INFINITY by an image dimension, so `0.0 / 0.0` on a degenerate frame reaches
+/// here as NaN, and a NaN coordinate poisons every downstream geometry
+/// comparison silently rather than failing. Keep the pinning behaviour.
+#[allow(clippy::manual_clamp, reason = "differs from clamp on NaN; see above")]
 fn clamp_unit_interval(value: f64) -> f64 {
     value.max(0.0).min(1.0)
 }

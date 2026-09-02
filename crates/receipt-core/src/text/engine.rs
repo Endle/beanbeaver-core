@@ -1687,6 +1687,24 @@ struct BackwardWalk {
     qty: QuantityContext,
 }
 
+/// `12.34 G`: a price and its tax flag alone on a line, with no description.
+fn re_bare_price_with_tax_flag() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(&format!(r"^[\d.]+\s*{TAX_FLAG_CLASS}\s*$")).unwrap())
+}
+
+/// A bare run of 8+ digits: a barcode or member number, never a description.
+fn re_long_digit_run() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^\d{8,}$").unwrap())
+}
+
+/// Digits and dots only — a number, not something to describe an item with.
+fn re_all_digits_and_dots() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^[\d.]+$").unwrap())
+}
+
 /// Walk 3 — the ordinary case: the name is printed above its price.
 ///
 /// This is the only walk that collects quantity context, because a quantity row
@@ -1704,10 +1722,8 @@ fn describe_backward(index: usize, plan: &PricePlan, rows: Lines<'_>) -> Backwar
             break;
         }
         let prev_line = rows.all[j].trim();
-        if Regex::new(&format!(r"^[\d.]+\s*{TAX_FLAG_CLASS}\s*$"))
-            .unwrap()
-            .is_match(prev_line)
-            || Regex::new(r"^\d{8,}$").unwrap().is_match(prev_line)
+        if re_bare_price_with_tax_flag().is_match(prev_line)
+            || re_long_digit_run().is_match(prev_line)
             || re_skip_patterns().is_match(prev_line)
         {
             continue;
@@ -1748,7 +1764,7 @@ fn describe_backward(index: usize, plan: &PricePlan, rows: Lines<'_>) -> Backwar
         if alpha_ratio(&desc_for_ratio) < 0.5 {
             continue;
         }
-        if prev_line.len() > 2 && !Regex::new(r"^[\d.]+$").unwrap().is_match(prev_line) {
+        if prev_line.len() > 2 && !re_all_digits_and_dots().is_match(prev_line) {
             let cleaned_prev = strip_leading_receipt_codes(prev_line);
             if !cleaned_prev.is_empty() {
                 return BackwardWalk {
