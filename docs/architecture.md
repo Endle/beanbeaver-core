@@ -104,8 +104,20 @@ not evidence that the EP is used** — check the cargo feature, not the binary.
 ### `scan`
 
 The composition root, and the only implementation of prep → OCR → parse:
-`scan::process_image` / `process_image_timed`, plus `ScanTimings` (which spans
-both halves, so it cannot live in either).
+`scan::process_image_with_options`, plus `ScanTimings` (which spans both halves,
+so it cannot live in either). `process_image` and `process_image_timed` are thin
+wrappers over it that supply `ScanOptions::default()`; the options-aware entry
+point takes a `ScanRequest` (filename, date, ledger accounts, image hash) so the
+four `&str` parameters that used to sit side by side cannot be swapped silently.
+
+The FFI seam reaches the pipeline **only** through this function. It previously
+did so only for bundled rules, and ran its own copy of prep → OCR → detection
+conversion → parse whenever the caller supplied a rule overlay — so the path a
+user with custom rules actually took was the one `device_sim` could not
+reproduce. `layering.rs` forbids a second composition root and could not see it,
+because a copied function adds no dependency; there is now a source-level
+assertion (`ffi_calls_the_composition_rather_than_re_deriving_it`) alongside the
+manifest ones.
 
 Whole-pipeline diagnostics and tests live here because they need both halves:
 `examples/device_sim.rs`, `tests/public_live_e2e.rs`, `tests/phase5_e2e.rs`.

@@ -157,3 +157,57 @@ fn ffi_composes_through_scan() {
          is exactly one implementation of prep -> OCR -> parse."
     );
 }
+
+/// The dependency check above passed throughout the period when `ffi` held a
+/// second, hand-rolled copy of the composition — prep, OCR, detection
+/// conversion and parse — because a copy adds no dependency. This is the same
+/// rule read from the source instead of the manifest.
+///
+/// Prevents: the seam re-deriving the pipeline out of `scan`'s *parts*. Calling
+/// `prepare_image` or `recognize_image_timed`, or handing raw detections to
+/// `process_receipt*`, means the apps are running a path `device_sim` cannot
+/// reproduce — which is precisely how the last copy went unnoticed.
+#[test]
+fn ffi_calls_the_composition_rather_than_re_deriving_it() {
+    let src =
+        std::fs::read_to_string(crates_dir().join("ffi/src/lib.rs")).expect("read ffi source");
+
+    // Scope: the session's own scanning methods, from `scan` up to (not
+    // including) `parse_detections`. The imports above them are excluded because
+    // `parse_detections` legitimately needs the parser by name — it is the
+    // deliberate second entry point for callers who already own detections (an
+    // external OCR backend, or a frozen list being re-parsed).
+    let start = src
+        .find("    pub fn scan(")
+        .expect("ffi has a `scan` method");
+    let end = src
+        .find("pub fn parse_detections")
+        .expect("ffi has `parse_detections`");
+    // Comments stripped: the rule is about what the seam *calls*. The doc comment
+    // on the scan path names the copied function it replaced, and prose that
+    // explains a rule should not be able to break it.
+    let scanning: String = src[start..end]
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    for forbidden in [
+        "prepare_image",
+        "recognize_image_timed",
+        "process_receipt_with_options",
+        "process_image_timed",
+    ] {
+        assert!(
+            !scanning.contains(forbidden),
+            "ffi's scanning path calls `{forbidden}` — assemble the pipeline in \
+             `scan::process_image_with_options`, not at the seam, so `device_sim` \
+             still runs what the apps run."
+        );
+    }
+
+    assert!(
+        scanning.contains("process_image_with_options"),
+        "ffi must reach the pipeline through `scan::process_image_with_options`."
+    );
+}
