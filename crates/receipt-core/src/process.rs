@@ -182,7 +182,7 @@ pub fn field_confidence(parsed: &ParsedReceiptData) -> FieldConfidence {
         let cat = parsed
             .items
             .iter()
-            .filter(|it| it.category.as_ref().is_some_and(|c| !c.is_empty()))
+            .filter(|it| it.tag_path.as_ref().is_some_and(|c| !c.is_empty()))
             .count() as f64;
         cat / n
     };
@@ -291,7 +291,7 @@ fn format_from_parsed(
     // classifier resolved it at parse time, and `reformat_parsed_receipt`
     // re-resolves it for any line the user edited. This used to also consult a
     // positional override list on `corrections`, which changed the beancount
-    // posting while leaving `item.category` and the item's tags saying something
+    // posting while leaving `item.tag_path` and the item's tags saying something
     // else; the two could not be told apart by any consumer.
     let item_accounts: Vec<String> = parsed
         .items
@@ -572,8 +572,14 @@ pub fn reformat_parsed_receipt(
             .collect();
 
         let mut rebuilt = Vec::with_capacity(items.len());
-        for item in items {
-            let price = Money::from_decimal_str(&item.price);
+        for (i, item) in items.iter().enumerate() {
+            // Strict: this is a number the user typed. The lenient parser reads
+            // "12x.99" as $0.00 and "$12.34" as $0.34, and a corrected receipt
+            // that silently records the wrong amount is worse than one that
+            // refuses the edit. The row index is in the message because the app
+            // shows an editable list.
+            let price =
+                Money::parse_strict(&item.price).map_err(|e| format!("item {}: {e}", i + 1))?;
             // A line has to be worth at least one of something. Quantity is
             // display-only here (prices on a receipt are already extended), so
             // clamping cannot move an amount.
@@ -591,7 +597,7 @@ pub fn reformat_parsed_receipt(
                     description: item.description.clone(),
                     price,
                     quantity,
-                    category: prior.category.clone(),
+                    tag_path: prior.tag_path.clone(),
                     account: prior.account.clone(),
                     tags: prior.tags.clone(),
                 }
@@ -602,13 +608,14 @@ pub fn reformat_parsed_receipt(
         parsed_out.items = rebuilt;
     }
     if let Some(total) = &corrections.total {
-        parsed_out.total = Money::from_decimal_str(total);
+        parsed_out.total = Money::parse_strict(total).map_err(|e| format!("total: {e}"))?;
     }
     if let Some(tax) = &corrections.tax {
-        parsed_out.tax = Some(Money::from_decimal_str(tax));
+        parsed_out.tax = Some(Money::parse_strict(tax).map_err(|e| format!("tax: {e}"))?);
     }
     if let Some(subtotal) = &corrections.subtotal {
-        parsed_out.subtotal = Some(Money::from_decimal_str(subtotal));
+        parsed_out.subtotal =
+            Some(Money::parse_strict(subtotal).map_err(|e| format!("subtotal: {e}"))?);
     }
 
     if corrections.items.is_some()
@@ -664,7 +671,7 @@ mod tests {
                 description: "Milk".into(),
                 price: "10.00".into(),
                 quantity: 1,
-                category: Some("grocery/dairy".into()),
+                tag_path: Some("grocery/dairy".into()),
                 account: Some("Expenses:Food:Grocery:Dairy".into()),
                 tags: vec!["grocery".into(), "grocery/dairy".into()],
             }],
@@ -716,7 +723,7 @@ mod tests {
         assert!(out.beancount.contains("2026-03-01"));
         // Items untouched by a header-only correction.
         assert_eq!(
-            out.parsed.items[0].category.as_deref(),
+            out.parsed.items[0].tag_path.as_deref(),
             Some("grocery/dairy")
         );
         // User merchant edit is high-trust.
@@ -766,6 +773,121 @@ mod tests {
         warnings.iter().any(|w| w.kind == kind)
     }
 
+    fn try_reformat(
+        parsed: &ParsedReceiptData,
+        corrections: &ReceiptCorrections,
+    ) -> Result<ProcessedReceipt, String> {
+        reformat_parsed_receipt(
+            parsed,
+            Date::new(2026, 7, 1).unwrap(),
+            "Liabilities:CreditCard",
+            "CAD",
+            "Expenses:Tax:HST",
+            None,
+            corrections,
+            None,
+        )
+    }
+
+    /// The defect `tag_path` is named for: a scanned line reported
+    /// `grocery/dairy` here and a line the user re-tagged reported
+    /// `Expenses:Food:Grocery:Dairy` — the same field, two kinds of string, and
+    /// no way for a reader to tell which one it held.
+    #[test]
+    fn a_corrected_line_reports_the_same_kind_of_classification_as_a_scanned_one() {
+        let parsed = sample_parsed();
+        let scanned = parsed.items[0].tag_path.clone();
+        assert_eq!(scanned.as_deref(), Some("grocery/dairy"));
+
+        let corrections = ReceiptCorrections {
+            items: Some(vec![item("MILK", "6.69", "grocery/dairy")]),
+            ..no_corrections()
+        };
+        let out = try_reformat(&parsed, &corrections).expect("reformat");
+        let corrected = &out.parsed.items[0];
+
+        assert_eq!(
+            corrected.tag_path, scanned,
+            "a user-picked tag must land in `tag_path` as a tag path, not as the \
+             account it resolves to"
+        );
+        // The account is still resolved and still available — it just lives in
+        // the field that says "account".
+        assert_eq!(
+            corrected.account.as_deref(),
+            Some("Expenses:Food:Grocery:Dairy")
+        );
+        assert!(corrected
+            .tag_path
+            .as_deref()
+            .is_some_and(|p| !p.starts_with("Expenses:")));
+    }
+
+    /// A correction is a number a person typed, so it is refused rather than
+    /// guessed at. Every input here used to reformat "successfully" into a
+    /// plausible wrong amount: `12x.99` became $0.00, `$12.34` became $0.34.
+    #[test]
+    fn a_correction_that_is_not_a_number_is_refused_not_read_as_zero() {
+        let parsed = sample_parsed();
+        for bad in ["12x.99", "$12.34", "1,234.56", "", "abc", "12.345"] {
+            let corrections = ReceiptCorrections {
+                items: Some(vec![item("MILK", bad, "")]),
+                ..no_corrections()
+            };
+            let err = try_reformat(&parsed, &corrections)
+                .expect_err(&format!("accepted item price {bad:?}"));
+            assert!(
+                err.contains("item 1") && err.contains(bad),
+                "message should name the row and quote the input, got {err:?}"
+            );
+
+            for (label, corrections) in [
+                (
+                    "total",
+                    ReceiptCorrections {
+                        total: Some(bad.to_string()),
+                        ..no_corrections()
+                    },
+                ),
+                (
+                    "tax",
+                    ReceiptCorrections {
+                        tax: Some(bad.to_string()),
+                        ..no_corrections()
+                    },
+                ),
+                (
+                    "subtotal",
+                    ReceiptCorrections {
+                        subtotal: Some(bad.to_string()),
+                        ..no_corrections()
+                    },
+                ),
+            ] {
+                let err = try_reformat(&parsed, &corrections)
+                    .expect_err(&format!("accepted {label} {bad:?}"));
+                assert!(err.starts_with(label), "got {err:?}");
+            }
+        }
+    }
+
+    /// The other half of the contract: strictness must not reject the shapes the
+    /// editor actually produces, including this crate's own rendering.
+    #[test]
+    fn ordinary_corrections_still_apply() {
+        let parsed = sample_parsed();
+        let corrections = ReceiptCorrections {
+            items: Some(vec![item("MILK", "6.69", "")]),
+            total: Some("7.56".into()),
+            tax: Some("0.87".into()),
+            subtotal: Some("6.69".into()),
+            ..no_corrections()
+        };
+        let out = try_reformat(&parsed, &corrections).expect("valid corrections apply");
+        assert_eq!(out.parsed.items[0].price, Money::from_cents(669));
+        assert_eq!(out.parsed.total, Money::from_cents(756));
+    }
+
     #[test]
     fn a_renamed_line_is_reclassified_from_its_new_text() {
         let parsed = sample_parsed();
@@ -798,7 +920,7 @@ mod tests {
             description: "TIDE CQLDWTR (Cold Water)".into(),
             price: "10.00".into(),
             quantity: 1,
-            category: Some("Expenses:Home:HouseholdSupply".into()),
+            tag_path: Some("household/supply".into()),
             account: Some("Expenses:Home:HouseholdSupply".into()),
             tags: vec!["household".into(), "household/supply".into()],
         };

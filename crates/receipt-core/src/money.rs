@@ -29,6 +29,24 @@ use std::fmt;
 use std::iter::Sum;
 use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 
+/// A string handed to [`Money::parse_strict`] that is not a money amount.
+///
+/// Carries the offending input so the message a user sees can quote what they
+/// actually typed, which is the difference between "invalid price" and
+/// "invalid price: 12x.99".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MoneyParseError {
+    pub input: String,
+}
+
+impl fmt::Display for MoneyParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "not a valid amount: {:?}", self.input)
+    }
+}
+
+impl std::error::Error for MoneyParseError {}
+
 /// An amount of money, in cents, truncated. See the module docs.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
 pub struct Money(i64);
@@ -68,6 +86,75 @@ impl Money {
     #[inline]
     pub const fn from_scaled_4(scaled: i64) -> Self {
         Money(scaled / 100)
+    }
+
+    /// Parse a decimal string, rejecting anything that is not money.
+    ///
+    /// The counterpart to [`Money::from_decimal_str`], and the one to use on
+    /// **input a human typed**. The lenient parser reads `"12x.99"` as `$0.00`
+    /// and `"$12.34"` as `$0.34` — silently, with no way for a caller to tell
+    /// those from a real zero. That is tolerable over text this crate emitted
+    /// itself; it is not tolerable over a correction, where the whole point of
+    /// the edit is that the number matters.
+    ///
+    /// Deliberately strict rather than forgiving: optional `-`, decimal digits,
+    /// an optional `.` with at most two fractional digits, and at least one
+    /// digit overall. No currency symbols, no thousands separators, no
+    /// whitespace inside. Presentation-level tidying belongs in the UI that owns
+    /// the text field — core cannot tell a `,` meant as a thousands separator
+    /// from one meant as a decimal point, and guessing is how `1,50` becomes
+    /// `$150.00`.
+    ///
+    /// Unlike the lenient parser this is also overflow-safe; `whole * 100` there
+    /// wraps in release and panics in debug on absurd input.
+    pub fn parse_strict(value: &str) -> Result<Money, MoneyParseError> {
+        let bad = || MoneyParseError {
+            input: value.to_string(),
+        };
+        if value.is_empty() {
+            return Err(bad());
+        }
+        let (negative, unsigned) = match value.strip_prefix('-') {
+            Some(rest) => (true, rest),
+            None => (false, value),
+        };
+
+        let mut parts = unsigned.split('.');
+        let whole_str = parts.next().unwrap_or_default();
+        let frac_str = parts.next().unwrap_or("");
+        // A second `.` means this is not a decimal number.
+        if parts.next().is_some() {
+            return Err(bad());
+        }
+        // "." alone, "-" alone, "-.": no digits at all.
+        if whole_str.is_empty() && frac_str.is_empty() {
+            return Err(bad());
+        }
+        if frac_str.len() > 2 {
+            return Err(bad());
+        }
+        let digits_only = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+        if !digits_only(whole_str) || !digits_only(frac_str) {
+            return Err(bad());
+        }
+
+        let whole: i64 = if whole_str.is_empty() {
+            0
+        } else {
+            whole_str.parse().map_err(|_| bad())?
+        };
+        // "5" -> 0 cents of fraction; "5.1" -> 10; "5.12" -> 12.
+        let frac: i64 = match frac_str.len() {
+            0 => 0,
+            1 => frac_str.parse::<i64>().map_err(|_| bad())? * 10,
+            _ => frac_str.parse().map_err(|_| bad())?,
+        };
+
+        let cents = whole
+            .checked_mul(100)
+            .and_then(|c| c.checked_add(frac))
+            .ok_or_else(bad)?;
+        Ok(Money(if negative { -cents } else { cents }))
     }
 
     /// Parse a decimal string. **Lenient and total**: anything unparseable reads
@@ -221,6 +308,74 @@ mod tests {
         assert_eq!(Money::from_decimal_str(""), Money::ZERO);
         assert_eq!(Money::from_decimal_str("   "), Money::ZERO);
         assert_eq!(Money::from_decimal_str("abc"), Money::ZERO);
+    }
+
+    /// The cases that motivated `parse_strict`: each of these is a number the
+    /// lenient parser turns into a *plausible* wrong amount rather than a
+    /// refusal, which is invisible once it reaches a ledger.
+    #[test]
+    fn parse_strict_rejects_what_the_lenient_parser_silently_mangles() {
+        for (input, lenient_reads_as) in [
+            ("12x.99", Money::from_cents(99)),
+            ("$12.34", Money::from_cents(34)),
+            ("1,234.56", Money::from_cents(56)),
+            ("12.34.56", Money::from_cents(1234)),
+            ("abc", Money::ZERO),
+            ("", Money::ZERO),
+            (" 12.34", Money::from_cents(1234)),
+            ("12.345", Money::from_cents(1234)),
+        ] {
+            assert_eq!(
+                Money::from_decimal_str(input),
+                lenient_reads_as,
+                "lenient reading of {input:?} changed — the point of this test is \
+                 the contrast, so re-check the strict expectation below too"
+            );
+            assert!(
+                Money::parse_strict(input).is_err(),
+                "parse_strict accepted {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_strict_accepts_the_shapes_a_person_or_this_crate_writes() {
+        for (input, expected) in [
+            ("12.34", Money::from_cents(1234)),
+            ("0.00", Money::ZERO),
+            ("-1.50", Money::from_cents(-150)),
+            ("12", Money::from_cents(1200)),
+            ("12.5", Money::from_cents(1250)),
+            (".50", Money::from_cents(50)),
+            ("-0.01", Money::from_cents(-1)),
+        ] {
+            assert_eq!(Money::parse_strict(input), Ok(expected), "input {input:?}");
+        }
+    }
+
+    /// Everything `Money` renders must parse back exactly, or the round trip
+    /// through the FFI would start rejecting this crate's own output.
+    #[test]
+    fn parse_strict_round_trips_every_rendered_amount() {
+        for cents in [0, 1, -1, 99, 100, -12_345, 22_197, i64::MAX / 100] {
+            let m = Money::from_cents(cents);
+            assert_eq!(Money::parse_strict(&m.to_string()), Ok(m), "cents {cents}");
+        }
+    }
+
+    /// The lenient parser computes `whole * 100` unchecked, so this input panics
+    /// in debug and wraps in release. Strict parsing reports it instead.
+    #[test]
+    fn parse_strict_reports_overflow_rather_than_wrapping() {
+        // i64::MAX is 9_223_372_036_854_775_807 cents, so this is the largest
+        // amount that fits exactly — it must parse, not be rejected as overflow.
+        assert_eq!(
+            Money::parse_strict("92233720368547758.07"),
+            Ok(Money::from_cents(i64::MAX))
+        );
+        // One cent more, and a whole part too large to scale at all.
+        assert!(Money::parse_strict("92233720368547758.08").is_err());
+        assert!(Money::parse_strict("999999999999999999999").is_err());
     }
 
     #[test]

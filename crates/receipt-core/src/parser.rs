@@ -25,14 +25,21 @@ pub struct ParsedReceiptItem {
     pub price: Money,
     pub quantity: i32,
     /// The winning rule's declared tag path (`grocery/dairy`), or `None`.
-    pub category: Option<String>,
-    /// The beancount account `category` resolves to, resolved at parse time so
+    ///
+    /// Named `tag_path` and not `category` because it held both: the scan path
+    /// wrote a tag path here and [`item_with_tag_path`] wrote a beancount
+    /// account, so the same field meant different things depending on whether a
+    /// receipt had been scanned or corrected. Nothing could tell them apart —
+    /// the E2E harness had to compare a tag path against an account by resolving
+    /// both through the account map and hoping.
+    pub tag_path: Option<String>,
+    /// The beancount account `tag_path` resolves to, resolved at parse time so
     /// consumers do not have to carry the account map around. `None` when the
     /// path claims no account.
     pub account: Option<String>,
     /// The beanbeaver-internal semantic classification for this line — a
     /// multi-tag view (e.g. `["grocery", "meat", "chicken"]`) that is upstream
-    /// of, and richer than, the single `category` beancount account. Consumers
+    /// of, and richer than, the single `account` this resolves to. Consumers
     /// (the app UI) can present or filter on tags without reverse-engineering
     /// the account path. Empty when no classifier rule matched.
     pub tags: Vec<String>,
@@ -162,7 +169,7 @@ fn build_item(
     // Fallback ordering sidesteps both: a line the rules already understand is
     // untouched, and expansion can only ever fill a gap.
     let printed_category = categorize_description(category_source, rule_layers);
-    let (category, tags) = if printed_category.is_some() {
+    let (tag_path, tags) = if printed_category.is_some() {
         (printed_category, item_tags(category_source, rule_layers))
     } else {
         match vocab.and_then(|vocab| {
@@ -189,7 +196,7 @@ fn build_item(
     };
 
     let account = categories::resolve_account_target(
-        category.as_deref(),
+        tag_path.as_deref(),
         &rule_layers.category_rules.account_mapping,
         None,
     );
@@ -198,7 +205,7 @@ fn build_item(
         description,
         price,
         quantity,
-        category,
+        tag_path,
         account,
         tags,
     }
@@ -220,9 +227,9 @@ pub fn classified_item(
     quantity: i32,
     rule_layers: &ParserRuleLayers,
 ) -> ParsedReceiptItem {
-    let category = categorize_description(&description, rule_layers);
+    let tag_path = categorize_description(&description, rule_layers);
     let account = categories::resolve_account_target(
-        category.as_deref(),
+        tag_path.as_deref(),
         &rule_layers.category_rules.account_mapping,
         None,
     );
@@ -230,7 +237,7 @@ pub fn classified_item(
         description: description.clone(),
         price,
         quantity,
-        category,
+        tag_path,
         account,
         tags: item_tags(&description, rule_layers),
     }
@@ -295,7 +302,11 @@ pub fn item_with_tag_path(
         description,
         price,
         quantity,
-        category: account.clone(),
+        // The path the user picked, not the account it resolves to. Storing the
+        // account here is what made this field ambiguous: a corrected line
+        // reported `Expenses:Food:Grocery:Dairy` where a scanned one reported
+        // `grocery/dairy`, and `account` already carries the account anyway.
+        tag_path: Some(tag_path.to_string()),
         account,
         tags: categories::expand_tag_paths(std::slice::from_ref(&tag_path.to_string())),
     })
