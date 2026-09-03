@@ -761,8 +761,9 @@ fn pair_columns(
             if assigned_prices[slot] {
                 continue;
             }
-            let same_row = boxes_overlap_y(&dets[left_index], &dets[right_index], PAIR_OVERLAP_GATE)
-                || row.contains(&right_index);
+            let same_row =
+                boxes_overlap_y(&dets[left_index], &dets[right_index], PAIR_OVERLAP_GATE)
+                    || row.contains(&right_index);
             if !same_row || !claim.accepts(&dets[right_index].text) {
                 continue;
             }
@@ -1045,7 +1046,9 @@ mod tests {
         ];
         let lines = group_detections_into_lines(&dets, 1000.0);
         assert!(lines.iter().any(|line| line == &vec![2, 3]));
-        assert!(!lines.iter().any(|line| line.contains(&0) && line.contains(&3)));
+        assert!(!lines
+            .iter()
+            .any(|line| line.contains(&0) && line.contains(&3)));
     }
 
     fn det_span(text: &str, min_x: f64, y_min: f64, y_max: f64) -> Detection {
