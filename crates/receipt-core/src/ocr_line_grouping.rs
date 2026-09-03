@@ -590,8 +590,9 @@ fn score_less(a: (u8, f64, f64), b: (u8, f64, f64)) -> bool {
 /// window is the wrong instrument because it is asked between the two tokens on
 /// a row that are furthest apart, and so have accumulated the most drift; the
 /// tokens in between have not. [`row_reach`] walks the row through them at this
-/// same 0.3, which takes that receipt from 12/17 items to 14/17 with no other
-/// receipt in the 133-fixture corpus changing at all. The gate stays at 0.3.
+/// same 0.3, which takes that receipt from 12/17 items to 14/17 — the corpus
+/// from 1063 to 1065 critical items — with no other receipt in the 133-fixture
+/// corpus changing at all. The gate stays at 0.3.
 const PAIR_OVERLAP_GATE: f64 = 0.3;
 
 /// Where the RIGHT (amount) column starts, as a fraction of image width.
@@ -633,11 +634,11 @@ const RIGHT_COLUMN_CUT: f64 = 0.7;
 /// too small to matter, while the top of the item block was drifting most of a
 /// row across the width of the page.
 ///
-/// Swept over the 133-receipt corpus (critical items / totals):
+/// Swept over the 133-receipt corpus (critical items / totals, of 1176 / 133):
 ///
 /// | deg | 1.5 | 2.0 | 3.0 | 4.0 | 5.0 | 6.0 | 8.0 |
 /// |---|---|---|---|---|---|---|---|
-/// | items | 1059 | 1059 | 1061 | 1061 | 1061 | 1061 | 1061 |
+/// | items | 1063 | 1063 | 1065 | 1065 | 1065 | 1065 | 1065 |
 /// | totals | 131 | 131 | 131 | 131 | 131 | 131 | **130** |
 ///
 /// Below 3 deg the walk cannot reach across the receipt that motivated it, which
