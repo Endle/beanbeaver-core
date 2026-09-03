@@ -15,20 +15,17 @@
     {
       "description": "CRUSH ZERO ORANG",
       "price": "8.29",
-      "category": "Expenses:Food:Grocery:Drink",
-      "known_failure": true
+      "category": "Expenses:Food:Grocery:Drink"
     },
     {
       "description": "PEACE TEA MANGO",
       "price": "1.25",
-      "category": "Expenses:Food:Grocery:Drink",
-      "known_failure": true
+      "category": "Expenses:Food:Grocery:Drink"
     },
     {
       "description": "FANTA STRAWBERRY",
       "price": "2.99",
-      "category": "Expenses:Food:Grocery:Drink",
-      "known_failure": true
+      "category": "Expenses:Food:Grocery:Drink"
     },
     {
       "description": "DICED TOMATO",

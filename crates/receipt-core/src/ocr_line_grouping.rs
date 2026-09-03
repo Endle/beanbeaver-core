@@ -585,6 +585,14 @@ fn score_less(a: (u8, f64, f64), b: (u8, f64, f64)) -> bool {
 /// loosening lets the structural row next to an amount claim it everywhere else,
 /// and that costs more than it earns. Those receipts need the structural rows
 /// typed (see [`AmountClaim`]), not a wider window.
+///
+/// **rcss_20260130 has since been fixed, and not by moving this gate.** The
+/// window is the wrong instrument because it is asked between the two tokens on
+/// a row that are furthest apart, and so have accumulated the most drift; the
+/// tokens in between have not. [`row_reach`] walks the row through them at this
+/// same 0.3, which takes that receipt from 12/17 items to 14/17 — the corpus
+/// from 1063 to 1065 critical items — with no other receipt in the 133-fixture
+/// corpus changing at all. The gate stays at 0.3.
 const PAIR_OVERLAP_GATE: f64 = 0.3;
 
 /// Where the RIGHT (amount) column starts, as a fraction of image width.
@@ -613,6 +621,99 @@ const PAIR_OVERLAP_GATE: f64 = 0.3;
 /// do not "fix" the partition without moving that too.
 const RIGHT_COLUMN_CUT: f64 = 0.7;
 
+/// The steepest a single printed row's baseline may run, in degrees, for
+/// [`row_reach`] to follow it across the page.
+///
+/// A photographed receipt is not flat, and the deformation that matters here is
+/// not the one [`crate::detection_normalization::deskew`] corrects. That pass
+/// removes a *global* shear; a receipt held with a curl in it has a baseline
+/// slope that varies down the page, and no single angle straightens it. The
+/// no_frills receipt this was measured on runs 2.74 deg at its first item row,
+/// 2.44, 1.52 and 1.13 over the next three, then settles at 0.3-0.6 deg for the
+/// rest — so the sweep's whole-page minimum was 0.37 deg, correctly declined as
+/// too small to matter, while the top of the item block was drifting most of a
+/// row across the width of the page.
+///
+/// Swept over the 133-receipt corpus (critical items / totals, of 1176 / 133):
+///
+/// | deg | 1.5 | 2.0 | 3.0 | 4.0 | 5.0 | 6.0 | 8.0 |
+/// |---|---|---|---|---|---|---|---|
+/// | items | 1063 | 1063 | 1065 | 1065 | 1065 | 1065 | 1065 |
+/// | totals | 131 | 131 | 131 | 131 | 131 | 131 | **130** |
+///
+/// Below 3 deg the walk cannot reach across the receipt that motivated it, which
+/// tilts 2.74 deg. Above 6 deg it starts crossing rows: at 8 deg the item count
+/// is unchanged but it is a *trade* — lcbo/unknown-date_lcbo_74_35 gains one and
+/// costco/2026-04-26_costco_173_15 loses one — and a **total** goes with it,
+/// which is the more severe defect. 4.0 is the middle of the flat 3-6 band.
+const ROW_CHAIN_MAX_TILT_DEG: f64 = 4.0;
+
+fn row_chain_max_tilt() -> f64 {
+    static TAN: OnceLock<f64> = OnceLock::new();
+    *TAN.get_or_init(|| ROW_CHAIN_MAX_TILT_DEG.to_radians().tan())
+}
+
+/// Every detection that sits on the same printed row as `anchor_index`, to its
+/// right — the row followed hop by hop rather than assumed straight.
+///
+/// [`PAIR_OVERLAP_GATE`] asks whether a label's box and an amount's box overlap
+/// *each other*, which on a tilted row is the hardest question on the receipt:
+/// the two are the furthest-apart tokens on it, so they accumulate the most
+/// drift. The tokens between them do not have that problem — neighbours on a row
+/// are close enough in x that the drift between them is a fraction of a row — so
+/// the row can be walked instead of jumped. Each hop is the same overlap test at
+/// the same gate; what changes is that it is asked between adjacent tokens.
+///
+/// This is what separates a tilted row from the row below it, and the separation
+/// is not marginal. On the no_frills receipt in [`ROW_CHAIN_MAX_TILT_DEG`],
+/// `03120044526` overlaps its own `4.50` by **0.277** against the 0.3 gate and
+/// declines it, while the `RH FLOUR ALL` row below overlaps that same amount by
+/// **0.917** and takes it — and because amounts are consumed one-to-one in
+/// reading order, every row under it inherits its neighbour's price and the last
+/// one falls off the receipt as an orphan. Walking the row instead reaches the
+/// amount through `COCKTAIL JCE` and `MRJ`, both of which overlap their
+/// neighbours by more than 0.8.
+///
+/// The tilt cap is what stops the walk from wandering onto another row: a chain
+/// is only followed while it stays within [`ROW_CHAIN_MAX_TILT_DEG`] of the
+/// anchor's own baseline, measured from the anchor rather than hop to hop so the
+/// error cannot accumulate.
+fn row_reach(dets: &[Detection], anchor_index: usize, x_order: &[usize]) -> Vec<usize> {
+    let anchor = &dets[anchor_index];
+    let max_tilt = row_chain_max_tilt();
+    let mut reached: Vec<usize> = Vec::new();
+    for &index in x_order {
+        if index == anchor_index {
+            continue;
+        }
+        let det = &dets[index];
+        let run = det.min_x - anchor.min_x;
+        if run <= 0.0 || (det.center_y - anchor.center_y).abs() > run * max_tilt {
+            continue;
+        }
+        let linked = boxes_overlap_y(anchor, det, PAIR_OVERLAP_GATE)
+            || reached.iter().any(|&hop| {
+                dets[hop].min_x < det.min_x && boxes_overlap_y(&dets[hop], det, PAIR_OVERLAP_GATE)
+            });
+        if linked {
+            reached.push(index);
+        }
+    }
+    reached
+}
+
+/// Detection indices ordered by `min_x`, the order [`row_reach`] walks a row in.
+fn x_order(dets: &[Detection]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..dets.len()).collect();
+    order.sort_by(|&a, &b| {
+        dets[a]
+            .min_x
+            .partial_cmp(&dets[b].min_x)
+            .unwrap_or(Ordering::Equal)
+    });
+    order
+}
+
 /// Pair LEFT labels to RIGHT amounts, returning the RIGHT slot each LEFT
 /// position claimed.
 ///
@@ -640,6 +741,7 @@ fn pair_columns(
     // `Never` are skipped rather than recorded, so a breakdown separated from
     // its item by a savings notice still sees the item's outcome.
     let mut last_eligible_claimed = false;
+    let x_order = x_order(dets);
     for (position, &left_index) in left.iter().enumerate() {
         let mut claim = amount_claim(&dets[left_index].text);
         // A breakdown row holds the extended price on some chains and nothing on
@@ -655,13 +757,15 @@ fn pair_columns(
             continue;
         }
         let mut matched: Option<usize> = None;
+        let row = row_reach(dets, left_index, &x_order);
         for (slot, &right_index) in right.iter().enumerate() {
             if assigned_prices[slot] {
                 continue;
             }
-            if !boxes_overlap_y(&dets[left_index], &dets[right_index], PAIR_OVERLAP_GATE)
-                || !claim.accepts(&dets[right_index].text)
-            {
+            let same_row =
+                boxes_overlap_y(&dets[left_index], &dets[right_index], PAIR_OVERLAP_GATE)
+                    || row.contains(&right_index);
+            if !same_row || !claim.accepts(&dets[right_index].text) {
                 continue;
             }
             // Second guard for breakdowns, for the chains that print the item
@@ -904,6 +1008,48 @@ mod tests {
         // top row first, item before price
         assert_eq!(lines[0], vec![0, 1]);
         assert_eq!(lines[1], vec![2, 3]);
+    }
+
+    #[test]
+    fn a_tilted_row_keeps_its_own_price() {
+        // Real geometry, no_frills 2026-08-30 (the top two item rows), where the
+        // baseline runs 2.7 deg and the page is 1531 wide: `03120044526`
+        // overlaps its own `4.50` by 0.277 against the 0.3 gate, while the row
+        // below it overlaps that same amount by 0.917. Direct pairing hands 4.50
+        // to RH FLOUR and every row under it inherits its neighbour's price;
+        // walking the row through COCKTAIL JCE and MRJ does not.
+        let dets = vec![
+            det_span("03120044526", 83.0, 583.7, 652.7),
+            det_span("COCKTAIL JCE", 445.0, 601.1, 669.3),
+            det_span("MRJ", 929.0, 628.5, 684.3),
+            det_span("4.50", 1100.0, 635.1, 698.5),
+            det_span("05900001652", 86.0, 640.3, 706.0),
+            det_span("RH FLOUR ALL", 445.0, 654.3, 720.4),
+            det_span("MRJ", 931.0, 674.9, 730.7),
+            det_span("11.97", 1091.0, 687.7, 744.1),
+        ];
+        let lines = group_detections_into_lines(&dets, 1531.0);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], vec![0, 1, 2, 3]);
+        assert_eq!(lines[1], vec![4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn a_row_does_not_reach_the_next_rows_price() {
+        // The same walk must not cross rows on a receipt that is not tilted: the
+        // first row has no amount of its own, and the second row's price is a
+        // full row below it.
+        let dets = vec![
+            det_span("232952 COKE", 120.0, 200.0, 240.0),
+            det_span("DEPOSIT INCLUDED", 400.0, 200.0, 240.0),
+            det_span("305882 IBU", 120.0, 320.0, 360.0),
+            det_span("16.99", 760.0, 320.0, 360.0),
+        ];
+        let lines = group_detections_into_lines(&dets, 1000.0);
+        assert!(lines.iter().any(|line| line == &vec![2, 3]));
+        assert!(!lines
+            .iter()
+            .any(|line| line.contains(&0) && line.contains(&3)));
     }
 
     fn det_span(text: &str, min_x: f64, y_min: f64, y_max: f64) -> Detection {
