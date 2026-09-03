@@ -163,6 +163,13 @@ display = "Gift Card"
 path = "discount"
 display = "Discount"
 
+# A root of its own for the same reason `discount` is one: a container deposit
+# is a deposit whatever it was charged on, and it is not a property of the drink
+# it came with.
+[[tags]]
+path = "deposit"
+display = "Deposit"
+
 [[tags]]
 path = "household"
 display = "Household"
@@ -270,3 +277,8 @@ display = "Gift Card"
 # still open — that is a change to how the entry is built, not to where an
 # un-netted discount files, and this table is the layer to override either way.
 "discount" = "Expenses:Discount"
+# Like `discount`, this claims an account so a bare deposit line stops reading as
+# Expenses:FIXME. See the `container_deposit` rule for why a deposit that names
+# its product files with the product instead, and why an asset account is a
+# defensible override here.
+"deposit" = "Expenses:Deposit"

@@ -16,7 +16,14 @@
 #           (seasoning, legacy_0019) fuzzy-matched "Preserved duck $" at a T&T
 #           deli counter and filed the duck as a seasoning. 榨菜 is always
 #           printed in full, so requiring a literal match costs nothing.
-exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG"]
+#   JCE     (juice, legacy_0025) is the Loblaw chains' truncation of JUICE, and
+#           at three characters its fuzzy neighborhood is everything: ICE, ACE,
+#           JAR. It only ever appears as a literal abbreviation, so nothing is
+#           lost by requiring one.
+#   CRAN    (juice, legacy_0025) is CRANBERRY truncated to the width of the
+#           column. Fuzzily it reaches CRAB and BRAN, both of which are real
+#           products in other categories.
+exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN"]
 
 # BRANDS — text that names the maker, blanked out before any keyword is matched.
 #
@@ -323,7 +330,11 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0025"
-keywords = ["ORANGE JUICE", "APPLE JUICE", "GRAPE JUICE", "FRUIT PUNCH", "CRANBERRY", "LEMONADE", "SMOOTHIE", "JUICE", "V8", "PC OJ"]
+# JCE and CRAN are receipt truncations, not words: the Loblaw chains cut the
+# description to the column width, so "PC 100% CRAN" and "COCKTAIL JCE" carry no
+# spelled-out signal at all. Both are listed in `exact_only_keywords` above —
+# they are far too short to survive the fuzzy stage safely.
+keywords = ["ORANGE JUICE", "APPLE JUICE", "GRAPE JUICE", "FRUIT PUNCH", "CRANBERRY", "LEMONADE", "SMOOTHIE", "JUICE", "JCE", "CRAN", "V8", "PC OJ"]
 tags = ["grocery/drink/juice"]
 priority = 0
 exact_only = false
@@ -948,6 +959,28 @@ id = "semantic_tag_0106"
 # which is the part that stops it reading as "no rule matched this".
 keywords = ["TPD/", "INSTANT SAVINGS", "YOU SAVED"]
 tags = ["discount"]
+priority = -90
+exact_only = false
+
+[[rules]]
+id = "container_deposit"
+# A refundable container deposit, charged as its own line: Costco's
+# "DEPOSIT VL", FreshCo's "+Deposit", the Loblaw chains' "DEPOSIT 1".
+#
+# Priority -90 for the same reason the discount rule above has it, and it is the
+# whole design of this rule. A deposit line that *names what it is a deposit on*
+# should file with that thing, not against a deposit bucket: "DEPOSIT 1 COORS
+# PINEAPPLE" is part of the beer, and legacy_0028's COORS at priority 1 takes it.
+# A bare deposit has nothing to net against and files here instead of falling
+# through to Expenses:FIXME, which reads as unfinished work when it is nothing of
+# the sort.
+#
+# Whether a refundable deposit is really an expense at all is a fair question —
+# it comes back when the bottle does. `Expenses:Deposit` is a deliberate default
+# rather than an answer: [accounts] in default_tags.toml is the layer to move it
+# to an asset account, and the tag stays right either way.
+keywords = ["DEPOSIT"]
+tags = ["deposit"]
 priority = -90
 exact_only = false
 
