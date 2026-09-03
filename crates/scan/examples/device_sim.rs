@@ -57,6 +57,7 @@ fn main() {
     let mut attrib = false;
     let mut reccached = false;
     let mut by_merchant = false;
+    let mut export_ocr = false;
     let mut probdump: Option<PathBuf> = None;
 
     let mut args = std::env::args().skip(1);
@@ -70,6 +71,7 @@ fn main() {
             "--attrib" => attrib = true,
             "--reccached" => reccached = true,
             "--by-merchant" => by_merchant = true,
+            "--export-ocr" => export_ocr = true,
             "--probdump" => {
                 probdump = Some(PathBuf::from(
                     args.next().expect("--probdump needs an out dir"),
@@ -126,6 +128,11 @@ fn main() {
         .into_iter()
         .collect();
 
+    if export_ocr {
+        run_export_ocr(engine.as_mut().expect("engine for export-ocr"), &path);
+        return;
+    }
+
     if detcmp {
         run_detcmp(engine.as_mut().expect("engine for detcmp"), &path);
         return;
@@ -176,6 +183,7 @@ fn print_usage() {
          \x20 --cached        feed desktop PaddleOCR <stem>.ocr.json instead of live ONNX\n\
          \x20 --by-merchant   add a per-merchant breakdown\n\
          \x20 --dump          full extraction (+ per-image latency) for each image\n\
+         \x20 --export-ocr    write <stem>.ocr.json for each image (seeds a NEW fixture)\n\
          \x20 --today YMD     date used for inference (default 2026-06-21)\n\
          \x20 --models DIR    model dir (default ./models)\n\
          \n\
@@ -268,6 +276,50 @@ fn run_probdump(models: &Path, img_path: &Path, outdir: &Path) {
         p.orig_h as u32,
         outdir.display()
     );
+}
+
+/// Write a `<stem>.ocr.json` beside each image, in the padded coordinate space
+/// the fixtures use.
+///
+/// **Only ever for a NEW fixture.** A committed `.ocr.json` is engine-specific
+/// *output*, not ground truth: beanbeaver-desktop replays the corpus at core
+/// v0.3.2, so regenerating one silently re-baselines a case against an engine
+/// that is six minor versions from the one that recorded it. This exists because
+/// there was previously no way to seed a case at all without `bb serve` — the
+/// deprecated desktop OCR path — and refuses to overwrite for the same reason.
+fn run_export_ocr(engine: &mut OcrEngine, path: &Path) {
+    let jpgs = collect_or_exit(path, "--export-ocr", &[]);
+    for jpg in &jpgs {
+        let out = jpg.with_extension("ocr.json");
+        if out.exists() {
+            eprintln!("skip (exists, never regenerate): {}", out.display());
+            continue;
+        }
+        let img = image::open(jpg).expect("decode image").to_rgb8();
+        let padded = resize_and_pad(&img);
+        let (width, height) = (padded.width(), padded.height());
+        let dets = engine.recognize_image(&padded).expect("detect");
+        let detections: Vec<Value> = dets
+            .iter()
+            .map(|d| {
+                let quad: Vec<Value> = d
+                    .points
+                    .iter()
+                    .map(|p| serde_json::json!([p[0], p[1]]))
+                    .collect();
+                serde_json::json!([quad, [d.text, d.confidence]])
+            })
+            .collect();
+        let doc = serde_json::json!({
+            "status": "success",
+            "image_width": width,
+            "image_height": height,
+            "detections": detections,
+        });
+        std::fs::write(&out, serde_json::to_string_pretty(&doc).expect("serialize"))
+            .expect("write ocr.json");
+        println!("{}  ({} detections)", out.display(), dets.len());
+    }
 }
 
 /// Compare our detection (final recognized lines) against PaddleOCR's `.ocr.json`
@@ -803,6 +855,15 @@ fn collect_all_jpgs(dir: &Path) -> Vec<PathBuf> {
                 out.push(path);
             }
         }
+    }
+    if dir.is_file() {
+        // A single image is a legitimate argument to every diagnostic that takes
+        // a corpus — `walk` would read_dir it and silently return nothing.
+        return if dir.extension().is_some_and(|x| x == "jpg") {
+            vec![dir.to_path_buf()]
+        } else {
+            Vec::new()
+        };
     }
     let mut out = Vec::new();
     walk(dir, &mut out);
