@@ -22,9 +22,12 @@ receipt-core = { path = "../receipt-core" }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [features]
-# Apple-only: CoreML execution provider (Neural Engine / GPU), forwarded to the
-# OCR engine. Enabled by the iOS xcframework build.
+# Optional Apple-only CoreML execution provider (Neural Engine / GPU), forwarded
+# to the OCR engine. No shipping consumer enables it; iOS deliberately uses the
+# plain CPU EP. Kept for controlled experiments.
 coreml = ["ocr-paddle/coreml"]
+# Optional Android XNNPACK provider. No shipping consumer enables it because the
+# required microkernel archives do not currently link.
 xnnpack = ["ocr-paddle/xnnpack"]
 
 [dev-dependencies]

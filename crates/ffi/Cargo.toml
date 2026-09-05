@@ -40,7 +40,9 @@ sha2 = "0.10"
 uniffi = { version = "0.28", features = ["cli"] }
 
 [features]
-# Forward CoreML (Apple Neural Engine / GPU) acceleration to ocr-paddle. Enabled
-# by the iOS xcframework build (build-xcframework.sh); off for host bindgen.
+# Forward the optional CoreML experiment to ocr-paddle. No shipping consumer
+# enables it; iOS deliberately uses the plain CPU EP.
 coreml = ["scan/coreml"]
+# Forward the optional Android XNNPACK experiment. No shipping consumer enables
+# it because the required microkernel archives do not currently link.
 xnnpack = ["scan/xnnpack"]

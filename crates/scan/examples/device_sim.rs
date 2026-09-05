@@ -6,11 +6,11 @@
 //! against a corpus, or to diagnose a single exported capture.
 //!
 //! **How close depends on the platform, and this used to overclaim.** This runs
-//! ONNX Runtime's **CPU** execution provider. That still matches **Android**,
-//! which is on plain CPU (XNNPACK is registered but does not link). **iOS moved
-//! to CoreML**, so an OCR-layer difference that only shows up on the Neural
-//! Engine is precisely what this cannot reproduce — confirm those on a
-//! simulator. The parser half is identical everywhere regardless.
+//! ONNX Runtime's **CPU** execution provider, matching both shipping apps:
+//! Android is on plain CPU because XNNPACK does not link, and iOS deliberately
+//! returned to CPU after it beat CoreML on both speed and accuracy for the
+//! shipped dynamic-shape mobile models. The parser half is identical everywhere
+//! regardless.
 //!
 //! Two modes, same parser/scoring — the delta is purely OCR quality:
 //!   live    (default): run the on-device ONNX models on `<stem>.jpg`
