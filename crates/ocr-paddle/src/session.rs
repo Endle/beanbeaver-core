@@ -66,12 +66,12 @@ pub(crate) fn commit_from_file<P: AsRef<Path>>(path: P) -> ort::Result<Session> 
         }
     }
 
-    // Android's counterpart to the CoreML block above. Until this existed,
-    // Android registered no execution provider at all: PP-OCRv5 ran on the plain
-    // CPU EP (MLAS, NEON-optimised but CPU) while iOS ran the same models on the
-    // Neural Engine. That asymmetry was never a decision -- CoreML simply got
-    // wired up and Android did not. Measured on an SM-X218U before this: det
-    // 1591 ms, rec 2982 ms, ~5 s wall for one receipt.
+    // Android's counterpart to the CoreML block above. Historically, before the
+    // current CPU-on-both-platforms decision, Android registered no execution
+    // provider at all while iOS ran the same models on the Neural Engine. That
+    // asymmetry was never a decision -- CoreML simply got wired up and Android
+    // did not. Measured on an SM-X218U before this: det 1591 ms, rec 2982 ms,
+    // ~5 s wall for one receipt.
     //
     // XNNPACK rather than NNAPI: MakeACopy's DocQuad runner records a native
     // SIGABRT inside NNAPI graph partitioning on some devices, and a crash we
