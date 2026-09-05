@@ -38,6 +38,7 @@ use ocr_paddle::engine::OcrEngine;
 use ocr_paddle::prep::resize_and_pad;
 use receipt_core::categories::resolve_account_target;
 use receipt_core::ocr_transform::RawDetection;
+use receipt_core::ocr_transform::RawDetectionPage;
 use receipt_core::process::{process_receipt, ProcessedReceipt};
 use receipt_core::rules::default_parser_rule_layers;
 use scan::{process_image, process_image_timed, ScanTimings};
@@ -755,12 +756,11 @@ fn extract(
                 confidence: tc.get(1).and_then(Value::as_f64).unwrap_or(1.0),
             });
         }
+        let page = RawDetectionPage::try_new(raw, w, h, OCR_IMAGE_PADDING)
+            .unwrap_or_else(|e| panic!("{filename}: cached detections are not a valid page: {e}"));
         Some((
             process_receipt(
-                raw,
-                w,
-                h,
-                OCR_IMAGE_PADDING,
+                page,
                 &filename,
                 None,
                 today,
@@ -1151,11 +1151,10 @@ fn run_reccached(
             })
             .collect();
 
+        let page = RawDetectionPage::try_new(raw, w, h, OCR_IMAGE_PADDING)
+            .unwrap_or_else(|e| panic!("{name}: detections are not a valid page: {e}"));
         let pr = process_receipt(
-            raw,
-            w,
-            h,
-            OCR_IMAGE_PADDING,
+            page,
             &format!("{name}.jpg"),
             None,
             today,

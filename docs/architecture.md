@@ -46,6 +46,20 @@ moving the crate would move none of it.
 
 Pure Rust. No ONNX, no image I/O beyond types.
 
+The bbox-preserving normalization stages are organized as a fixed-order pass
+pipeline: `detection_normalization::normalize_detections` runs
+`filter_low_quality -> filter_bob_markers -> deskew -> sort_reading_order` over a
+`DetectionPage`, and `NormalizationOptions` can skip any of them but cannot
+reorder them. `ocr_transform::transform` is the production entry point and always
+runs `NormalizationOptions::SHIPPING`; `transform_with_options` takes a profile
+and exists for tests and diagnostics only. Validation, de-padding, line grouping
+and lowering to `OcrDocument` are representation boundaries, not passes — they
+always run.
+
+The wider proposal this came from, including per-pass tracing and `device_sim`
+ablation (**not** implemented), is in
+[`detection-normalization-passes-plan.md`](detection-normalization-passes-plan.md).
+
 | Module area | Responsibility |
 |-------------|----------------|
 | `ocr_transform` | Raw detections → full text + spatial/helper pages |
@@ -142,16 +156,25 @@ Scans on one session are serialized (`Mutex` around the engine).
 ### OCR detection (into `receipt-core`)
 
 ```text
-RawDetection { points: [(x,y); 4+], text, confidence }
-+ padded_width, padded_height, padding
+RawDetectionPage {
+    detections: [RawDetection { points: [(x,y); 4+], text, confidence }],
+    padded_width, padded_height, padding,
+}
 ```
 
 This seam is a **coordinate space** as much as a type: detections come back in
 *padded-image* pixels, so the parser is handed the padded dimensions and the
 padding, and undoes them itself. Whoever composes owns keeping those numbers
-consistent with the `resize_and_pad` that actually ran — a coupling the type
-system cannot check, and much of why `scan::process_image` is one shared
-function rather than a few lines repeated at each call site.
+consistent with the `resize_and_pad` that actually ran, which is much of why
+`scan::process_image` is one shared function rather than a few lines repeated at
+each call site.
+
+The four values used to travel as four parameters, so a caller could get each
+one right and the set wrong. `RawDetectionPage::try_new` is now the only way to
+build them, and it is where positive dimensions, padding that fits twice,
+polygons of at least four points, and finite coordinates and confidences are
+checked — once, for the FFI seam and direct Rust callers alike. Past that point
+the contract is carried by the type, and `transform` is infallible.
 
 ### OCR document (inside `receipt-core`)
 

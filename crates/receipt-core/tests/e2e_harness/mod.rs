@@ -18,7 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use receipt_core::categories::resolve_account_target;
-use receipt_core::ocr_transform::{transform, RawDetection};
+use receipt_core::ocr_transform::{transform, RawDetection, RawDetectionPage};
 use receipt_core::parser::parse_receipt;
 use receipt_core::rules::{
     default_known_merchants, default_merchant_families, parser_rule_layers_with_overrides,
@@ -324,7 +324,9 @@ pub fn run_cached_corpus_in(
         let expected: Value = serde_json::from_str(&fs::read_to_string(ep).unwrap()).unwrap();
         let raw: Value = serde_json::from_str(&fs::read_to_string(&ocr_path).unwrap()).unwrap();
         let (dets, w, h) = detections_from_ocr(&raw);
-        let ocr = transform(dets, w, h, PADDING);
+        let page = RawDetectionPage::try_new(dets, w, h, PADDING)
+            .unwrap_or_else(|e| panic!("{stem}: cached detections are not a valid page: {e}"));
+        let ocr = transform(page);
         let parsed = parse_receipt(
             &ocr,
             &layers,

@@ -20,7 +20,7 @@ use receipt_core::merchant_match::{
     MerchantMatch as CoreMerchantMatch, MerchantMatchStatus as CoreStatus,
 };
 use receipt_core::money::Money;
-use receipt_core::ocr_transform::RawDetection;
+use receipt_core::ocr_transform::{RawDetection, RawDetectionPage};
 use receipt_core::parser::{
     ParsedReceiptData, ParsedReceiptItem, ParsedReceiptTender, ParsedReceiptWarning,
 };
@@ -732,6 +732,10 @@ impl OcrSession {
         )
         .map_err(|e| match e {
             scan::ScanError::Ocr(e) => ScanError::Inference { msg: e.to_string() },
+            // Reuses `Parse` rather than adding a variant — see `today_date`:
+            // an additive FFI change is free for the apps but breaks
+            // mobile-util's batch_e2e build.
+            scan::ScanError::Detections(e) => ScanError::Parse { msg: e.to_string() },
             scan::ScanError::Rules(msg) => ScanError::Parse { msg },
         })?;
 
@@ -762,12 +766,11 @@ pub fn parse_detections(
     options: ParseOptions,
 ) -> Result<ReceiptResult, ScanError> {
     let raw = detections_to_raw(detections)?;
+    let page = RawDetectionPage::try_new(raw, padded_width, padded_height, padding)
+        .map_err(|e| ScanError::Parse { msg: e.to_string() })?;
     let opts = to_process_options(&options);
     let processed = process_receipt_with_options(
-        raw,
-        padded_width,
-        padded_height,
-        padding,
+        page,
         &image_filename,
         today_date(&today)?,
         &credit_card_account,
@@ -841,13 +844,19 @@ pub fn reformat_receipt(
     Ok(to_result(processed, previous.timings))
 }
 
+/// Decode the flat `[x, y, …]` wire format into polygons.
+///
+/// This checks only what is a property of *the encoding* — an odd-length list
+/// has no last point, and `chunks_exact` would silently drop it. How many points
+/// a polygon needs is a property of the pipeline, and it is now checked once, by
+/// `RawDetectionPage::try_new`, for this path and the Rust ones alike.
 fn detections_to_raw(detections: Vec<DetectionInput>) -> Result<Vec<RawDetection>, ScanError> {
     let mut raw = Vec::with_capacity(detections.len());
     for (i, d) in detections.into_iter().enumerate() {
-        if d.points_xy.len() < 8 || d.points_xy.len() % 2 != 0 {
+        if d.points_xy.len() % 2 != 0 {
             return Err(ScanError::Parse {
                 msg: format!(
-                    "detection {i}: points_xy needs even length >= 8 (got {})",
+                    "detection {i}: points_xy needs an even length (got {})",
                     d.points_xy.len()
                 ),
             });
@@ -1143,6 +1152,38 @@ mod tests {
             },
             detections: vec![],
         }
+    }
+
+    /// The rule that stayed at the seam after the point-count rule moved into
+    /// `RawDetectionPage`: an odd-length flat list has no last point, and
+    /// `chunks_exact` would drop it silently rather than fail.
+    #[test]
+    fn parse_detections_rejects_odd_length_points() {
+        let result = parse_detections(
+            vec![DetectionInput {
+                points_xy: vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0],
+                text: "x".into(),
+                confidence: 0.9,
+            }],
+            100,
+            100,
+            0,
+            "t.jpg".into(),
+            DateYmd {
+                year: 2026,
+                month: 1,
+                day: 1,
+            },
+            "Liabilities:CreditCard".into(),
+            "CAD".into(),
+            "Expenses:Tax:HST".into(),
+            None,
+            ParseOptions {
+                rule_documents: vec![],
+                known_merchants: vec![],
+            },
+        );
+        assert!(matches!(result, Err(ScanError::Parse { .. })));
     }
 
     #[test]

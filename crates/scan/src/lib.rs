@@ -26,10 +26,7 @@ use std::time::Instant;
 use image::RgbImage;
 use ocr_paddle::engine::OcrEngine;
 use ocr_paddle::prep::resize_and_pad;
-// `ocr_paddle::Result` rather than `ort::Result`: only `ocr-paddle` may depend on
-// `ort`, so it re-exports the type for composition layers like this one.
-use ocr_paddle::Result as OcrResult;
-use receipt_core::ocr_transform::RawDetection;
+use receipt_core::ocr_transform::{RawDetection, RawDetectionPage, TransformError};
 use receipt_core::process::{process_receipt_with_options, ProcessOptions, ProcessedReceipt};
 
 // Re-exported so the FFI seam (and the harnesses) can depend on `scan` alone
@@ -81,14 +78,20 @@ pub struct ScanRequest<'a> {
 
 /// Why a composition failed.
 ///
-/// Two genuinely different failures meet here: the OCR half can fail at the
-/// model/runtime level, and the parser half can reject the caller's rule
-/// overlays. Keeping them separate lets the FFI seam map each to the error the
-/// apps already distinguish, instead of flattening both to one string.
+/// Three genuinely different failures meet here: the OCR half can fail at the
+/// model/runtime level, the detections and the image they were measured on can
+/// fail to agree, and the parser half can reject the caller's rule overlays.
+/// Keeping them separate lets the FFI seam map each to the error the apps
+/// already distinguish, instead of flattening them to one string.
 #[derive(Debug)]
 pub enum ScanError {
     /// OCR could not run: model load, session, or inference failure.
     Ocr(ocr_paddle::Error),
+    /// The engine's detections could not be reconciled with the padded image
+    /// they were measured on. Unreachable in principle — this crate owns both
+    /// sides — which is exactly why it is worth surfacing rather than
+    /// unwrapping: it means prep and OCR have disagreed.
+    Detections(TransformError),
     /// The caller's item-classifier overlay TOML was not valid.
     Rules(String),
 }
@@ -97,6 +100,7 @@ impl fmt::Display for ScanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ScanError::Ocr(e) => write!(f, "{e}"),
+            ScanError::Detections(e) => write!(f, "{e}"),
             ScanError::Rules(msg) => write!(f, "{msg}"),
         }
     }
@@ -106,6 +110,7 @@ impl std::error::Error for ScanError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ScanError::Ocr(e) => Some(e),
+            ScanError::Detections(e) => Some(e),
             ScanError::Rules(_) => None,
         }
     }
@@ -114,6 +119,12 @@ impl std::error::Error for ScanError {
 impl From<ocr_paddle::Error> for ScanError {
     fn from(e: ocr_paddle::Error) -> Self {
         ScanError::Ocr(e)
+    }
+}
+
+impl From<TransformError> for ScanError {
+    fn from(e: TransformError) -> Self {
+        ScanError::Detections(e)
     }
 }
 
@@ -130,7 +141,7 @@ pub fn process_image(
     currency: &str,
     tax_account: &str,
     image_sha256: Option<&str>,
-) -> OcrResult<ProcessedReceipt> {
+) -> Result<ProcessedReceipt, ScanError> {
     Ok(process_image_timed(
         engine,
         img,
@@ -156,7 +167,7 @@ pub fn process_image_timed(
     currency: &str,
     tax_account: &str,
     image_sha256: Option<&str>,
-) -> OcrResult<(ProcessedReceipt, ScanTimings)> {
+) -> Result<(ProcessedReceipt, ScanTimings), ScanError> {
     let request = ScanRequest {
         image_filename,
         today,
@@ -165,16 +176,12 @@ pub fn process_image_timed(
         tax_account,
         image_sha256,
     };
-    match process_image_with_options(engine, img, request, &ProcessOptions::default()) {
-        Ok(out) => Ok(out),
-        Err(ScanError::Ocr(e)) => Err(e),
-        // Mirrors `receipt_core::process::process_receipt`, which makes the same
-        // claim with the same `expect`: the only way to fail rule loading is an
-        // overlay, and the default options carry none.
-        Err(ScanError::Rules(msg)) => {
-            unreachable!("default ScanOptions never fail rule loading: {msg}")
-        }
-    }
+    // `ScanError::Rules` is unreachable through here — the only way to fail rule
+    // loading is an overlay and the default options carry none — but it is no
+    // longer worth a hand-written `unreachable!`: the signature already carries
+    // `ScanError` for `Detections`, so passing every variant through costs
+    // nothing and cannot turn a surprise into an abort inside a mobile app.
+    process_image_with_options(engine, img, request, &ProcessOptions::default())
 }
 
 /// The composition, with rule/merchant overlays: **the one implementation** of
@@ -219,12 +226,18 @@ pub fn process_image_with_options(
         })
         .collect();
 
-    let t = Instant::now();
-    let processed = process_receipt_with_options(
+    // Validated here, once: the detections and the padded image they were
+    // measured on stop being four loose values and become one page.
+    let page = RawDetectionPage::try_new(
         raw,
         prepared.width() as i64,
         prepared.height() as i64,
         OCR_IMAGE_PADDING as i64,
+    )?;
+
+    let t = Instant::now();
+    let processed = process_receipt_with_options(
+        page,
         request.image_filename,
         request.today,
         request.credit_card_account,

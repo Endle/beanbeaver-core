@@ -18,7 +18,7 @@ use crate::formatter::{
     FormatterWarningInput,
 };
 use crate::merchant_match::{MerchantFamily, MerchantMatch, MerchantMatchStatus};
-use crate::ocr_transform::{transform, RawDetection};
+use crate::ocr_transform::{transform, RawDetection, RawDetectionPage};
 use crate::parser::{
     balance_warnings, classified_item, item_with_tag_path, parse_receipt, uncategorized_warnings,
     ParsedReceiptData, ParsedReceiptItem, ParsedReceiptWarning, ParserRuleLayers,
@@ -364,10 +364,7 @@ fn format_from_parsed(
 /// the bundled default merchant keywords are used.
 #[allow(clippy::too_many_arguments)]
 pub fn process_receipt(
-    detections: Vec<RawDetection>,
-    padded_width: i64,
-    padded_height: i64,
-    padding: i64,
+    page: RawDetectionPage,
     image_filename: &str,
     known_merchants: Option<Vec<String>>,
     today: Date,
@@ -381,10 +378,7 @@ pub fn process_receipt(
         ..Default::default()
     };
     process_receipt_with_options(
-        detections,
-        padded_width,
-        padded_height,
-        padding,
+        page,
         image_filename,
         today,
         credit_card_account,
@@ -402,10 +396,7 @@ pub fn process_receipt(
 /// are invalid on the reformat path — see [`reformat_parsed_receipt`]).
 #[allow(clippy::too_many_arguments)]
 pub fn process_receipt_with_options(
-    detections: Vec<RawDetection>,
-    padded_width: i64,
-    padded_height: i64,
-    padding: i64,
+    page: RawDetectionPage,
     image_filename: &str,
     today: Date,
     credit_card_account: &str,
@@ -426,9 +417,9 @@ pub fn process_receipt_with_options(
         .unwrap_or_else(|| rule_book.merchant_families().to_vec());
 
     // Keep a copy of the raw detections for debugging/E2E diffing before
-    // `transform` consumes them.
-    let detections_out = detections.clone();
-    let ocr = transform(detections, padded_width, padded_height, padding);
+    // `transform` consumes the page.
+    let detections_out = page.detections().to_vec();
+    let ocr = transform(page);
 
     let parsed = parse_receipt(
         &ocr,
@@ -1170,10 +1161,7 @@ mod tests {
             ..Default::default()
         };
         let err = process_receipt_with_options(
-            vec![],
-            100,
-            100,
-            0,
+            RawDetectionPage::try_new(vec![], 100, 100, 0).expect("valid empty page"),
             "x.jpg",
             Date::new(2026, 1, 1).unwrap(),
             "Liabilities:CreditCard",

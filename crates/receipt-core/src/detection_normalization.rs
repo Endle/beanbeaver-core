@@ -1,11 +1,15 @@
-//! Post-OCR detection normalization logic.
+//! Post-OCR detection normalization: the passes, and the runner that orders them.
 //!
-//! Pure `(detections) -> instructions` passes mirroring the Python pipeline at
-//! the bbox layer. The Python wrapper owns orchestration, dict marshaling, and
-//! the optional debug-dump filesystem I/O; everything numeric lives here.
+//! Each pass is a pure `(detections) -> instructions` function — kept indices,
+//! corrected coordinates, a sort order — mirroring the Python pipeline at the
+//! bbox layer. [`normalize_detections`] applies them to a [`DetectionPage`] in
+//! the fixed order `filter_low_quality -> filter_bob_markers -> deskew ->
+//! sort_reading_order`, which [`NormalizationOptions`] can skip but not
+//! rearrange.
 //!
-//! Default ordering: filter_low_quality -> filter_bob_markers ->
-//! deskew_detections -> sort_reading_order.
+//! Everything here works in **de-padded, original-image pixels**.
+//! [`crate::ocr_transform`] owns both boundaries: de-padding on the way in, and
+//! lowering to the `[0,1]` [`crate::ocr_document::OcrDocument`] on the way out.
 
 use regex::Regex;
 use std::cmp::Ordering;
@@ -902,6 +906,108 @@ pub fn sort_reading_order(detections: &[Detection]) -> Vec<usize> {
             )
     });
     order
+}
+
+/// Detections in **de-padded, original-image pixels**, carried together with the
+/// image they were measured against.
+///
+/// The dimensions and the boxes used to travel as separate arguments, which is
+/// what let a pass be handed one image's geometry and another's `image_width`.
+/// Bundling them is the point: a pass takes the page, so the two cannot drift.
+#[derive(Clone, Debug)]
+pub(crate) struct DetectionPage {
+    pub detections: Vec<Detection>,
+    pub image_width: f64,
+    pub image_height: f64,
+}
+
+/// Which normalization passes [`normalize_detections`] runs.
+///
+/// **Order is fixed and not configurable.** The passes depend on each other —
+/// deskew measures slopes over whatever survived filtering, and reading order is
+/// what line grouping assumes — so a reordered pipeline would be a second
+/// pipeline, not a profile of this one. Options can only skip a pass.
+///
+/// [`SHIPPING`](Self::SHIPPING) is the one profile the apps run. Anything else
+/// is a diagnostic: build it with struct-update syntax so a new pass added later
+/// is enabled by default rather than silently omitted from an old literal.
+///
+/// ```ignore
+/// NormalizationOptions { deskew: false, ..NormalizationOptions::SHIPPING }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NormalizationOptions {
+    pub filter_low_quality: bool,
+    pub filter_bob_markers: bool,
+    pub deskew: bool,
+    pub sort_reading_order: bool,
+}
+
+impl NormalizationOptions {
+    /// The profile the apps run, and the only one reachable through
+    /// [`crate::ocr_transform::transform`].
+    pub const SHIPPING: Self = Self {
+        filter_low_quality: true,
+        filter_bob_markers: true,
+        deskew: true,
+        sort_reading_order: true,
+    };
+}
+
+impl Default for NormalizationOptions {
+    fn default() -> Self {
+        Self::SHIPPING
+    }
+}
+
+/// Reorder/subset `detections` by source index. `keep` is a permutation for the
+/// ordering pass and a subsequence for the filters; both are the same operation.
+fn take_indices(detections: &[Detection], keep: &[usize]) -> Vec<Detection> {
+    keep.iter().map(|&i| detections[i].clone()).collect()
+}
+
+/// Run the detection-preserving passes over `page`, in the fixed production
+/// order: filter_low_quality -> filter_bob_markers -> deskew ->
+/// sort_reading_order.
+///
+/// Mirrors the Python `normalize_detections` with `default_detection_pipeline()`
+/// (debug-dump I/O omitted — irrelevant on device).
+pub(crate) fn normalize_detections(page: &mut DetectionPage, options: NormalizationOptions) {
+    if options.filter_low_quality {
+        let keep = filter_low_quality(&page.detections);
+        page.detections = take_indices(&page.detections, &keep);
+    }
+
+    if options.filter_bob_markers {
+        let keep = filter_bob_markers(&page.detections);
+        page.detections = take_indices(&page.detections, &keep);
+    }
+
+    if options.deskew {
+        let outcome = deskew(&page.detections, page.image_width);
+        if let Some(new_y) = outcome.new_y {
+            for (det, (center_y, y_min, y_max)) in page.detections.iter_mut().zip(new_y) {
+                // The corner points have to move with the summary fields. Line
+                // grouping reads y_min/y_max/center_y, but the document's word
+                // boxes are built straight off `bbox`, so leaving the
+                // corners behind hands the two paths different geometry for the
+                // same detection. Re-derive the shift from center_y rather than
+                // recomputing the shear, so the two can never drift apart.
+                let delta = det.center_y - center_y;
+                for point in &mut det.bbox {
+                    point.1 -= delta;
+                }
+                det.center_y = center_y;
+                det.y_min = y_min;
+                det.y_max = y_max;
+            }
+        }
+    }
+
+    if options.sort_reading_order {
+        let order = sort_reading_order(&page.detections);
+        page.detections = take_indices(&page.detections, &order);
+    }
 }
 
 #[cfg(test)]
