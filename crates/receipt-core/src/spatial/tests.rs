@@ -4,7 +4,8 @@
 //! (e.g. 0.318) land near a math constant (1/π) purely by coincidence.
 #![allow(clippy::approx_constant)]
 
-use super::engine::{extract_spatial_items, footer_address_like, is_price_word};
+use super::engine::extract_spatial_items;
+use super::rows::{footer_address_like, is_price_word};
 use crate::money::Money;
 use crate::ocr_document::{Bbox, OcrDocument, OcrLine, OcrWord};
 

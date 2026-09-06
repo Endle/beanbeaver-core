@@ -1,27 +1,10 @@
 //! Types for spatial item extraction: what it returns, and the two row shapes
 //! it works in.
 
-use crate::common::ReceiptWarningKind;
-use crate::money::Money;
-
-#[derive(Clone, Debug)]
-pub(crate) struct SpatialExtractedItem {
-    pub description: String,
-    pub price: Money,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct SpatialParserWarning {
-    pub kind: ReceiptWarningKind,
-    pub message: String,
-    pub after_item_index: Option<usize>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct SpatialExtractionOutcome {
-    pub items: Vec<SpatialExtractedItem>,
-    pub warnings: Vec<SpatialParserWarning>,
-}
+pub(super) use crate::common::ReceiptWarning as SpatialParserWarning;
+pub(super) use crate::extraction::{
+    ExtractedItem as SpatialExtractedItem, ExtractionOutcome as SpatialExtractionOutcome,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) struct ParsedLine {

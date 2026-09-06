@@ -21,11 +21,44 @@ use crate::merchant_match::{MerchantFamily, MerchantMatch, MerchantMatchStatus};
 use crate::ocr_transform::{transform, RawDetection, RawDetectionPage};
 use crate::parser::{
     balance_warnings, classified_item, item_with_tag_path, parse_receipt, uncategorized_warnings,
-    ParsedReceiptData, ParsedReceiptItem, ParsedReceiptWarning, ParserRuleLayers,
+    ParsedReceiptData, ParsedReceiptItem, ParsedReceiptWarning,
 };
 use crate::rules::RuleBook;
 
 const DEFAULT_ITEM_ACCOUNT: &str = "Expenses:FIXME";
+
+/// Ledger and date context shared by parsing and reformatting.
+#[derive(Clone, Copy, Debug)]
+pub struct FormatContext<'a> {
+    pub today: Date,
+    pub credit_card_account: &'a str,
+    pub currency: &'a str,
+    pub tax_account: &'a str,
+    pub image_sha256: Option<&'a str>,
+}
+
+/// Named input context for a receipt, also used by the scan composition.
+#[derive(Clone, Copy, Debug)]
+pub struct ProcessRequest<'a> {
+    pub image_filename: &'a str,
+    pub today: Date,
+    pub credit_card_account: &'a str,
+    pub currency: &'a str,
+    pub tax_account: &'a str,
+    pub image_sha256: Option<&'a str>,
+}
+
+impl<'a> ProcessRequest<'a> {
+    pub fn format_context(self) -> FormatContext<'a> {
+        FormatContext {
+            today: self.today,
+            credit_card_account: self.credit_card_account,
+            currency: self.currency,
+            tax_account: self.tax_account,
+            image_sha256: self.image_sha256,
+        }
+    }
+}
 
 /// Optional knobs for [`process_receipt_with_options`] (and the FFI overlay path).
 ///
@@ -124,10 +157,7 @@ pub struct ItemCorrection {
     pub tag_path: String,
 }
 
-/// Round a decimal string to 2 places using banker's rounding (round-half-even),
-/// matching Python's `Decimal.__format__(".2f")` that the formatter glue applies
-/// to item prices, total, and tax. Inputs are well-formed fixed-point strings
-/// (e.g. "12.34" from cents, "1.2345" from the scaled spatial path).
+/// Render the parsed date, or the first day of the reference month when absent.
 fn date_iso(parsed: &ParsedReceiptData, today: Date) -> String {
     match parsed.date {
         Some(d) => d.to_string(),
@@ -263,29 +293,20 @@ fn parse_iso_ymd(iso: &str) -> Result<Date, String> {
     Date::new(y, m, d).ok_or_else(|| format!("date_iso is not a real date (got {iso:?})"))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn format_from_parsed(
     parsed: &ParsedReceiptData,
-    _rule_layers: &ParserRuleLayers,
-    today: Date,
-    credit_card_account: &str,
-    currency: &str,
-    tax_account: &str,
-    image_sha256: Option<&str>,
-    corrections: Option<&ReceiptCorrections>,
-) -> Result<(String, Option<String>, Option<String>), String> {
-    let merchant = corrections
-        .and_then(|c| c.merchant.clone())
-        .unwrap_or_else(|| parsed.merchant.clone());
-
-    let (date_iso_str, date_is_placeholder) =
-        if let Some(iso) = corrections.and_then(|c| c.date_iso.as_ref()) {
-            // Validate before emitting into beancount so structured + text stay aligned.
-            let _ = parse_iso_ymd(iso)?;
-            (iso.clone(), false)
-        } else {
-            (date_iso(parsed, today), parsed.date_is_placeholder)
-        };
+    context: FormatContext<'_>,
+) -> (String, Option<String>, Option<String>) {
+    let FormatContext {
+        today,
+        credit_card_account,
+        currency,
+        tax_account,
+        image_sha256,
+    } = context;
+    let merchant = parsed.merchant.clone();
+    let date_iso_str = date_iso(parsed, today);
+    let date_is_placeholder = parsed.date_is_placeholder;
 
     // Every item carries its own account by the time it reaches here — the
     // classifier resolved it at parse time, and `reformat_parsed_receipt`
@@ -356,7 +377,7 @@ fn format_from_parsed(
         &formatter_input.merchant,
         image_sha256,
     );
-    Ok((beancount, beanbeaver_id, document_relpath))
+    (beancount, beanbeaver_id, document_relpath)
 }
 
 /// Run the full pipeline. `today` is the reference date (year, month, day) used
@@ -405,6 +426,31 @@ pub fn process_receipt_with_options(
     image_sha256: Option<&str>,
     options: &ProcessOptions,
 ) -> Result<ProcessedReceipt, String> {
+    process_receipt_request(
+        page,
+        ProcessRequest {
+            image_filename,
+            today,
+            credit_card_account,
+            currency,
+            tax_account,
+            image_sha256,
+        },
+        options,
+    )
+}
+
+/// Parse and format with named request fields and optional rule overlays.
+pub fn process_receipt_request(
+    page: RawDetectionPage,
+    request: ProcessRequest<'_>,
+    options: &ProcessOptions,
+) -> Result<ProcessedReceipt, String> {
+    let ProcessRequest {
+        image_filename,
+        today,
+        ..
+    } = request;
     let rule_book = resolve_rule_book(options)?;
     let rule_layers = rule_book.layers();
     let merchants = options
@@ -431,16 +477,8 @@ pub fn process_receipt_with_options(
     );
 
     let confidence = field_confidence(&parsed);
-    let (beancount, beanbeaver_id, document_relpath) = format_from_parsed(
-        &parsed,
-        rule_layers,
-        today,
-        credit_card_account,
-        currency,
-        tax_account,
-        image_sha256,
-        None,
-    )?;
+    let (beancount, beanbeaver_id, document_relpath) =
+        format_from_parsed(&parsed, request.format_context());
 
     Ok(ProcessedReceipt {
         tag_vocabulary: rule_book.layers().category_rules.tag_vocabulary.clone(),
@@ -515,6 +553,27 @@ pub fn reformat_parsed_receipt(
     currency: &str,
     tax_account: &str,
     image_sha256: Option<&str>,
+    corrections: &ReceiptCorrections,
+    options: Option<&ProcessOptions>,
+) -> Result<ProcessedReceipt, String> {
+    reformat_with_context(
+        parsed,
+        FormatContext {
+            today,
+            credit_card_account,
+            currency,
+            tax_account,
+            image_sha256,
+        },
+        corrections,
+        options,
+    )
+}
+
+/// Apply corrections and render using named ledger context.
+pub fn reformat_with_context(
+    parsed: &ParsedReceiptData,
+    context: FormatContext<'_>,
     corrections: &ReceiptCorrections,
     options: Option<&ProcessOptions>,
 ) -> Result<ProcessedReceipt, String> {
@@ -618,16 +677,7 @@ pub fn reformat_parsed_receipt(
     }
 
     let confidence = field_confidence(&parsed_out);
-    let (beancount, beanbeaver_id, document_relpath) = format_from_parsed(
-        &parsed_out,
-        rule_layers,
-        today,
-        credit_card_account,
-        currency,
-        tax_account,
-        image_sha256,
-        Some(corrections),
-    )?;
+    let (beancount, beanbeaver_id, document_relpath) = format_from_parsed(&parsed_out, context);
 
     Ok(ProcessedReceipt {
         tag_vocabulary: rule_book.layers().category_rules.tag_vocabulary.clone(),

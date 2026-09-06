@@ -12,7 +12,6 @@ use crate::text;
 #[derive(Clone, Debug)]
 pub struct ParserRuleLayers {
     pub category_rules: categories::CategoryRuleLayers,
-    pub account_mapping: Vec<(String, String)>,
     /// Per-merchant abbreviation tables, applied before classification so that
     /// a chain's fixed-width shorthand (`KS LIQ LNDRY`) can reach keywords that
     /// are spelled out in full. See [`crate::merchant_vocab`].
@@ -45,12 +44,7 @@ pub struct ParsedReceiptItem {
     pub tags: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
-pub struct ParsedReceiptWarning {
-    pub kind: ReceiptWarningKind,
-    pub message: String,
-    pub after_item_index: Option<usize>,
-}
+pub use crate::common::ReceiptWarning as ParsedReceiptWarning;
 
 #[derive(Clone, Debug)]
 pub struct ParsedReceiptTender {
@@ -98,44 +92,6 @@ fn is_unsigned_discount_line(description: &str) -> bool {
     upper.contains("SAVINGS")
 }
 
-fn resolve_account_target(
-    target: Option<&str>,
-    rule_layers: &ParserRuleLayers,
-    default: Option<&str>,
-) -> Option<String> {
-    match target {
-        None => default.map(str::to_string),
-        Some(raw) => {
-            let cleaned = raw.trim();
-            if cleaned.is_empty() {
-                return default.map(str::to_string);
-            }
-            if cleaned.starts_with("Expenses:") {
-                return Some(cleaned.to_string());
-            }
-            for (key, mapped) in &rule_layers.account_mapping {
-                if key == cleaned {
-                    return Some(mapped.clone());
-                }
-            }
-            default.map(str::to_string)
-        }
-    }
-}
-
-fn categorize_description(description: &str, rule_layers: &ParserRuleLayers) -> Option<String> {
-    let category_key =
-        categories::classify_item_key(description, &rule_layers.category_rules, None);
-    resolve_account_target(category_key.as_deref(), rule_layers, None)
-}
-
-/// The internal semantic tags for an item description — the multi-tag layer that
-/// sits upstream of the single beancount account `categorize_description`
-/// resolves. Classified from the same source string so the two agree.
-fn item_tags(description: &str, rule_layers: &ParserRuleLayers) -> Vec<String> {
-    categories::classify_item_tags(description, &rule_layers.category_rules)
-}
-
 /// Assemble one parsed item, applying the merchant's abbreviation vocabulary.
 ///
 /// `category_source` is the string the extractor decided should drive
@@ -168,20 +124,15 @@ fn build_item(
     //
     // Fallback ordering sidesteps both: a line the rules already understand is
     // untouched, and expansion can only ever fill a gap.
-    let printed_category = categorize_description(category_source, rule_layers);
-    let (tag_path, tags) = if printed_category.is_some() {
-        (printed_category, item_tags(category_source, rule_layers))
-    } else {
-        match vocab.and_then(|vocab| {
-            crate::merchant_vocab::expand_for_classification(category_source, vocab)
-        }) {
-            Some(expanded) => (
-                categorize_description(&expanded, rule_layers),
-                item_tags(&expanded, rule_layers),
-            ),
-            None => (None, item_tags(category_source, rule_layers)),
+    let mut classification =
+        categories::classify_item(category_source, &rule_layers.category_rules);
+    if classification.account.is_none() {
+        if let Some(expanded) =
+            vocab.and_then(|v| crate::merchant_vocab::expand_for_classification(category_source, v))
+        {
+            classification = categories::classify_item(&expanded, &rule_layers.category_rules);
         }
-    };
+    }
 
     // The printed text stays the leading part of the description: it is what the
     // receipt actually says, so it must survive for ledger review and for
@@ -195,19 +146,13 @@ fn build_item(
         None => description,
     };
 
-    let account = categories::resolve_account_target(
-        tag_path.as_deref(),
-        &rule_layers.category_rules.account_mapping,
-        None,
-    );
-
     ParsedReceiptItem {
         description,
         price,
         quantity,
-        tag_path,
-        account,
-        tags,
+        tag_path: classification.tag_path,
+        account: classification.account,
+        tags: classification.tags,
     }
 }
 
@@ -227,19 +172,14 @@ pub fn classified_item(
     quantity: i32,
     rule_layers: &ParserRuleLayers,
 ) -> ParsedReceiptItem {
-    let tag_path = categorize_description(&description, rule_layers);
-    let account = categories::resolve_account_target(
-        tag_path.as_deref(),
-        &rule_layers.category_rules.account_mapping,
-        None,
-    );
+    let classification = categories::classify_item(&description, &rule_layers.category_rules);
     ParsedReceiptItem {
-        description: description.clone(),
+        description,
         price,
         quantity,
-        tag_path,
-        account,
-        tags: item_tags(&description, rule_layers),
+        tag_path: classification.tag_path,
+        account: classification.account,
+        tags: classification.tags,
     }
 }
 
@@ -556,87 +496,27 @@ pub fn parse_receipt(
     let spatial_layout =
         doc.has_useful_bbox_data() && parse_helpers::is_spatial_layout_receipt(full_text);
 
-    let (items, mut warnings): (Vec<ParsedReceiptItem>, Vec<ParsedReceiptWarning>) =
-        if spatial_layout {
-            let spatial_outcome = spatial::extract_spatial_items(doc);
-            if spatial_outcome.items.is_empty() {
-                let (items, warnings) = text::extract_text_items(&item_lines, &summary_amounts);
-                (
-                    items
-                        .into_iter()
-                        .map(|item| {
-                            build_item(
-                                item.description.clone(),
-                                item.price,
-                                item.quantity,
-                                &item.category_source,
-                                rule_layers,
-                                vocab,
-                            )
-                        })
-                        .collect(),
-                    warnings
-                        .into_iter()
-                        .map(|warning| ParsedReceiptWarning {
-                            kind: warning.kind,
-                            message: warning.message,
-                            after_item_index: warning.after_item_index,
-                        })
-                        .collect(),
-                )
-            } else {
-                (
-                    spatial_outcome
-                        .items
-                        .into_iter()
-                        .map(|item| {
-                            build_item(
-                                item.description.clone(),
-                                item.price,
-                                1,
-                                &item.description,
-                                rule_layers,
-                                vocab,
-                            )
-                        })
-                        .collect(),
-                    spatial_outcome
-                        .warnings
-                        .into_iter()
-                        .map(|warning| ParsedReceiptWarning {
-                            kind: warning.kind,
-                            message: warning.message,
-                            after_item_index: warning.after_item_index,
-                        })
-                        .collect(),
-                )
-            }
+    let outcome = if spatial_layout {
+        let spatial = spatial::extract_spatial_items(doc);
+        if spatial.items.is_empty() {
+            text::extract_text_items(&item_lines, &summary_amounts)
         } else {
-            let (items, warnings) = text::extract_text_items(&item_lines, &summary_amounts);
-            (
-                items
-                    .into_iter()
-                    .map(|item| {
-                        build_item(
-                            item.description.clone(),
-                            item.price,
-                            item.quantity,
-                            &item.category_source,
-                            rule_layers,
-                            vocab,
-                        )
-                    })
-                    .collect(),
-                warnings
-                    .into_iter()
-                    .map(|warning| ParsedReceiptWarning {
-                        kind: warning.kind,
-                        message: warning.message,
-                        after_item_index: warning.after_item_index,
-                    })
-                    .collect(),
-            )
-        };
+            spatial
+        }
+    } else {
+        text::extract_text_items(&item_lines, &summary_amounts)
+    };
+    let mut warnings = outcome.warnings;
+    let items = outcome.items.into_iter().map(|item| {
+        build_item(
+            item.description,
+            item.price,
+            item.quantity,
+            &item.category_source,
+            rule_layers,
+            vocab,
+        )
+    });
 
     // Sign-correct unsigned line-item discounts (e.g. FreshCo "INSTANT
     // SAVINGS $5.00"), covering both the spatial and text paths at their
@@ -757,10 +637,27 @@ pub fn parse_receipt(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_unsigned_discount_line, item_tags};
+    use super::is_unsigned_discount_line;
     use crate::common::ReceiptWarningKind;
     use crate::money::Money;
     use crate::rules::default_parser_rule_layers;
+
+    #[test]
+    fn parsed_and_edited_items_keep_winning_path_separate_from_account() {
+        let parsed = parse_text("COSTCO\nMILK 4.00\nTOTAL 4.00");
+        let scanned = parsed
+            .items
+            .iter()
+            .find(|i| i.description == "MILK")
+            .expect("milk item");
+        let layers = default_parser_rule_layers();
+        let edited = super::classified_item("MILK".into(), Money::from_cents(400), 1, &layers);
+        for item in [scanned, &edited] {
+            assert_eq!(item.tag_path.as_deref(), Some("grocery/dairy"));
+            assert_eq!(item.account.as_deref(), Some("Expenses:Food:Grocery:Dairy"));
+            assert!(item.tags.contains(&"grocery/dairy/milk".to_string()));
+        }
+    }
 
     #[test]
     fn item_tags_are_the_multi_tag_classification() {
@@ -771,7 +668,7 @@ mod tests {
         // Tags are node PATHS, least specific first, so the tree survives the
         // trip to a consumer without being reconstructed from bare segments.
         assert_eq!(
-            item_tags("ROTISSERIE CHICKEN", &layers),
+            crate::categories::classify_item("ROTISSERIE CHICKEN", &layers.category_rules).tags,
             vec![
                 "grocery",
                 "grocery/meat",
@@ -781,11 +678,15 @@ mod tests {
         );
         // Milk carries the dairy rule's tags plus its own semantic "milk" tag.
         assert_eq!(
-            item_tags("MILK", &layers),
+            crate::categories::classify_item("MILK", &layers.category_rules).tags,
             vec!["grocery", "grocery/dairy", "grocery/dairy/milk"]
         );
         // An unrecognized line classifies to no tags rather than a guess.
-        assert!(item_tags("ZZQW UNKNOWN ITEM", &layers).is_empty());
+        assert!(
+            crate::categories::classify_item("ZZQW UNKNOWN ITEM", &layers.category_rules)
+                .tags
+                .is_empty()
+        );
     }
 
     /// Parse plain text through the real pipeline: no bbox data, so the text
@@ -1074,32 +975,51 @@ mod tests {
     fn discount_lines_classify_as_discounts_not_as_nothing() {
         let layers = default_parser_rule_layers();
         // Costco: the discount code, then the code of the item it reduces.
-        assert_eq!(item_tags("2087683 TPD/969786", &layers), vec!["discount"]);
+        assert_eq!(
+            crate::categories::classify_item("2087683 TPD/969786", &layers.category_rules).tags,
+            vec!["discount"]
+        );
         // FreshCo's two spellings.
-        assert_eq!(item_tags("INSTANT SAVINGS", &layers), vec!["discount"]);
-        assert_eq!(item_tags("YOU SAVED", &layers), vec!["discount"]);
+        assert_eq!(
+            crate::categories::classify_item("INSTANT SAVINGS", &layers.category_rules).tags,
+            vec!["discount"]
+        );
+        assert_eq!(
+            crate::categories::classify_item("YOU SAVED", &layers.category_rules).tags,
+            vec!["discount"]
+        );
         // A discount that names what it discounts nets against that category —
         // the rule sits *below* the product rules on purpose, so the product
         // wins the account while the line still picks up the `discount` tag.
-        let both = item_tags("INSTANT SAVINGS ON MILK", &layers);
+        let both =
+            crate::categories::classify_item("INSTANT SAVINGS ON MILK", &layers.category_rules)
+                .tags;
         assert!(both.contains(&"discount".to_string()), "tags were {both:?}");
         assert!(
             both.contains(&"grocery/dairy".to_string()),
             "tags were {both:?}"
         );
         assert_eq!(
-            super::categorize_description("INSTANT SAVINGS ON MILK", &layers).as_deref(),
+            crate::categories::classify_item("INSTANT SAVINGS ON MILK", &layers.category_rules)
+                .account
+                .as_deref(),
             Some("Expenses:Food:Grocery:Dairy")
         );
         // With nothing to net against, it files to its own account rather than
         // to the Expenses:FIXME it used to get.
         assert_eq!(
-            super::categorize_description("2087683 TPD/969786", &layers).as_deref(),
+            crate::categories::classify_item("2087683 TPD/969786", &layers.category_rules)
+                .account
+                .as_deref(),
             Some("Expenses:Discount")
         );
         // And the keyword is specific: a bare product line near those words is
         // still a product.
-        assert!(!item_tags("MILK", &layers).contains(&"discount".to_string()));
+        assert!(
+            !crate::categories::classify_item("MILK", &layers.category_rules)
+                .tags
+                .contains(&"discount".to_string())
+        );
     }
 
     #[test]

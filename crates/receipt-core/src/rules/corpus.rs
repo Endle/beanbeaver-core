@@ -388,17 +388,10 @@ pub fn parser_rule_layers_with_overrides(
     )))
 }
 
-/// Wrap built category rules with the flattened account mapping and the bundled
-/// merchant vocabulary. Shared by both loaders above so they cannot drift.
+/// Wrap built category rules with the bundled merchant vocabulary. Shared by both loaders above so they cannot drift.
 fn finish_layers(category_rules: crate::categories::CategoryRuleLayers) -> ParserRuleLayers {
-    let account_mapping = category_rules
-        .account_mapping
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
     ParserRuleLayers {
         category_rules,
-        account_mapping,
         merchant_vocab: default_merchant_vocab(),
     }
 }

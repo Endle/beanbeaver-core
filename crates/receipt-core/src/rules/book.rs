@@ -15,10 +15,7 @@
 use std::sync::OnceLock;
 
 use super::corpus;
-use crate::categories::{
-    classify_item_key, classify_item_tags, list_item_categories, resolve_account_target,
-    sorted_matches_for_debug, TagNode,
-};
+use crate::categories::{list_item_categories, resolve_account_target, TagNode};
 use crate::merchant_match::MerchantFamily;
 use crate::parser::ParserRuleLayers;
 
@@ -204,21 +201,22 @@ impl RuleBook {
     /// Why `description` classifies the way it does: the resolved account and
     /// tags, plus every rule that fired, strongest first.
     ///
-    /// The account and tags are computed with the same `classify_*` calls the
-    /// parser makes, so this can never report something the parser would not do.
+    /// The classification and explanation share one resolved match set, using
+    /// the same ranking and tag accumulation as the parser.
     pub fn explain(&self, description: &str) -> ItemExplanation {
         let layers = &self.layers.category_rules;
-        let category_key = classify_item_key(description, layers, None);
-        let tags = classify_item_tags(description, layers);
-        let account =
-            resolve_account_target(category_key.as_deref(), &layers.account_mapping, None);
+        let (classification, resolved_matches) =
+            crate::categories::explain_classification(description, layers);
+        let category_key = classification.tag_path;
+        let tags = classification.tags;
+        let account = classification.account;
 
-        // `sorted_matches_for_debug` sorts by the same ranking the classifier
+        // Resolved matches are sorted by the same ranking the classifier
         // uses, strongest first. `rule_index` is unique per match (one match per
         // rule) and is the final tiebreak, so the ranking is total: the first
         // match carrying a category is exactly the one `classify_item_key` chose.
         let mut winner_seen = false;
-        let matches = sorted_matches_for_debug(description, layers)
+        let matches = resolved_matches
             .into_iter()
             .map(|matched| {
                 let is_category_winner = if !winner_seen && matched.category.is_some() {

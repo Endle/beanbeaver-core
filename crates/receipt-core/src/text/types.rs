@@ -3,20 +3,8 @@
 use crate::common::ReceiptWarningKind;
 use crate::money::Money;
 
-#[derive(Clone, Debug)]
-pub struct ParsedTextItem {
-    pub description: String,
-    pub category_source: String,
-    pub price: Money,
-    pub quantity: i32,
-}
-
-#[derive(Clone, Debug)]
-pub struct TextParserWarning {
-    pub kind: ReceiptWarningKind,
-    pub message: String,
-    pub after_item_index: Option<usize>,
-}
+pub(super) use crate::common::ReceiptWarning as TextParserWarning;
+pub(super) use crate::extraction::{ExtractedItem as ParsedTextItem, ExtractionOutcome};
 
 #[derive(Clone, Debug)]
 pub(crate) struct MalformedTrailingPriceCandidate {
@@ -77,4 +65,30 @@ pub(crate) struct ReconciliationState {
 #[derive(Clone, Debug)]
 pub(crate) struct ReconciledMalformedPrices {
     pub(crate) prices: Vec<Money>,
+}
+
+/// The rows one pass over a receipt reads, plus the receipt-level verdict that
+/// changes how it reads them.
+///
+/// Every stage below wants all three at once: which rows exist, which of them
+/// an earlier price already claimed, and whether the right-hand price column
+/// drifted a row up. Bundling them is what keeps the extracted stages under
+/// `too_many_arguments` without an `#[allow]`, and it is honest rather than
+/// convenient — a stage that consults one of these consults all of them.
+///
+/// `used` is a shared borrow on purpose. Claiming a row is the caller's job, so
+/// a stage returns *which* row it claimed and never marks it: that keeps the
+/// order of claims in one place, which is what the cross-row-leak guards
+/// (bugs C, H, K) depend on.
+#[derive(Clone, Copy)]
+pub(super) struct Lines<'a> {
+    pub(super) all: &'a [String],
+    pub(super) used: &'a [bool],
+    pub(super) drift: bool,
+}
+
+impl<'a> Lines<'a> {
+    pub(super) fn of(all: &'a [String], used: &'a [bool], drift: bool) -> Self {
+        Lines { all, used, drift }
+    }
 }

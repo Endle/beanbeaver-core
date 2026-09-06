@@ -23,7 +23,10 @@ fn recovers_asterisk_tax_flag_and_ocr_merged_orphan_price() {
     .map(|s| s.to_string())
     .collect();
     let summary_amounts = HashSet::from([Money::from_cents(7370)]);
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let prices: Vec<Money> = items.iter().map(|it| it.price).collect();
     // Both colas recovered (asterisk tolerated) plus the orphaned Natrel.
     assert_eq!(
@@ -64,7 +67,10 @@ fn skips_compact_slash_deal_unit_rows_and_price_match_promo() {
     .map(|s| s.to_string())
     .collect();
     let summary_amounts = HashSet::from([Money::from_cents(5078)]);
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let total: Money = items.iter().map(|it| it.price).sum();
     assert_eq!(
         total,
@@ -103,7 +109,10 @@ fn keeps_item_whose_description_ends_in_percent_fat() {
     .map(|s| s.to_string())
     .collect();
     let summary_amounts = HashSet::from([Money::from_cents(2247)]);
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     assert_eq!(
         items
             .iter()
@@ -133,7 +142,10 @@ fn emits_priced_frozen_generic_item_label() {
     .map(|s| s.to_string())
     .collect();
     let summary_amounts = HashSet::from([Money::from_cents(1423)]);
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let prices: Vec<Money> = items.iter().map(|it| it.price).collect();
     assert!(
         prices.contains(&Money::from_cents(699)),
@@ -152,7 +164,8 @@ fn recovers_unique_malformed_three_decimal_prices_via_summary_reconciliation() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(1638)]);
 
-    let (items, warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome { items, warnings } =
+        extract_text_items(&lines, &summary_amounts);
 
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].description, "2% FINE-FILT");
@@ -179,7 +192,10 @@ fn skips_reg_marker_lines_with_ocr_noise_prefix() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(293)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
 
     // Should produce only one item at $2.93, not a ghost at $1.69
     assert_eq!(items.len(), 1);
@@ -198,7 +214,10 @@ fn skips_reg_marker_lines_with_garbled_ocr_prefix() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(898)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
 
     // Should NOT create a ghost item at $7.99 from the REG marker line
     let prices: Vec<Money> = items.iter().map(|i| i.price).collect();
@@ -221,7 +240,8 @@ fn leaves_malformed_three_decimal_prices_as_warnings_without_corroborating_summa
     ];
     let summary_amounts = HashSet::new();
 
-    let (items, warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome { items, warnings } =
+        extract_text_items(&lines, &summary_amounts);
 
     assert!(items.is_empty());
     assert_eq!(warnings.len(), 1);
@@ -240,7 +260,10 @@ fn recovers_item_with_comma_decimal_price() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(99)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
 
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].price, Money::from_cents(99));
@@ -270,7 +293,10 @@ fn orphan_deal_line_price_skips_qty_row_to_reach_description_below() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(1544)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let observed: Vec<(String, Money)> = items
         .into_iter()
         .map(|item| (item.description, item.price))
@@ -315,7 +341,10 @@ fn weight_row_total_validates_against_rate_and_frees_drifted_price() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(2168)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let observed: Vec<(String, Money)> = items
         .into_iter()
         .map(|item| (item.description, item.price))
@@ -362,7 +391,10 @@ fn coincidental_qty_echo_pairs_downward_under_receipt_drift() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(947)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let observed: Vec<(String, Money)> = items
         .into_iter()
         .map(|item| (item.description, item.price))
@@ -409,7 +441,10 @@ fn paren_subtext_price_pairs_forward_when_description_above_consumed() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(1421)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let observed: Vec<(String, Money)> = items
         .into_iter()
         .map(|item| (item.description, item.price))
@@ -469,7 +504,10 @@ fn priced_header_chain_resolves_first_two_items_under_drift() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(1624)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let observed: Vec<(String, Money)> = items
         .into_iter()
         .map(|item| (item.description, item.price))
@@ -522,7 +560,10 @@ fn mangled_reg_row_forwards_drifted_price_under_drift() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(2634)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let observed: Vec<(String, Money)> = items
         .into_iter()
         .map(|item| (item.description, item.price))
@@ -561,7 +602,10 @@ fn weight_rate_row_with_dropped_at_still_prices_item_above() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(463)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let observed: Vec<(String, Money)> = items
         .into_iter()
         .map(|item| (item.description, item.price))
@@ -595,7 +639,10 @@ fn subtext_price_stays_with_unclaimed_item_above() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(882)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let observed: Vec<(String, Money)> = items
         .into_iter()
         .map(|item| (item.description, item.price))
@@ -632,7 +679,10 @@ fn multiline_name_continuation_does_not_block_orphan_pairing() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(1257)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let observed: Vec<(String, Money)> = items
         .into_iter()
         .map(|item| (item.description, item.price))
@@ -664,7 +714,10 @@ fn strips_embedded_unit_price_and_tax_flags_from_description() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(2099), Money::from_cents(2372)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
 
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].description, "VICKS SINUS CO");
@@ -673,7 +726,7 @@ fn strips_embedded_unit_price_and_tax_flags_from_description() {
 
 #[test]
 fn parses_shoppers_s_tax_code_and_contextual_ocr_confusion() {
-    use super::engine::extract_trailing_price_cents;
+    use super::tokens::extract_trailing_price_cents;
 
     let lines = vec![
         "CREST 3DW TTHP 9.99 GP 9.99 5".to_string(),
@@ -683,7 +736,10 @@ fn parses_shoppers_s_tax_code_and_contextual_ocr_confusion() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(1998), Money::from_cents(2258)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
 
     assert!(
         items.iter().any(
@@ -705,7 +761,7 @@ fn parses_shoppers_s_tax_code_and_contextual_ocr_confusion() {
 
 #[test]
 fn comma_decimal_normalization_leaves_non_price_commas_untouched() {
-    use super::engine::normalize_decimal_spacing;
+    use super::tokens::normalize_decimal_spacing;
     // Positive: a comma between a digit and exactly two fraction digits.
     assert_eq!(normalize_decimal_spacing("0,99"), "0.99");
     assert_eq!(normalize_decimal_spacing("item 12,49 H"), "item 12.49 H");
@@ -719,7 +775,7 @@ fn comma_decimal_normalization_leaves_non_price_commas_untouched() {
 
 #[test]
 fn extract_trailing_price_cents_signs_discounts() {
-    use super::engine::extract_trailing_price_cents;
+    use super::tokens::extract_trailing_price_cents;
     // Leading-minus discount convention (e.g. Jin Lian "D9 -$1.96").
     assert_eq!(
         extract_trailing_price_cents("250g D9 -$1.96").map(|t| t.0),
@@ -765,7 +821,10 @@ fn parses_leading_minus_discount_lines_as_negative_items() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(5549), Money::from_cents(5049)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let prices: Vec<Money> = items.iter().map(|it| it.price).collect();
     assert!(
         prices.contains(&Money::from_cents(1399)),
@@ -794,7 +853,10 @@ fn parses_tx_category_tax_suffix_prices() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(986)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let prices: Vec<Money> = items.iter().map(|it| it.price).collect();
     assert!(
         prices.contains(&Money::from_cents(388)),
@@ -820,7 +882,10 @@ fn recovers_letter_fraction_malformed_price_via_reconciliation() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(350)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let prices: Vec<Money> = items.iter().map(|it| it.price).collect();
     assert!(
         prices.contains(&Money::from_cents(259)),
@@ -846,7 +911,10 @@ fn drops_item_price_exceeding_receipt_total() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(2432), Money::from_cents(2544)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let prices: Vec<Money> = items.iter().map(|it| it.price).collect();
     assert!(
         !prices.contains(&Money::from_cents(8158)),
@@ -887,7 +955,10 @@ fn column_header_total_is_not_the_grand_total_and_tender_backstops_the_cap() {
         Money::from_cents(140),
         Money::from_cents(1219),
     ]);
-    let (items, _warnings) = extract_text_items(&lines, &summary);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary);
     let observed: Vec<(String, Money)> = items
         .into_iter()
         .map(|item| (item.description, item.price))
@@ -916,7 +987,10 @@ fn ocr_noise_between_weight_unit_and_at_still_prices_item_above() {
     ];
     let summary_amounts = HashSet::from([Money::from_cents(736)]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     let observed: Vec<(String, Money)> = items
         .into_iter()
         .map(|item| (item.description, item.price))
@@ -968,7 +1042,10 @@ fn recovers_weighed_item_with_space_separated_tax_flags() {
         Money::from_cents(167),
     ]);
 
-    let (items, _warnings) = extract_text_items(&lines, &summary_amounts);
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
     assert!(
         items
             .iter()
