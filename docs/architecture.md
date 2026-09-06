@@ -73,7 +73,17 @@ ablation (**not** implemented), is in
 | `formatter` | Beancount text + `beanbeaver-id` / `document:` metadata |
 | `process` | Single entry: detections → `ProcessedReceipt` |
 
-**Dual item paths:** spatial vs text. The parser chooses/merges based on layout quality; both are covered by cached E2E fixtures. Prefer table-driven TOML for merchant quirks over hard-coded branches when possible.
+**Dual item paths:** spatial vs text. The parser selects spatial extraction when
+layout evidence supports it, falling back to text when spatial finds no items.
+Both return `ExtractionOutcome` (description, classification source, price,
+quantity, and shared warnings). Classification and discount sign correction run
+once after selection. Both paths are covered by cached E2E fixtures.
+
+`text` separates price tokens, quantity expressions, row interpretation,
+description pairing, and malformed-price reconciliation; `spatial` separates
+row geometry, pairing, and emission. Each `engine` owns the order of stages and
+row claims. `fields` separates price tokens, summary amounts, tenders, and dates.
+These are internal modules; the crate boundaries are unchanged.
 
 ### `receipt-image`
 
@@ -123,6 +133,9 @@ so it cannot live in either). `process_image` and `process_image_timed` are thin
 wrappers over it that supply `ScanOptions::default()`; the options-aware entry
 point takes a `ScanRequest` (filename, date, ledger accounts, image hash) so the
 four `&str` parameters that used to sit side by side cannot be swapped silently.
+`ScanRequest` re-exports core's `ProcessRequest`; the composition passes it to
+`process_receipt_request`. Reformatting takes `FormatContext` through
+`reformat_with_context`. Older positional Rust entry points remain wrappers.
 
 The FFI seam reaches the pipeline **only** through this function. It previously
 did so only for bundled rules, and ran its own copy of prep → OCR → detection
@@ -195,7 +208,16 @@ a method over the same lines, and that check is gone because it cannot fail.
 
 ### Parse result
 
-`ParsedReceiptData`: merchant (+ `MerchantMatch`), date, total/tax/subtotal, items (description, price, qty, category key, tags), warnings, tenders, raw text.
+`ParsedReceiptData`: merchant (+ `MerchantMatch`), date, total/tax/subtotal,
+items (description, price, quantity, winning `tag_path`, resolved `account`,
+semantic `tags`), warnings, tenders, raw text.
+
+`categories::classify_item` returns these three classification fields together
+from one resolved match set. `RuleBook::explain` uses the same computation.
+`ParserRuleLayers.category_rules.account_mapping` is the sole account map.
+The FFI `ReceiptItem` carries `tag_path` explicitly so a scan/reformat round-trip
+preserves the winning path even when another rule adds an unrelated semantic tag.
+Consumer migration details are in [receipt-contract-migration.md](receipt-contract-migration.md).
 
 ### Output identity
 

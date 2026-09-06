@@ -24,6 +24,7 @@ pub mod categories;
 pub mod common;
 pub mod date;
 pub(crate) mod detection_normalization;
+pub(crate) mod extraction;
 pub(crate) mod fields;
 pub(crate) mod formatter;
 pub mod merchant_details;

@@ -25,8 +25,8 @@ use receipt_core::parser::{
     ParsedReceiptData, ParsedReceiptItem, ParsedReceiptTender, ParsedReceiptWarning,
 };
 use receipt_core::process::{
-    process_receipt_with_options, reformat_parsed_receipt, FieldConfidence, ItemCorrection,
-    ProcessOptions, ProcessedReceipt, ReceiptCorrections,
+    process_receipt_request, reformat_with_context, FieldConfidence, FormatContext, ItemCorrection,
+    ProcessOptions, ProcessRequest, ProcessedReceipt, ReceiptCorrections,
 };
 use receipt_core::rules::RuleBook as CoreRuleBook;
 use scan::{Engine as OcrEngine, ScanRequest, ScanTimings as CoreScanTimings};
@@ -51,8 +51,10 @@ pub struct ReceiptItem {
     /// `category`, which held a classifier key that was *not necessarily* an
     /// account — callers could not tell which they had been given.
     pub account: Option<String>,
-    /// This line's classification, one entry per node from least to most
-    /// specific: `[{grocery, "Grocery"}, {grocery/dairy, "Dairy"}]`.
+    /// The winning classification path, preserved independently of semantic tags.
+    pub tag_path: Option<String>,
+    /// Semantic tags from all matching rules, with ancestors before descendants
+    /// within each path: `[{grocery, "Grocery"}, {grocery/dairy, "Dairy"}]`.
     ///
     /// Each entry carries an authored display name, so a consumer never has to
     /// invent one from the path. Deriving it by capitalizing the segment is what
@@ -769,14 +771,16 @@ pub fn parse_detections(
     let page = RawDetectionPage::try_new(raw, padded_width, padded_height, padding)
         .map_err(|e| ScanError::Parse { msg: e.to_string() })?;
     let opts = to_process_options(&options);
-    let processed = process_receipt_with_options(
+    let processed = process_receipt_request(
         page,
-        &image_filename,
-        today_date(&today)?,
-        &credit_card_account,
-        &currency,
-        &tax_account,
-        image_sha256.as_deref(),
+        ProcessRequest {
+            image_filename: &image_filename,
+            today: today_date(&today)?,
+            credit_card_account: &credit_card_account,
+            currency: &currency,
+            tax_account: &tax_account,
+            image_sha256: image_sha256.as_deref(),
+        },
         &opts,
     )
     .map_err(|msg| ScanError::Parse { msg })?;
@@ -828,13 +832,15 @@ pub fn reformat_receipt(
         subtotal: edits.subtotal,
     };
     let opts = to_process_options(&options);
-    let processed = reformat_parsed_receipt(
+    let processed = reformat_with_context(
         &parsed,
-        today_date(&today)?,
-        &credit_card_account,
-        &currency,
-        &tax_account,
-        image_sha256.as_deref(),
+        FormatContext {
+            today: today_date(&today)?,
+            credit_card_account: &credit_card_account,
+            currency: &currency,
+            tax_account: &tax_account,
+            image_sha256: image_sha256.as_deref(),
+        },
         &corrections,
         Some(&opts),
     )
@@ -921,6 +927,7 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
                 price: i.price.to_string(),
                 quantity: i.quantity,
                 account: i.account,
+                tag_path: i.tag_path,
                 tags: i
                     .tags
                     .iter()
@@ -1042,11 +1049,7 @@ fn receipt_result_to_parsed(r: &ReceiptResult) -> ParsedReceiptData {
                 description: i.description.clone(),
                 price: Money::from_decimal_str(&i.price),
                 quantity: i.quantity,
-                // The most specific tag path: it is the one that claimed the
-                // account, and the shallower entries are its ancestors. The FFI
-                // record carries `tags` and `account` but not the winning path
-                // itself, so it is recovered from the deepest tag.
-                tag_path: i.tags.last().map(|t| t.path.clone()),
+                tag_path: i.tag_path.clone(),
                 account: i.account.clone(),
                 tags: i.tags.iter().map(|t| t.path.clone()).collect(),
             })
@@ -1124,6 +1127,7 @@ mod tests {
             tax: None,
             subtotal: Some("10.00".into()),
             items: vec![ReceiptItem {
+                tag_path: Some("grocery/dairy".into()),
                 description: "Milk".into(),
                 price: "10.00".into(),
                 quantity: 1,
@@ -1157,6 +1161,53 @@ mod tests {
     /// The rule that stayed at the seam after the point-count rule moved into
     /// `RawDetectionPage`: an odd-length flat list has no last point, and
     /// `chunks_exact` would drop it silently rather than fail.
+    #[test]
+    fn reformat_preserves_winning_path_independently_of_tag_order() {
+        for winning_path in [Some("grocery/dairy".to_string()), None] {
+            let mut previous = sample_previous();
+            previous.items[0].tag_path = winning_path.clone();
+            previous.items[0].tags = vec![
+                ItemTag {
+                    path: "grocery/dairy".into(),
+                    display: "Dairy".into(),
+                },
+                ItemTag {
+                    path: "discount".into(),
+                    display: "Discount".into(),
+                },
+            ];
+            let result = reformat_receipt(
+                previous,
+                DateYmd {
+                    year: 2026,
+                    month: 2,
+                    day: 18,
+                },
+                "Liabilities:CreditCard".into(),
+                "CAD".into(),
+                "Expenses:Tax:HST".into(),
+                None,
+                no_edits(),
+                ParseOptions::default(),
+            )
+            .unwrap();
+            assert_eq!(result.items[0].tag_path, winning_path);
+            assert_eq!(
+                result.items[0].account.as_deref(),
+                Some("Expenses:Food:Grocery:Dairy")
+            );
+            assert_eq!(
+                result.items[0]
+                    .tags
+                    .iter()
+                    .map(|t| t.path.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["grocery/dairy", "discount"]
+            );
+            assert_eq!(result.items[0].price, "10.00");
+        }
+    }
+
     #[test]
     fn parse_detections_rejects_odd_length_points() {
         let result = parse_detections(
@@ -1418,7 +1469,7 @@ mod tests {
     #[ignore = "needs converted models + fixture"]
     fn scan_costco_fixture_end_to_end() {
         let session = OcrSession::new("../../models".to_string(), true).expect("load models");
-        let bytes = std::fs::read("../../tests/receipts_e2e/costco_20260218_redact.jpg")
+        let bytes = std::fs::read("../receipt-core/tests/receipts_e2e/costco_20260218_redact.jpg")
             .expect("read fixture");
 
         let r = session

@@ -242,6 +242,7 @@ fn public_live_e2e() {
 
     let mut engine = OcrEngine::from_paths(&det, &rec, Some(&cls)).expect("load PP-OCRv5 models");
     let account_mapping: HashMap<String, String> = default_parser_rule_layers()
+        .category_rules
         .account_mapping
         .into_iter()
         .collect();
@@ -355,7 +356,7 @@ fn public_live_e2e() {
                         .iter()
                         .filter(|it| price_matches(price, it.price))
                         .any(|it| {
-                            it.tag_path
+                            it.account
                                 .as_deref()
                                 .is_some_and(|k| category_matches(c, k, &account_mapping))
                         })

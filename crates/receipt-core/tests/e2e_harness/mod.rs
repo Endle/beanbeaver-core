@@ -114,12 +114,10 @@ fn item_desc_matches(actual: &str, expected: &str) -> bool {
     !e.is_empty() && (a.contains(&e) || e.contains(&a))
 }
 
-/// Fixtures assert a beancount **account**; the parse carries a **tag path**.
-/// Match on substring, else resolve both through the account mapping and compare.
-///
-/// The two-sided comparison is load-bearing rather than sloppy: the corpus was
-/// authored against accounts and the parser reports the classification that
-/// produced them, so one side has to be resolved into the other's terms.
+/// Compare fixture accounts against the parsed item's resolved account.
+/// Preserve the corpus's historical substring matching; resolve legacy fixture
+/// tag paths through the account map when needed. The winning tag path is a
+/// separate contract, covered by parser unit tests.
 fn category_matches(expected: &str, actual: &str, mapping: &HashMap<String, String>) -> bool {
     let (e, a) = (expected.to_uppercase(), actual.to_uppercase());
     if e.contains(&a) || a.contains(&e) {
@@ -296,7 +294,7 @@ pub fn run_cached_corpus_in(
 ) -> CorpusResult {
     let layers = parser_rule_layers_with_overrides(overrides)
         .unwrap_or_else(|e| panic!("override classifier TOML: {e}"));
-    let mapping: HashMap<String, String> = layers.account_mapping.iter().cloned().collect();
+    let mapping: HashMap<String, String> = layers.category_rules.account_mapping.clone();
     let merchants = default_known_merchants();
     let merchant_families = default_merchant_families();
 
@@ -504,7 +502,7 @@ pub fn run_cached_corpus_in(
                         .iter()
                         .filter(|it| price_matches(price, it.price))
                         .any(|it| {
-                            it.tag_path
+                            it.account
                                 .as_deref()
                                 .is_some_and(|k| category_matches(c, k, &mapping))
                         })
@@ -517,7 +515,7 @@ pub fn run_cached_corpus_in(
                             (
                                 it.description.as_str(),
                                 it.price.to_string(),
-                                it.tag_path.as_deref(),
+                                it.account.as_deref(),
                             )
                         })
                         .collect();

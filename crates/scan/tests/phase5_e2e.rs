@@ -154,6 +154,7 @@ fn phase5_on_device_vs_expected() {
     let fixtures = repo_path("crates/receipt-core/tests/receipts_e2e");
     let models = repo_path("models");
     let account_mapping: HashMap<String, String> = default_parser_rule_layers()
+        .category_rules
         .account_mapping
         .into_iter()
         .collect();
@@ -273,7 +274,7 @@ fn phase5_on_device_vs_expected() {
                             .iter()
                             .filter(|it| price_matches(price, it.price))
                             .any(|it| {
-                                it.tag_path
+                                it.account
                                     .as_deref()
                                     .is_some_and(|c| category_matches(cat, c, &account_mapping))
                             })

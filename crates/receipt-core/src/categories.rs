@@ -729,33 +729,63 @@ pub fn expand_tag_paths(paths: &[String]) -> Vec<String> {
     expanded
 }
 
-pub fn classify_item_key(
-    description: &str,
-    rule_layers: &CategoryRuleLayers,
-    default: Option<String>,
-) -> Option<String> {
-    let matches = resolve_matches(description, rule_layers);
-    let best = matches
-        .into_iter()
-        .filter(|matched| matched.category.is_some())
-        .max_by(compare_match_rank);
-    best.and_then(|matched| matched.category).or(default)
+/// Classification from one matching pass. The winning path and resolved account
+/// are separate from the union of semantic tags contributed by all rules.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemClassification {
+    pub tag_path: Option<String>,
+    pub account: Option<String>,
+    pub tags: Vec<String>,
 }
 
-pub fn classify_item_tags(description: &str, rule_layers: &CategoryRuleLayers) -> Vec<String> {
-    let matches = resolve_matches(description, rule_layers);
-    let mut tags = Vec::new();
+fn classification_from_matches(
+    matches: &[RuleMatch],
+    layers: &CategoryRuleLayers,
+) -> ItemClassification {
+    let tag_path = matches
+        .iter()
+        .filter(|m| m.category.is_some())
+        .max_by(|a, b| compare_match_rank(a, b))
+        .and_then(|m| m.category.clone());
+    let account = resolve_account_target(tag_path.as_deref(), &layers.account_mapping, None);
     let mut seen = HashSet::new();
-
-    for matched in matches {
-        for tag in matched.tags {
-            if seen.insert(tag.clone()) {
-                tags.push(tag);
-            }
-        }
+    let tags = matches
+        .iter()
+        .flat_map(|m| m.tags.iter())
+        .filter(|tag| seen.insert((*tag).clone()))
+        .cloned()
+        .collect();
+    ItemClassification {
+        tag_path,
+        account,
+        tags,
     }
+}
 
-    tags
+pub fn classify_item(description: &str, layers: &CategoryRuleLayers) -> ItemClassification {
+    classification_from_matches(&resolve_matches(description, layers), layers)
+}
+
+pub fn classify_item_key(
+    description: &str,
+    layers: &CategoryRuleLayers,
+    default: Option<String>,
+) -> Option<String> {
+    classify_item(description, layers).tag_path.or(default)
+}
+
+pub fn classify_item_tags(description: &str, layers: &CategoryRuleLayers) -> Vec<String> {
+    classify_item(description, layers).tags
+}
+
+pub(crate) fn explain_classification(
+    description: &str,
+    layers: &CategoryRuleLayers,
+) -> (ItemClassification, Vec<RuleMatch>) {
+    let mut matches = resolve_matches(description, layers);
+    let classification = classification_from_matches(&matches, layers);
+    matches.sort_by(|a, b| compare_match_rank(b, a));
+    (classification, matches)
 }
 
 pub fn list_item_categories(rule_layers: &CategoryRuleLayers) -> Vec<(String, String)> {
@@ -965,7 +995,7 @@ mod tests {
         // Build the bundled layers once; classify to a key then resolve to an
         // account (the desktop `categorize_item` chain).
         let layers = default_parser_rule_layers();
-        let mapping: HashMap<String, String> = layers.account_mapping.iter().cloned().collect();
+        let mapping: HashMap<String, String> = layers.category_rules.account_mapping.clone();
         let categorize = |description: &str| -> Option<String> {
             let key = classify_item_key(description, &layers.category_rules, None)?;
             resolve_account_target(Some(&key), &mapping, None)

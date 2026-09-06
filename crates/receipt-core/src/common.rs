@@ -579,3 +579,10 @@ pub fn clean_description(description: &str) -> String {
         .trim()
         .to_string()
 }
+
+#[derive(Clone, Debug)]
+pub struct ReceiptWarning {
+    pub kind: ReceiptWarningKind,
+    pub message: String,
+    pub after_item_index: Option<usize>,
+}

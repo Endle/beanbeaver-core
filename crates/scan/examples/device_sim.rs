@@ -125,6 +125,7 @@ fn main() {
     };
 
     let mapping: HashMap<String, String> = default_parser_rule_layers()
+        .category_rules
         .account_mapping
         .into_iter()
         .collect();
@@ -1430,7 +1431,7 @@ fn score(
                         .iter()
                         .filter(|it| price_matches(price, it.price))
                         .any(|it| {
-                            it.tag_path
+                            it.account
                                 .as_deref()
                                 .is_some_and(|c| category_matches(cat, c, mapping))
                         })

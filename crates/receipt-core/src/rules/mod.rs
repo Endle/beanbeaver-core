@@ -36,10 +36,10 @@ mod tests {
         // Account mapping must include the ported defaults.
         assert_eq!(
             layers
+                .category_rules
                 .account_mapping
-                .iter()
-                .find(|(k, _)| k == "grocery/dairy")
-                .map(|(_, v)| v.as_str()),
+                .get("grocery/dairy")
+                .map(String::as_str),
             Some("Expenses:Food:Grocery:Dairy")
         );
         // Rules parsed from the bundled classifier TOML are non-empty.
@@ -73,22 +73,9 @@ mod tests {
             fresh.category_rules.exact_only_keywords,
             cached.category_rules.exact_only_keywords
         );
-        // Compared as sets, not sequences: `account_mapping` is a `Vec` built by
-        // iterating a `HashMap`, so its order is nondeterministic between runs.
-        // That was pre-existing and load-bearing in exactly one place —
-        // `receipt_staged_json::account_for_classification`, which returned the
-        // *first* mapping key whose `_`-split segments contain a tag. That
-        // module was unreachable at HEAD and has been deleted, so nothing
-        // depends on the order any more; the set comparison below stays because
-        // the order is still nondeterministic, not because anything reads it.
-        let sorted = |m: &Vec<(String, String)>| {
-            let mut v = m.clone();
-            v.sort();
-            v
-        };
         assert_eq!(
-            sorted(&fresh.account_mapping),
-            sorted(&cached.account_mapping)
+            fresh.category_rules.account_mapping,
+            cached.category_rules.account_mapping
         );
         for (a, b) in fresh
             .category_rules

@@ -27,7 +27,7 @@ use image::RgbImage;
 use ocr_paddle::engine::OcrEngine;
 use ocr_paddle::prep::resize_and_pad;
 use receipt_core::ocr_transform::{RawDetection, RawDetectionPage, TransformError};
-use receipt_core::process::{process_receipt_with_options, ProcessOptions, ProcessedReceipt};
+use receipt_core::process::{process_receipt_request, ProcessOptions, ProcessedReceipt};
 
 // Re-exported so the FFI seam (and the harnesses) can depend on `scan` alone
 // rather than reaching past it into `ocr-paddle`. Keeping the seam's dependency
@@ -58,23 +58,8 @@ pub struct ScanTimings {
     pub total_ms: f64,
 }
 
-/// Everything about one scan except the pixels: what to call the receipt, what
-/// "today" is for date inference, and which ledger accounts the beancount is
-/// written against.
-///
-/// Grouping these is not cosmetic. They were six positional parameters, four of
-/// them `&str`, so any two could be swapped silently — `credit_card_account` and
-/// `tax_account` in particular are both accounts and both plausible in either
-/// slot. Named fields make a wrong call site a wrong *name*, which is visible.
-#[derive(Clone, Copy, Debug)]
-pub struct ScanRequest<'a> {
-    pub image_filename: &'a str,
-    pub today: Date,
-    pub credit_card_account: &'a str,
-    pub currency: &'a str,
-    pub tax_account: &'a str,
-    pub image_sha256: Option<&'a str>,
-}
+/// Named receipt context shared with the parser.
+pub use receipt_core::process::ProcessRequest as ScanRequest;
 
 /// Why a composition failed.
 ///
@@ -236,17 +221,7 @@ pub fn process_image_with_options(
     )?;
 
     let t = Instant::now();
-    let processed = process_receipt_with_options(
-        page,
-        request.image_filename,
-        request.today,
-        request.credit_card_account,
-        request.currency,
-        request.tax_account,
-        request.image_sha256,
-        options,
-    )
-    .map_err(ScanError::Rules)?;
+    let processed = process_receipt_request(page, request, options).map_err(ScanError::Rules)?;
     let parse_ms = ms_since(t);
 
     let timings = ScanTimings {
@@ -274,7 +249,7 @@ mod tests {
     #[test]
     #[ignore = "needs converted models + fixture"]
     fn process_image_end_to_end_costco() {
-        let img = image::open("../../tests/receipts_e2e/costco_20260218_redact.jpg")
+        let img = image::open("../receipt-core/tests/receipts_e2e/costco_20260218_redact.jpg")
             .expect("load fixture")
             .to_rgb8();
         let (det, rec, cls) = model_files::in_dir("../../models");
