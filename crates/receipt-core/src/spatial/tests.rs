@@ -690,3 +690,81 @@ fn accepts_embedded_trailing_price_word() {
         .count();
     assert_eq!(seafood, 2);
 }
+
+/// A Costco discount row whose slash the OCR dropped is still a discount row.
+///
+/// From a 2026-09-02 Costco scan (total 300.08): two identical
+/// `2106919 TPD/2321410 6.00-` rows, four apart, and the second came back as
+/// `2106919 TPD 2321410`. `TPD 2321410` is alpha-ratio 0.30, so without the
+/// `re_costco_discount_line` waiver the row lost the alpha-ratio floor and its
+/// -6.00 went out as a `PossibleMissedItem` — leaving the ledger 6.00 short of
+/// balancing while the total itself was read correctly.
+///
+/// Boxes are the scan's own, normalized against its 991x3100 padded page.
+#[test]
+fn keeps_costco_discount_row_whose_slash_ocr_read_as_a_space() {
+    let lines = vec![
+        line(
+            "2321410 VIT B100 29.99 H",
+            vec![
+                word("2321410 VIT B100", 0.2056, 0.4920, 0.5679, 0.5107),
+                word("29.99", 0.7525, 0.4911, 0.8745, 0.5070),
+                word("H", 0.9031, 0.4905, 0.9407, 0.5069),
+            ],
+        ),
+        line(
+            "2106919 TPD/2321410 6.00- H",
+            vec![
+                word("2106919 TPD/2321410", 0.2054, 0.5068, 0.6325, 0.5254),
+                word("6.00-", 0.7660, 0.5066, 0.8962, 0.5227),
+                word("H", 0.9014, 0.5069, 0.9404, 0.5211),
+            ],
+        ),
+        line(
+            "2321410 VIT B100 29.99 H",
+            vec![
+                word("2321410 VIT B100", 0.2062, 0.5230, 0.5691, 0.5402),
+                word("29.99", 0.7509, 0.5212, 0.8780, 0.5392),
+                word("H", 0.9031, 0.5224, 0.9426, 0.5375),
+            ],
+        ),
+        line(
+            "2106919 TPD 2321410 6.00- H",
+            vec![
+                word("2106919 TPD 2321410", 0.2030, 0.5372, 0.6349, 0.5567),
+                word("6.00-", 0.7709, 0.5382, 0.8990, 0.5529),
+                word("H", 0.8964, 0.5377, 0.9435, 0.5528),
+            ],
+        ),
+        line(
+            "305882 *KS IBU 400M 16.99 H",
+            vec![
+                word("305882 *KS IBU 400M", 0.2262, 0.5540, 0.6548, 0.5713),
+                word("16.99", 0.7583, 0.5529, 0.8803, 0.5688),
+                word("H", 0.9037, 0.5538, 0.9420, 0.5673),
+            ],
+        ),
+    ];
+
+    let outcome = extract_spatial_items(&OcrDocument { lines });
+    let discounts = outcome
+        .items
+        .iter()
+        .filter(|item| item.price == Money::from_cents(-600))
+        .count();
+    assert_eq!(
+        discounts,
+        2,
+        "both -6.00 discount rows must survive, got: {:?}",
+        outcome
+            .items
+            .iter()
+            .map(|item| (&item.description, item.price))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        outcome.warnings.is_empty(),
+        "no price should go unpaired: {:?}",
+        outcome.warnings
+    );
+}
