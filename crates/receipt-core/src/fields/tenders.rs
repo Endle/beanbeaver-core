@@ -55,6 +55,63 @@ pub(super) fn re_cash_label() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"\bCASH\b").unwrap())
 }
+/// Last resort for a payment block whose labelled slip prints no amount beside
+/// it: the charge alone, read off the foot of the authorization block.
+///
+/// Costco's pay station prints `ACCT: MASTERCARD` at the top of that block and
+/// the charge nine rows below it as `AMOUNT: 79.08`, past the reference, auth,
+/// invoice and approval rows. [`tender_amount_for_line`] reaches the same line
+/// and the next one only, so a receipt cut off after the authorization block
+/// used to report *no payment block at all* — the card-paid receipt looked
+/// exactly like one that prints no tenders.
+///
+/// **This runs only when the ordinary scan found nothing**, and that is what
+/// makes it safe rather than a double count. The self-checkout layout prints
+/// the same block *and* a labelled `MasterCard 16.38` line below it, and it is
+/// littered with rows that classify as a card on their own (`ACCT: MASTERCARD`,
+/// `Purchase - Mastercard`), each of them amount-less. Letting any of them
+/// adopt the `AMOUNT:` row cost ~20 corpus receipts a doubled payment side and
+/// took the split-tender receipts' gift cards with it — measured, then narrowed
+/// to this.
+///
+/// [`classify_tender_line`] still rejects an `AMOUNT:` row as a tender in its
+/// own right: on the Shop Card layout it is an echo of a labelled line that
+/// carries its own amount.
+fn tender_from_authorization_block(lines: &[String]) -> Option<TenderLine> {
+    // Wide enough for Costco's authorization block (9 rows on the receipt that
+    // motivated this), narrow enough not to leave the payment block.
+    const WINDOW: usize = 12;
+    for (idx, line) in lines.iter().enumerate() {
+        let upper = line.to_ascii_uppercase();
+        let Some(kind) = classify_tender_line(&upper) else {
+            continue;
+        };
+        let block = &lines[(idx + 1)..(idx + 1 + WINDOW).min(lines.len())];
+        for row in block {
+            let row_upper = row.to_ascii_uppercase();
+            // A summary label means this block is over.
+            if row_upper.contains("TOTAL") {
+                break;
+            }
+            if !row_upper.contains("AMOUNT:") {
+                continue;
+            }
+            // An AMOUNT: row with no readable amount ends the search rather
+            // than falling through to the next label: this is a last resort,
+            // and reaching past it is how a wrong tender gets invented.
+            let amount_cents = extract_price_from_line(row)?;
+            if amount_cents <= 0 {
+                return None;
+            }
+            return Some(TenderLine {
+                raw_label: trim_tender_label(line),
+                amount_cents,
+                kind,
+            });
+        }
+    }
+    None
+}
 pub(super) fn tender_amount_for_line(lines: &[String], idx: usize) -> Option<i64> {
     if let Some(amount) = extract_price_from_line(&lines[idx]) {
         return Some(amount);
@@ -138,6 +195,10 @@ pub fn extract_tenders(lines: &[String]) -> Vec<TenderLine> {
             amount_cents,
             kind,
         });
+    }
+
+    if tenders.is_empty() {
+        tenders.extend(tender_from_authorization_block(lines));
     }
 
     tenders

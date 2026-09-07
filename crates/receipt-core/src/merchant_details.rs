@@ -268,8 +268,11 @@ pub fn extract_merchant_details(lines: &[String]) -> MerchantDetails {
             .map(|found| found.as_str())
         {
             // Reject ordinary phrases such as "store manager" while retaining
-            // OCR-damaged identifiers like Walmart's 30E3.
-            if value.chars().any(|ch| ch.is_ascii_digit()) {
+            // OCR-damaged identifiers like Walmart's 30E3. A phone number is
+            // never a store number, and the label sits right in front of one on
+            // Canadian Tire's "STORE 905-472-1638/ SERVICE 905-472-8580" — skip
+            // the candidate and keep scanning rather than publish a wrong value.
+            if value.chars().any(|ch| ch.is_ascii_digit()) && phone_in(value).is_none() {
                 out.store_number = Some(value.to_string());
                 add_raw(&mut out.raw_lines, line);
                 break;
@@ -574,6 +577,23 @@ mod tests {
             "COSTCO\n65 Kirkham Drive\nMarkham, ON L3S 0A9\nWhse:545 Trm:8",
         ));
         assert_eq!(found.store_number.as_deref(), Some("545"));
+    }
+
+    #[test]
+    fn store_label_in_front_of_a_phone_number_is_not_a_store_number() {
+        // Canadian Tire prints "STORE <phone>/ SERVICE <phone>" under the
+        // banner; the store number itself is the banner's "#399", which this
+        // capture lost to OCR. Publishing the phone would be worse than none.
+        let found = extract_merchant_details(&lines(
+            "CANADIAN TIRE #399\n7650 MARKHAM RD. MARKHAM ON L3S 3K1\nSTORE 905-472-1638/ SERVICE 905-472-8580",
+        ));
+        assert_eq!(found.phone_number.as_deref(), Some("905-472-1638"));
+        assert_eq!(found.store_number.as_deref(), Some("399"));
+
+        let ocr_damaged = extract_merchant_details(&lines(
+            "CANADIAN TIRE R399\n7650 MARKHAM RD. MARKHAM ON L3S 3K1\nSTORE 905-472-1638/ SERVICE 905-472-8580",
+        ));
+        assert_eq!(ocr_damaged.store_number, None);
     }
 
     #[test]

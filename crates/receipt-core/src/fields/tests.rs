@@ -368,6 +368,20 @@ fn subtotal_tolerates_costco_subtctal_ocr_typo() {
 }
 
 #[test]
+fn subtotal_tolerates_canadian_tire_surtotal_ocr_typo() {
+    // Canadian Tire "SUBTOTAL" OCR'd as "SURTOTAL" (B → R, the lower bowl of
+    // the B breaking in dot-matrix print). Receipt 2026-09-03_canadian_tire_135_59.
+    let lines = vec![
+        "068-0454-0 MC 5 SHLF RACK $ 119.99".to_string(),
+        "SURTOTAL 119.99".to_string(),
+        "134 HST 15.60".to_string(),
+        "TOTAL 135.59".to_string(),
+    ];
+
+    assert_eq!(extract_subtotal(&lines), Some(11_999));
+}
+
+#[test]
 fn bare_total_takes_tax_row_amount_when_it_exceeds_the_subtotal() {
     // Costco 2026-07-08_costco_112_95: up-leaned line grouping left the
     // TOTAL row bare and put the grand total on the TAX row (and the tax
@@ -704,6 +718,54 @@ fn tenders_split_costco_shop_card_and_mastercard() {
     assert_eq!(tenders[1].kind, "card");
     assert_eq!(tenders[1].amount_cents, 44_168);
     assert_eq!(tenders[1].raw_label, "MASTERCARD");
+}
+
+#[test]
+fn costco_pay_station_card_takes_the_amount_at_the_foot_of_its_slip() {
+    // costco/2026-09-03_costco_79_08: the pay station prints the card label in
+    // the middle of the authorization block and the charge at the bottom of it.
+    // Nothing sits beside "ACCT: MASTERCARD" and the next line is a reference
+    // number, so this slip used to vanish and the receipt reported no payment
+    // block at all.
+    let lines = vec![
+        "**** TOTAL 79.08".to_string(),
+        "XXXXXXXxXxXX9057".to_string(),
+        "ACCT: MASTERCARD".to_string(),
+        "REFERENCE #: 0010012730 C".to_string(),
+        "AUTH #: 3482J 2026/09/03 19:24:48".to_string(),
+        "Invoice Number: 251273".to_string(),
+        "Purchase - Rogers Mc".to_string(),
+        "A0000000041010".to_string(),
+        "0000008000 E800".to_string(),
+        "APPROVED - THANK YOU 027".to_string(),
+        "01".to_string(),
+        "AMOUNT: 79.08".to_string(),
+    ];
+
+    let tenders = extract_tenders(&lines);
+    assert_eq!(tenders.len(), 1);
+    assert_eq!(tenders[0].kind, "card");
+    assert_eq!(tenders[0].amount_cents, 7_908);
+    assert!(tenders_reconcile(&lines, &tenders, 7_908));
+}
+
+#[test]
+fn an_amount_less_slip_never_takes_the_next_slips_amount() {
+    // The guard that makes the authorization-block read safe: it runs only for
+    // a payment block that yielded nothing at all. Here the gift card carries
+    // its own amount, so the amount-less card label above it must not also
+    // claim the AMOUNT: row — that doubles the payment side.
+    let lines = vec![
+        "Total 25.00".to_string(),
+        "ACCT: MASTERCARD".to_string(),
+        "Gift Card 25.00".to_string(),
+        "AMOUNT: 25.00".to_string(),
+    ];
+
+    let tenders = extract_tenders(&lines);
+    assert_eq!(tenders.len(), 1);
+    assert_eq!(tenders[0].kind, "gift_card");
+    assert_eq!(tenders[0].amount_cents, 2_500);
 }
 
 #[test]
