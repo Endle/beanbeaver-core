@@ -293,6 +293,13 @@ pub(crate) fn re_costco_discount_line() -> &'static Regex {
     // as a space (e.g. "TPD/1 96144" for "TPD/1796144"). Allow `TP[A-Z]/`
     // because OCR also occasionally reads the `D` as `U` etc.
     //
+    // The separator itself is `[/\s]`, not `/`, because the slash is just as
+    // droppable as the digits around it: a 2026-09-02 Costco scan read one
+    // `2106919 TPD/2321410` as `2106919 TPD 2321410` while reading its
+    // identical twin four rows up correctly. Losing the waiver costs the whole
+    // row — `TPD 2321410` is alpha-ratio 0.30 — so that receipt's second
+    // -6.00 vanished and the ledger missed balancing by exactly 6.00.
+    //
     // The leading `[\d\s]*` is the discount row's own SKU and tier count.
     // Costco prints them in the left column ahead of the reference
     // ("2030193 3 TPD/1944033"), and whether they land in the same grouped
@@ -301,7 +308,7 @@ pub(crate) fn re_costco_discount_line() -> &'static Regex {
     // on some Costco receipts and not others. Still anchored at both ends,
     // and still digits-only either side, so this widens what counts as the
     // *prefix* without letting a prose line through.
-    RE.get_or_init(|| Regex::new(r"^[\d\s]*TP[A-Z]/[\d/\s]+$").unwrap())
+    RE.get_or_init(|| Regex::new(r"^[\d\s]*TP[A-Z][/\s][\d/\s]+$").unwrap())
 }
 
 pub(crate) fn re_hed_word() -> &'static Regex {

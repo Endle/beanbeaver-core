@@ -1098,6 +1098,28 @@ mod tests {
                 .as_deref(),
             Some("Expenses:Discount")
         );
+        // The slash is what makes "TPD/" specific, but OCR does not always read
+        // it: a 2026-09-02 Costco scan gave "2106919 TPD 2321410", and the
+        // corpus already held "2045120 TPD TANK TOP". Bare "TPD" is a keyword
+        // too, listed in `exact_only_keywords` so it matches as a literal
+        // word rather than fuzzily reaching item codes and short product words.
+        assert_eq!(
+            crate::categories::classify_item("2106919 TPD 2321410", &layers.category_rules).tags,
+            vec!["discount"]
+        );
+        assert_eq!(
+            crate::categories::classify_item("2106919 TPD 2321410", &layers.category_rules)
+                .account
+                .as_deref(),
+            Some("Expenses:Discount")
+        );
+        // Still nets against the product it names, exactly as "TPD/" does.
+        let tank = crate::categories::classify_item("2045120 TPD TANK TOP", &layers.category_rules);
+        assert!(
+            tank.tags.contains(&"discount".to_string()),
+            "tags were {:?}",
+            tank.tags
+        );
         // And the keyword is specific: a bare product line near those words is
         // still a product.
         assert!(

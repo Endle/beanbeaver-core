@@ -23,7 +23,12 @@
 #   CRAN    (juice, legacy_0025) is CRANBERRY truncated to the width of the
 #           column. Fuzzily it reaches CRAB and BRAN, both of which are real
 #           products in other categories.
-exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN"]
+#   TPD     (discount, semantic_tag_0106) is Costco's discount marker, normally
+#           read with its slash. When OCR loses the slash the "TPD/" keyword
+#           misses, so the bare token has to be a keyword too — and at three
+#           characters it is exactly the fuzzy neighbourhood this list exists
+#           for. Listed here, it matches as `\bTPD\b` and nothing else.
+exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD"]
 
 # BRANDS — text that names the maker, blanked out before any keyword is matched.
 #
@@ -968,6 +973,14 @@ id = "semantic_tag_0106"
 # item codes and short product words across the corpus. The slash is always
 # printed, and it is what makes the keyword specific.
 #
+# But it is not always *read*. Two corpus receipts have OCR that drops it —
+# "2045120 TPD TANK TOP", and a 2026-09-02 scan's "2106919 TPD 2321410", which
+# also lost its row to the parser's alpha-ratio filter (see
+# `re_costco_discount_line`). So bare "TPD" is a keyword as well, and the
+# fuzzy-match objection above is answered by listing it in this file's
+# `exact_only_keywords`: at three characters that path is a literal `\bTPD\b`
+# with no fuzzy fallback, which is as specific as the slash was.
+#
 # Priority -90 — *below* every product rule, which is the opposite of what it
 # looks like it should be, and the corpus is why. Tags accumulate from every
 # matching rule; only the ACCOUNT is decided by priority. So losing the priority
@@ -985,7 +998,7 @@ id = "semantic_tag_0106"
 # code has nothing to net against and files to Expenses:Discount instead of the
 # Expenses:FIXME it used to get. Either way it now carries the `discount` tag,
 # which is the part that stops it reading as "no rule matched this".
-keywords = ["TPD/", "INSTANT SAVINGS", "YOU SAVED"]
+keywords = ["TPD/", "TPD", "INSTANT SAVINGS", "YOU SAVED"]
 tags = ["discount"]
 priority = -90
 exact_only = false
