@@ -90,6 +90,9 @@ pub fn extract_spatial_items(doc: &OcrDocument) -> SpatialExtractionOutcome {
                 if let Some(description) = row_description(&all_lines[index]) {
                     used_line_indices[index] = true;
                     items.push(SpatialExtractedItem {
+                        item_number: crate::extraction::leading_item_number(
+                            &all_lines[index].left_text,
+                        ),
                         category_source: description.clone(),
                         quantity: 1,
                         description,
@@ -110,6 +113,7 @@ pub fn extract_spatial_items(doc: &OcrDocument) -> SpatialExtractionOutcome {
             if let Some(description) = row_description(source_line) {
                 used_line_indices[price_candidate.source_line_index] = true;
                 items.push(SpatialExtractedItem {
+                    item_number: crate::extraction::leading_item_number(&source_line.left_text),
                     category_source: description.clone(),
                     quantity: 1,
                     description,
@@ -131,6 +135,9 @@ pub fn extract_spatial_items(doc: &OcrDocument) -> SpatialExtractionOutcome {
             ) {
                 used_line_indices[index] = true;
                 items.push(SpatialExtractedItem {
+                    item_number: crate::extraction::leading_item_number(
+                        &all_lines[index].left_text,
+                    ),
                     category_source: description.clone(),
                     quantity: 1,
                     description,

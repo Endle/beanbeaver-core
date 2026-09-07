@@ -144,6 +144,9 @@ pub struct ReceiptCorrections {
 #[derive(Clone, Debug)]
 pub struct ItemCorrection {
     pub description: String,
+    /// Carry the original code when renaming a line. None preserves the prior
+    /// code only when the description still matches; new lines default to None.
+    pub item_number: Option<String>,
     /// Decimal string, matching how prices cross the FFI.
     pub price: String,
     pub quantity: i32,
@@ -634,7 +637,7 @@ pub fn reformat_with_context(
             // display-only here (prices on a receipt are already extended), so
             // clamping cannot move an amount.
             let quantity = item.quantity.max(1);
-            rebuilt.push(if !item.tag_path.is_empty() {
+            let mut corrected = if !item.tag_path.is_empty() {
                 item_with_tag_path(
                     item.description.clone(),
                     price,
@@ -644,6 +647,7 @@ pub fn reformat_with_context(
                 )?
             } else if let Some(prior) = previous.get(item.description.as_str()) {
                 ParsedReceiptItem {
+                    item_number: None,
                     description: item.description.clone(),
                     price,
                     quantity,
@@ -653,7 +657,13 @@ pub fn reformat_with_context(
                 }
             } else {
                 classified_item(item.description.clone(), price, quantity, rule_layers)
+            };
+            corrected.item_number = item.item_number.clone().or_else(|| {
+                previous
+                    .get(item.description.as_str())
+                    .and_then(|prior| prior.item_number.clone())
             });
+            rebuilt.push(corrected);
         }
         parsed_out.items = rebuilt;
     }
@@ -709,6 +719,7 @@ mod tests {
             date_is_placeholder: false,
             total: "10.00".into(),
             items: vec![ParsedReceiptItem {
+                item_number: None,
                 description: "Milk".into(),
                 price: "10.00".into(),
                 quantity: 1,
@@ -803,6 +814,7 @@ mod tests {
 
     fn item(description: &str, price: &str, tag_path: &str) -> ItemCorrection {
         ItemCorrection {
+            item_number: None,
             description: description.into(),
             price: price.into(),
             quantity: 1,
@@ -958,6 +970,7 @@ mod tests {
     fn a_line_the_user_left_alone_keeps_the_classification_the_parse_gave_it() {
         let mut parsed = sample_parsed();
         parsed.items[0] = ParsedReceiptItem {
+            item_number: None,
             description: "TIDE CQLDWTR (Cold Water)".into(),
             price: "10.00".into(),
             quantity: 1,

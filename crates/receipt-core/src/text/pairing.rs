@@ -80,6 +80,7 @@ pub(super) fn orphan_qty_pairing(
     let desc = strip_sale_price_subtext(&strip_leading_receipt_codes(next_trimmed));
     Some(OrphanQtyPairing {
         item: ParsedTextItem {
+            item_number: crate::extraction::leading_item_number(next_trimmed),
             category_source: desc.clone(),
             description: desc,
             price: orphan_cents,
@@ -136,6 +137,7 @@ pub(super) fn drifted_price_pairing(
         let desc = strip_sale_price_subtext(&strip_leading_receipt_codes(candidate));
         return Some(OrphanQtyPairing {
             item: ParsedTextItem {
+                item_number: crate::extraction::leading_item_number(candidate),
                 category_source: desc.clone(),
                 description: desc,
                 price: price_cents,
@@ -376,6 +378,7 @@ pub(super) fn inline_item(plan: &PricePlan, price_cents: Money) -> ParsedTextIte
         .trim()
         .to_string();
     ParsedTextItem {
+        item_number: crate::extraction::leading_item_number(&plan.desc_part),
         description: desc_clean.clone(),
         category_source: desc_clean,
         price: price_cents,
@@ -776,6 +779,7 @@ pub(super) fn searched_item(
 
     let cleaned_desc = strip_sale_price_subtext(&found_desc_value);
     ParsedTextItem {
+        item_number: crate::extraction::leading_item_number(&all_lines[desc_line]),
         category_source: cleaned_desc.clone(),
         description: format!("{cleaned_desc}{description_suffix}"),
         price: price_cents,
