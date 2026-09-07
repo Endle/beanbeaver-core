@@ -402,6 +402,24 @@ pub(super) fn is_suggested_retail_row(line: &str, desc_part: &str) -> bool {
         .ends_with("REG")
 }
 
+/// Whether a row quotes suggested retail and therefore names no product, so the
+/// backward description walk must step over it.
+///
+/// Bestco Fresh 2026-09-06: OCR fused the Chinese sub-line and the REG marker
+/// into "MF7KREG$1.99". The parenthesised forms the walk already skips all open
+/// with "(", but this one opens with letters, so it read as a description and
+/// the real name line ("*ITc Pure Coconut Water 50") was walked straight past.
+///
+/// Split at the first price and test the text to its left, exactly as the
+/// pairing call site does. [`has_reg_price_marker`] alone is NOT usable here:
+/// it fires on "OREG", which is inside OREGANO.
+pub(super) fn quotes_suggested_retail(line: &str) -> bool {
+    match re_find_prices().find(line) {
+        Some(m) => is_suggested_retail_row(line, line[..m.start()].trim()),
+        None => false,
+    }
+}
+
 /// A ghost promo artifact like "EG2.99", where OCR ran letters and a price
 /// together into something that reads as a priced item but is not one.
 ///
