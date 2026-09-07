@@ -294,14 +294,31 @@ exact_only = false
 # "…SALTY…" descriptions (e.g. "LHL - Spicy Mix Salty Fla", a snack), which
 # were equally wrong as Staple before — neither list is right for those, and
 # no fixture asserts them.
+# Bare "SAUCE" (5) is a deliberate last-resort: it is shorter than every
+# compound sauce keyword beside it, so it only wins when nothing more specific
+# does. Added for "Xiangqi Sauce 450g" (Bestco Fresh 2026-09-06, 香其酱), which
+# booked to FIXME. Corpus check: it newly claims only the 3 rows that assert no
+# category today ("Chuan Qi Hot Pot Sauce 10", "Hot Pot Dipping Sauce", "Lee Kum
+# Kee Sauce For Hon"), all three correctly. "SOY SAUCE CHICKEN LEG" keeps its
+# PreparedMeal account, which is decided by a longer keyword.
+#
+# "NOODLE SAUCE" (12) exists to beat NOODLE (6, staple) and TURKEY (6, meat) on
+# `keyword_length` for "*ZHy Turkey Noodle Sauce 2" (周黑鸭火鸡面酱) — a sauce FOR
+# noodles, not a noodle. Same shape as VEGETABLE OIL beating VEGETABLE.
 id = "legacy_0019"
-keywords = ["VEGETABLE OIL", "CORN OIL", "SESAME OIL", "SESAMEOIL", "GARLIC", "GINGER", "GREEN ONION", "GREEN ONIONS", "CHILI PEPPER", "RED CHILI PEPPER", "CHILLI", "DRIED CHILLI", "CRUSHED CHILLI", "SPICE", "SEASONING", "SALT", "ROCK SUGAR", "PAPRIKA", "CUMIN", "CORIANDER", "TURMERIC", "CINNAMON", "NUTMEG", "OREGANO", "THYME", "ROSEMARY", "BAY LEAF", "CURRY", "CHILI POWDER", "CAYENNE", "SOY SAUCE", "BEAN SAUCE", "FISH SAUCE", "OYSTER SAUCE", "HOISIN", "WASABI", "SRIRACHA", "HOT SAUCE", "KETCHUP", "MUSTARD", "MAYONNAISE", "MAYO", "RELISH", "BBQ SAUCE", "TERIYAKI", "WORCESTERSHIRE", "PERICARPIUM ZANTHOXYLI", "PERICARPIURN ZANTHOXYLI", "SALSA", "HUMMUS", "GUACAMOLE", "PESTO", "CHINA TIME HONORED BRAND", "YUQUAN FRESH PRESERVED", "SOYBEAN PASTE", "MONOSODIUM", "MSG", "VEGOIL", "PRESERVED VEG"]
+keywords = ["VEGETABLE OIL", "CORN OIL", "SESAME OIL", "SESAMEOIL", "GARLIC", "GINGER", "GREEN ONION", "GREEN ONIONS", "CHILI PEPPER", "RED CHILI PEPPER", "CHILLI", "DRIED CHILLI", "CRUSHED CHILLI", "SPICE", "SEASONING", "SALT", "ROCK SUGAR", "PAPRIKA", "CUMIN", "CORIANDER", "TURMERIC", "CINNAMON", "NUTMEG", "OREGANO", "THYME", "ROSEMARY", "BAY LEAF", "CURRY", "CHILI POWDER", "CAYENNE", "SAUCE", "NOODLE SAUCE", "SOY SAUCE", "BEAN SAUCE", "FISH SAUCE", "OYSTER SAUCE", "HOISIN", "WASABI", "SRIRACHA", "HOT SAUCE", "KETCHUP", "MUSTARD", "MAYONNAISE", "MAYO", "RELISH", "BBQ SAUCE", "TERIYAKI", "WORCESTERSHIRE", "PERICARPIUM ZANTHOXYLI", "PERICARPIURN ZANTHOXYLI", "SALSA", "HUMMUS", "GUACAMOLE", "PESTO", "CHINA TIME HONORED BRAND", "YUQUAN FRESH PRESERVED", "SOYBEAN PASTE", "MONOSODIUM", "MSG", "VEGOIL", "PRESERVED VEG"]
 tags = ["grocery/seasoning"]
 priority = 0
 exact_only = false
 
 [[rules]]
 id = "legacy_0021"
+# "BUTTER FLAVORED"/"BUTTER FLAVOURED" (15) beat BUTTER (6, dairy) on
+# `keyword_length`: an X-flavoured product is not X. Added for "Gangfu Butter
+# Flavored Cr" (港福黄油咖啡味喵脆饼, a crispy biscuit — Bestco Fresh 2026-09-06),
+# which booked to Dairy even though the receipt rings it under `&& Grocery`.
+# No other corpus row contains "FLAVORED", so nothing else moves.
+#
 # "SACHIMA" (沙琪瑪) is a fried-dough snack bar. It is here because the only
 # other keyword its description contains is "EGG": Foody Mart prints "HFC - Egg
 # Crispy Sachima", so legacy_0002's dairy rule was the sole match and a snack
@@ -309,7 +326,7 @@ id = "legacy_0021"
 # `keyword_length` at equal priority — and no reordering either: snacks is
 # declared after dairy, so `grocery/snacks` is the last tag in the union and the
 # label the app leads with.
-keywords = ["POTATO CHIPS", "CHIP", "CHIPS", "POPCORN", "PRETZEL", "NUTS", "ALMONDS", "CASHEWS", "PEANUTS", "WALNUTS", "PISTACHIOS", "TRAIL MIX", "GRANOLA BAR", "PROTEIN BAR", "ENERGY BAR", "CANDY", "CHOCOLATE", "GUMMY", "GUMMIES", "SKITTLES", "M&M", "SNICKERS", "TWIX", "KITKAT", "REESE", "OREO", "GOLDFISH", "CHEETOS", "DORITOS", "PRINGLES", "LAYS", "RUFFLES", "TOSTITOS", "CHEEZ-IT", "RITZ", "SENBEI", "RICE CRACKER", "SACHIMA"]
+keywords = ["BUTTER FLAVORED", "BUTTER FLAVOURED", "POTATO CHIPS", "CHIP", "CHIPS", "POPCORN", "PRETZEL", "NUTS", "ALMONDS", "CASHEWS", "PEANUTS", "WALNUTS", "PISTACHIOS", "TRAIL MIX", "GRANOLA BAR", "PROTEIN BAR", "ENERGY BAR", "CANDY", "CHOCOLATE", "GUMMY", "GUMMIES", "SKITTLES", "M&M", "SNICKERS", "TWIX", "KITKAT", "REESE", "OREO", "GOLDFISH", "CHEETOS", "DORITOS", "PRINGLES", "LAYS", "RUFFLES", "TOSTITOS", "CHEEZ-IT", "RITZ", "SENBEI", "RICE CRACKER", "SACHIMA"]
 tags = ["grocery/snacks"]
 priority = 0
 exact_only = false
@@ -345,8 +362,14 @@ exact_only = false
 # - "Alphonso Juice Mango" embeds "SOJU" across the "...honSO JUice..." word
 #   boundary (the matcher compacts spaces), so the priority-1 alcohol rule
 #   would otherwise win. Priority 1 + the longer ALPHONSO exact match wins.
+# - "OASIS" is a juice brand whose lines are truncated to the fruit alone
+#   ("*Oasis Crange Pineapple Pa", Bestco Fresh 2026-09-06), so ORANGE and
+#   PINEAPPLE (legacy_0006, fruit) were the only matches and the carton booked
+#   as Fruit. All 3 other corpus rows agree: "OASIS ORANGE CARROT MANGO" and
+#   "Oasis Grape Rasipberry Pom" were uncategorized, "Oasis Smoothie Tropical M"
+#   is already asserted as Juice.
 id = "juice_brands"
-keywords = ["TROPICANA", "ALPHONSO"]
+keywords = ["TROPICANA", "ALPHONSO", "OASIS"]
 tags = ["grocery/drink/juice"]
 priority = 1
 exact_only = false
@@ -378,7 +401,12 @@ exact_only = false
 # "Nissin - Chicken Flavour" is ramen, not meat — CHICKEN would otherwise
 # win at priority 0.
 id = "noodle_brands"
-keywords = ["NISSIN"]
+# "PROSPER UNITY" (家和) prints only the noodle's REGION in Latin — "Prosper
+# Unity - Shanghai" (上海陽春麵) and "Prosper Unity , - Shandong" (山東拉麵),
+# Foody Mart 2026-09-04 — so nothing matched and both booked to FIXME. The brand
+# name is the only surviving signal. No other corpus row mentions it, so the
+# blast radius is exactly these two lines; corroborate on the next receipt.
+keywords = ["NISSIN", "PROSPER UNITY"]
 tags = ["grocery/staple"]
 priority = 1
 exact_only = false

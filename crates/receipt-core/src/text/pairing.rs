@@ -648,6 +648,12 @@ pub(super) fn describe_backward(index: usize, plan: &PricePlan, rows: Lines<'_>)
             qty.info.push(prev_line.to_string());
             continue;
         }
+        // A suggested-retail row quotes list price and names no product, so it
+        // is never this price's description. The parenthesised forms are caught
+        // below; this catches the ones OCR fuses onto letters ("MF7KREG$1.99").
+        if quotes_suggested_retail(prev_line) {
+            continue;
+        }
         if looks_like_onsale_marker(prev_line)
             || re_price_info_line().is_match(prev_line)
             || re_parenthetical_closed().is_match(prev_line)

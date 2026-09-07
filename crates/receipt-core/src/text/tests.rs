@@ -204,6 +204,58 @@ fn skips_reg_marker_lines_with_ocr_noise_prefix() {
 }
 
 #[test]
+fn reg_marker_fused_onto_letters_is_not_a_description() {
+    // Bestco Fresh 2026-09-06. OCR fused the Chinese sub-line (纯椰子水) and the
+    // REG marker into one token, so unlike "(W)@REG$1.69" it opens with letters
+    // and the backward description walk read it as a product name. The real
+    // name line sat directly above it and was walked straight past.
+    let lines = vec![
+        "BESTCO FRESH".to_string(),
+        "88 Grocery".to_string(),
+        "*ITc Pure Coconut Water 50".to_string(),
+        "MF7KREG$1.99".to_string(),
+        "2 @ $0.99 1.98".to_string(),
+        "TOTAL 1.98".to_string(),
+    ];
+    let summary_amounts = HashSet::from([Money::from_cents(198)]);
+
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
+
+    assert_eq!(items.len(), 1, "got items: {:?}", items);
+    assert_eq!(items[0].price, Money::from_cents(198));
+    assert!(
+        items[0].description.contains("Pure Coconut Water"),
+        "description should come from the name line above the REG row, got {:?}",
+        items[0].description
+    );
+}
+
+#[test]
+fn oregano_is_not_mistaken_for_a_reg_marker() {
+    // has_reg_price_marker() matches the bare substring "OREG", which is inside
+    // OREGANO — so the backward walk must test the suggested-retail SHAPE (the
+    // description side ending in REG right before the price), not that substring.
+    let lines = vec![
+        "BESTCO FRESH".to_string(),
+        "Oregano 2.99".to_string(),
+        "TOTAL 2.99".to_string(),
+    ];
+    let summary_amounts = HashSet::from([Money::from_cents(299)]);
+
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
+
+    assert_eq!(items.len(), 1, "got items: {:?}", items);
+    assert!(items[0].description.to_uppercase().contains("OREGANO"));
+    assert_eq!(items[0].price, Money::from_cents(299));
+}
+
+#[test]
 fn skips_reg_marker_lines_with_garbled_ocr_prefix() {
     let lines = vec![
         "BESTCO FRESH".to_string(),
