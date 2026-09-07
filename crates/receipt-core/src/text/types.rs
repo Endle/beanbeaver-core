@@ -9,6 +9,7 @@ pub(super) use crate::extraction::{ExtractedItem as ParsedTextItem, ExtractionOu
 #[derive(Clone, Debug)]
 pub(crate) struct MalformedTrailingPriceCandidate {
     pub(crate) description: String,
+    pub(crate) item_number: Option<String>,
     pub(crate) category_source: String,
     pub(crate) observed_token: String,
     pub(crate) observed_fraction: String,

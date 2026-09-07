@@ -45,6 +45,8 @@ pub struct DateYmd {
 #[derive(uniffi::Record)]
 pub struct ReceiptItem {
     pub description: String,
+    /// Merchant-specific printed item code; preserves leading zeros.
+    pub item_number: Option<String>,
     pub price: String,
     pub quantity: i32,
     /// The beancount account this line posts to, already resolved. Was
@@ -416,6 +418,9 @@ pub struct ReceiptEdits {
 #[derive(uniffi::Record)]
 pub struct EditedItem {
     pub description: String,
+    /// Carry the original code when renaming a line. None preserves the prior
+    /// code only when the description still matches; new lines default to None.
+    pub item_number: Option<String>,
     /// Decimal string, as [`ReceiptItem::price`] is.
     pub price: String,
     pub quantity: i32,
@@ -820,6 +825,7 @@ pub fn reformat_receipt(
             items
                 .into_iter()
                 .map(|item| ItemCorrection {
+                    item_number: item.item_number,
                     description: item.description,
                     price: item.price,
                     quantity: item.quantity,
@@ -923,6 +929,7 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
             .items
             .into_iter()
             .map(|i| ReceiptItem {
+                item_number: i.item_number,
                 description: i.description,
                 price: i.price.to_string(),
                 quantity: i.quantity,
@@ -1046,6 +1053,7 @@ fn receipt_result_to_parsed(r: &ReceiptResult) -> ParsedReceiptData {
             .items
             .iter()
             .map(|i| ParsedReceiptItem {
+                item_number: i.item_number.clone(),
                 description: i.description.clone(),
                 price: Money::from_decimal_str(&i.price),
                 quantity: i.quantity,
@@ -1127,6 +1135,7 @@ mod tests {
             tax: None,
             subtotal: Some("10.00".into()),
             items: vec![ReceiptItem {
+                item_number: None,
                 tag_path: Some("grocery/dairy".into()),
                 description: "Milk".into(),
                 price: "10.00".into(),
@@ -1166,6 +1175,7 @@ mod tests {
         for winning_path in [Some("grocery/dairy".to_string()), None] {
             let mut previous = sample_previous();
             previous.items[0].tag_path = winning_path.clone();
+            previous.items[0].item_number = Some("000458".into());
             previous.items[0].tags = vec![
                 ItemTag {
                     path: "grocery/dairy".into(),
@@ -1192,6 +1202,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!(result.items[0].tag_path, winning_path);
+            assert_eq!(result.items[0].item_number.as_deref(), Some("000458"));
             assert_eq!(
                 result.items[0].account.as_deref(),
                 Some("Expenses:Food:Grocery:Dairy")
@@ -1205,6 +1216,42 @@ mod tests {
                 vec!["grocery/dairy", "discount"]
             );
             assert_eq!(result.items[0].price, "10.00");
+        }
+    }
+
+    #[test]
+    fn item_number_survives_reformat_and_explicit_rename() {
+        for (name, tag, carry_number) in [
+            ("Milk", "", false),
+            ("Milk", "grocery/dairy", false),
+            ("Renamed milk", "", true),
+        ] {
+            let mut previous = sample_previous();
+            previous.items[0].item_number = Some("000458".into());
+            let mut item = edited(name, "9.00", tag);
+            if carry_number {
+                item.item_number = Some("000458".into());
+            }
+            let mut edits = no_edits();
+            edits.items = Some(vec![item]);
+            let result = reformat_receipt(
+                previous,
+                DateYmd {
+                    year: 2026,
+                    month: 2,
+                    day: 18,
+                },
+                "Liabilities:CreditCard".into(),
+                "CAD".into(),
+                "Expenses:Tax:HST".into(),
+                None,
+                edits,
+                ParseOptions::default(),
+            )
+            .unwrap();
+            assert_eq!(result.items[0].item_number.as_deref(), Some("000458"));
+            assert_eq!(result.items[0].description, name);
+            assert_eq!(result.items[0].price, "9.00");
         }
     }
 
@@ -1286,6 +1333,7 @@ mod tests {
 
     fn edited(description: &str, price: &str, tag_path: &str) -> EditedItem {
         EditedItem {
+            item_number: None,
             description: description.into(),
             price: price.into(),
             quantity: 1,
@@ -1491,6 +1539,18 @@ mod tests {
         assert_eq!(r.total, "221.97");
         assert_eq!(r.tax.as_deref(), Some("4.44"));
         assert!(!r.items.is_empty());
+        let coke = r
+            .items
+            .iter()
+            .find(|item| item.description.contains("COKE ZERO"))
+            .unwrap();
+        assert_eq!(coke.item_number.as_deref(), Some("232952"));
+        let milk = r
+            .items
+            .iter()
+            .find(|item| item.description.contains("FINE-FILT"))
+            .unwrap();
+        assert_eq!(milk.item_number.as_deref(), Some("435259"));
         assert!(r.beancount.contains("COSTCO"));
         assert!(!r.confidence.needs_review || r.confidence.merchant >= 0.7);
         println!("{}", r.beancount);

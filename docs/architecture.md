@@ -209,7 +209,7 @@ a method over the same lines, and that check is gone because it cannot fail.
 ### Parse result
 
 `ParsedReceiptData`: merchant (+ `MerchantMatch`), date, total/tax/subtotal,
-items (description, price, quantity, winning `tag_path`, resolved `account`,
+items (description, optional merchant-specific `item_number`, price, quantity, winning `tag_path`, resolved `account`,
 semantic `tags`), warnings, tenders, raw text.
 
 `categories::classify_item` returns these three classification fields together

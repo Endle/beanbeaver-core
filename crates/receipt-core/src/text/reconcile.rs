@@ -78,6 +78,7 @@ pub(super) fn build_malformed_price_candidate(
     }
 
     Some(MalformedTrailingPriceCandidate {
+        item_number: crate::extraction::leading_item_number(line),
         description: cleaned.clone(),
         category_source: cleaned,
         observed_token,
@@ -291,6 +292,7 @@ pub(super) fn resolve_deferred(
                     malformed_prices.as_mut().and_then(|prices| prices.next())
                 {
                     items.push(ParsedTextItem {
+                        item_number: candidate.item_number.clone(),
                         description: candidate.description.clone(),
                         category_source: candidate.category_source.clone(),
                         price: recovered_price_cents,

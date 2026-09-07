@@ -52,3 +52,30 @@ A temporary iOS simulator app built against the generated Swift bindings scanned
 the public Costco fixture and verified that reformatting preserved the winning
 path after another tag was appended. Both Swift and Kotlin bindings were
 generated; this does not constitute an Android runtime test.
+
+## Item numbers
+
+`ParsedReceiptItem` and FFI `ReceiptItem` now expose `item_number: Option<String>`
+(`itemNumber` in Swift/Kotlin). Extraction currently recognizes Costco's leading
+numeric row code, captured before description cleanup. Leading zeros survive;
+missing/unreadable codes and unsupported merchants return `None`. This is a
+merchant-scoped identifier, not a universal product ID. A discount row's leading
+code is its own identifier; the reference following `TPD/` is not substituted.
+Existing descriptions, including any printed code and expanded name, are unchanged.
+
+`ItemCorrection` and FFI `EditedItem` also carry the optional field. Preserve it
+when renaming or reconstructing an item. If omitted, reformatting preserves a
+prior code for an unchanged description; a new/renamed line has no inferred code.
+A reformat with no item edits preserves all item numbers.
+
+This changes UniFFI record encoding. Regenerate Swift/Kotlin bindings and rebuild
+the native library together when adopting the core release. Update persistence
+adapters and manual record constructors; old saved records default to `nil`/`null`.
+Consumers should read the field directly rather than parse the display name.
+
+Validated with workspace tests (including public and private cached fixtures),
+the live FFI Costco test, formatting, and Clippy. A before/after live scan of all
+135 private images produced identical per-receipt quality results. Generated
+Swift and Kotlin bindings; an iOS simulator smoke app scanned the public Costco
+receipt, asserted Coke Zero and milk item numbers, and preserved every code
+through reformatting. Android bindings were generated, not runtime-tested.

@@ -21,6 +21,8 @@ pub struct ParserRuleLayers {
 #[derive(Clone, Debug)]
 pub struct ParsedReceiptItem {
     pub description: String,
+    /// Merchant-specific printed item code; preserves leading zeros.
+    pub item_number: Option<String>,
     pub price: Money,
     pub quantity: i32,
     /// The winning rule's declared tag path (`grocery/dairy`), or `None`.
@@ -147,6 +149,7 @@ fn build_item(
     };
 
     ParsedReceiptItem {
+        item_number: None,
         description,
         price,
         quantity,
@@ -174,6 +177,7 @@ pub fn classified_item(
 ) -> ParsedReceiptItem {
     let classification = categories::classify_item(&description, &rule_layers.category_rules);
     ParsedReceiptItem {
+        item_number: None,
         description,
         price,
         quantity,
@@ -239,6 +243,7 @@ pub fn item_with_tag_path(
     }
     let account = account_for_chosen_tag(tag_path, rule_layers);
     Ok(ParsedReceiptItem {
+        item_number: None,
         description,
         price,
         quantity,
@@ -508,14 +513,22 @@ pub fn parse_receipt(
     };
     let mut warnings = outcome.warnings;
     let items = outcome.items.into_iter().map(|item| {
-        build_item(
+        let item_number = item.item_number.filter(|_| {
+            merchant_match
+                .canonical
+                .as_deref()
+                .is_some_and(|m| m.eq_ignore_ascii_case("COSTCO"))
+        });
+        let mut parsed = build_item(
             item.description,
             item.price,
             item.quantity,
             &item.category_source,
             rule_layers,
             vocab,
-        )
+        );
+        parsed.item_number = item_number;
+        parsed
     });
 
     // Sign-correct unsigned line-item discounts (e.g. FreshCo "INSTANT
@@ -701,6 +714,78 @@ mod tests {
             &[],
             2026,
         )
+    }
+
+    #[test]
+    fn costco_item_numbers_survive_both_extraction_paths() {
+        use crate::ocr_document::{Bbox, OcrDocument, OcrLine, OcrWord};
+        let rows = [
+            ("COSTCO", ""),
+            ("232952 COKE ZERO", "17.19"),
+            ("435259 2% FINE-FILT", "6.69"),
+            ("399 DOORDASH2X50", "79.99"),
+            ("2040329 TPD/401150", "3.50-"),
+            ("000458 MILK", "5.00"),
+            ("BREAD", "2.00"),
+            ("TOTAL", "107.37"),
+        ];
+        let spatial = OcrDocument {
+            lines: rows
+                .iter()
+                .enumerate()
+                .map(|(i, (name, price))| {
+                    let top = 0.05 + i as f64 * 0.07;
+                    let word = |text: &str, left, right| OcrWord {
+                        text: text.into(),
+                        bbox: Bbox {
+                            left,
+                            right,
+                            top,
+                            bottom: top + 0.02,
+                        },
+                        confidence: 0.99,
+                    };
+                    let mut words = vec![word(name, 0.1, 0.6)];
+                    if !price.is_empty() {
+                        words.push(word(price, 0.8, 0.9));
+                    }
+                    OcrLine::new(format!("{name} {price}"), words)
+                })
+                .collect(),
+        };
+        assert!(!crate::spatial::extract_spatial_items(&spatial)
+            .items
+            .is_empty());
+        let text = OcrDocument::from_text(&spatial.full_text());
+        let layers = default_parser_rule_layers();
+        for doc in [&text, &spatial] {
+            let parsed = super::parse_receipt(
+                doc,
+                &layers,
+                "receipt.jpg",
+                &[],
+                &crate::rules::default_merchant_families(),
+                2026,
+            );
+            assert_eq!(parsed.items.len(), 6, "{:#?}", parsed.items);
+            for (item, number) in parsed.items.iter().zip([
+                Some("232952"),
+                Some("435259"),
+                Some("399"),
+                Some("2040329"),
+                Some("000458"),
+                None,
+            ]) {
+                assert_eq!(item.item_number.as_deref(), number, "{}", item.description);
+            }
+            // Existing text descriptions keep the printed code.
+            if !doc.has_useful_bbox_data() {
+                assert_eq!(parsed.items[0].description, "232952 COKE ZERO");
+            }
+        }
+        let unknown = parse_text("SOME SHOP\n232952 COKE ZERO 17.19\nTOTAL 17.19");
+        assert_eq!(unknown.items.len(), 1);
+        assert_eq!(unknown.items[0].item_number, None);
     }
 
     /// Every finding of the kind, so a test can't pass on the wrong shape.
