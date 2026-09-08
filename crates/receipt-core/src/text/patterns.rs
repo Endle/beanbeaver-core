@@ -48,9 +48,12 @@ pub(crate) const TAX_FLAG_CLASS: &str = r"(?:\*?[BbCcFfGgHhJjPpSsTtXx]{1,3}\d{0,
 // missing because their description happened to end in a price-like token.
 pub(crate) const SKIP_PRICED_LINES_IN_BACKWARD_DESC_SEARCH: bool = true;
 
-/// Minimum count of drift witnesses before receipt-level price drift is
-/// assumed. Three keeps one or two OCR flukes on a straight receipt from
-/// flipping the pairing direction.
+/// Minimum count of *quantity-row* drift witnesses before receipt-level price
+/// drift is assumed. Three keeps one or two OCR flukes on a straight receipt
+/// from flipping the pairing direction.
+///
+/// Only these need a quorum: a priced section header is conclusive on its own.
+/// See [`DriftEvidence`](crate::text::rows::DriftEvidence).
 pub(crate) const PRICE_DRIFT_EVIDENCE_MIN: usize = 3;
 
 pub(crate) fn re_skip_patterns() -> &'static Regex {

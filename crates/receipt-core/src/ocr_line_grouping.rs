@@ -13,6 +13,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use crate::detection_normalization::{boxes_overlap_y, Detection};
+use crate::money::Money;
 
 fn summary_label_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -198,6 +199,7 @@ fn amount_claim(text: &str) -> AmountClaim {
         || is_membership_label(text)
         || is_department_header_label(text)
         || is_priced_in_savings_label(text)
+        || is_annotation_continuation_label(text)
     {
         return AmountClaim::Never;
     }
@@ -335,6 +337,103 @@ fn is_quantity_breakdown_label(text: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"(?i)^\s*\d+(?:[.,]\d+)?\s*(?:kg|lbs?|g|ea)?\s*@").unwrap())
         .is_match(text)
+}
+
+/// True for the parenthesised size/deal annotation a chain prints *between* an
+/// item's description and its quantity breakdown — Foody Mart's
+/// `(李錦記特級鮮味生抽 500ml)@3.99(1/$0.98)`.
+///
+/// It is a continuation of the description above it and never carries money.
+/// Typing it matters less for what it stops it claiming — it rarely reaches an
+/// amount — than for making it *transparent*: `pair_columns` remembers whether
+/// the last row it considered took an amount, and rows typed `Never` are skipped
+/// rather than recorded. Untyped, this row sits between every Foody Mart
+/// description and its `1 @ $x` breakdown and reports "nothing claimed", which
+/// erases the fact that the description already took the item's price and lets
+/// the breakdown claim the next one.
+///
+/// Anchored on a leading `(` *and* an `@`, which is what separates it from the
+/// parenthesised prefixes chains put on ordinary item rows — T&T prints
+/// `(SALE) RED POMELO W $2.32`, which carries its own amount and has no `@`.
+fn is_annotation_continuation_label(text: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^\s*\([^@]*@").unwrap())
+        .is_match(text)
+        && text.contains(|c: char| c.is_ascii_digit())
+}
+
+/// The extension a quantity breakdown states for itself, in cents — the `N` and
+/// the `$U` of `N @ $U`, multiplied.
+///
+/// A breakdown row is the one kind of sub-line that says out loud what its own
+/// amount would have to be, and that is a decisive signal exactly where overlap
+/// is not: the two candidate rows for a leaning amount are a breakdown and the
+/// item under it, and they are ~20px apart on a ~100px pitch. On
+/// foody_mart/2026-09-02 the `1 @ $0.98` above `China Maid - Bean Curd St`
+/// overlaps that item's `3.99` by 0.745 and the item itself overlaps it by
+/// 0.745 — an exact tie, which first-fit hands to the row above. Arithmetic
+/// breaks the tie without a tolerance: a row that says `1 @ $0.98` cannot be
+/// holding 3.99.
+///
+/// **Integer quantities only, deliberately.** A weighed row (`1.38 lb @
+/// $9.98/1b`) states a *rounded* quantity, so its true extension is only known
+/// to a few cents — 1.384 lb prints as 1.38 and extends to 13.81, not the 13.77
+/// the row's own digits give. Vetoing on that would refuse correct claims, so
+/// weighed rows keep the untyped behaviour and this returns `None`.
+///
+/// **The multi-buy fraction is part of the arithmetic, not noise.** `N/$X` means
+/// N *for* X, so `2 @2/$4.47` extends to 4.47 and not to 8.94 — reading the
+/// money alone gets that row exactly wrong, and t_t_supermarket/2025-12-02
+/// prints it. The divisor must divide the product exactly; a receipt that
+/// prints a fraction it cannot honour is one this has no business judging.
+///
+/// Anything that does not parse cleanly returns `None` and the row keeps
+/// claiming as before: this may only ever *narrow* a claim on evidence, never
+/// widen one on a guess.
+fn breakdown_extension_cents(text: &str) -> Option<i64> {
+    static QTY: OnceLock<Regex> = OnceLock::new();
+    static DEAL: OnceLock<Regex> = OnceLock::new();
+    static UNIT: OnceLock<Regex> = OnceLock::new();
+    let quantity: i64 = QTY
+        .get_or_init(|| Regex::new(r"^\s*(\d+)\s*(?:ea)?\s*@").unwrap())
+        .captures(text)?
+        .get(1)?
+        .as_str()
+        .parse()
+        .ok()?;
+    let after_at = &text[text.find('@')? + 1..];
+    // `N/$X` — N for X — before the plain `$X` form, since the fraction also
+    // contains a money token and would otherwise read as a unit price.
+    if let Some(caps) = DEAL
+        .get_or_init(|| Regex::new(r"(\d+)\s*/\s*\$?(\d+\.\d{2})\b").unwrap())
+        .captures(after_at)
+    {
+        let per_deal: i64 = caps.get(1)?.as_str().parse().ok()?;
+        let deal_price = Money::parse_strict(caps.get(2)?.as_str()).ok()?.cents();
+        let gross = quantity.checked_mul(deal_price)?;
+        return (per_deal > 0 && gross % per_deal == 0).then_some(gross / per_deal);
+    }
+    let unit = UNIT
+        .get_or_init(|| Regex::new(r"\$?(\d+\.\d{2})\b").unwrap())
+        .captures_iter(after_at)
+        .last()
+        .and_then(|caps| Money::parse_strict(caps.get(1)?.as_str()).ok())?;
+    quantity.checked_mul(unit.cents())
+}
+
+/// The value of a RIGHT-column amount in cents, ignoring any tax-code suffix
+/// (`3.99h`) and either negative convention.
+fn amount_cents(text: &str) -> Option<i64> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let caps = RE
+        .get_or_init(|| Regex::new(r"(\d+\.\d{2})").unwrap())
+        .captures(text)?;
+    let magnitude = Money::parse_strict(caps.get(1)?.as_str()).ok()?.cents();
+    Some(if is_negative_amount(text) {
+        -magnitude
+    } else {
+        magnitude
+    })
 }
 
 /// True for savings notices whose amount is *already reflected* in the item
@@ -766,6 +865,18 @@ fn pair_columns(
                 boxes_overlap_y(&dets[left_index], &dets[right_index], PAIR_OVERLAP_GATE)
                     || row.contains(&right_index);
             if !same_row || !claim.accepts(&dets[right_index].text) {
+                continue;
+            }
+            // Third guard: a breakdown that states its own extension may not
+            // hold an amount that contradicts it. See
+            // [`breakdown_extension_cents`] — this is the only guard here that
+            // does not depend on how the boxes overlap, which is why it works
+            // where the other two tie.
+            if breakdown
+                && breakdown_extension_cents(&dets[left_index].text).is_some_and(|extension| {
+                    amount_cents(&dets[right_index].text).is_some_and(|got| got != extension)
+                })
+            {
                 continue;
             }
             // Second guard for breakdowns, for the chains that print the item
@@ -1662,6 +1773,56 @@ mod tests {
         // Not a breakdown: a description that happens to contain "@".
         assert!(!is_quantity_breakdown_label("(7125H 800g)@13.99(1/$9.98)"));
         assert!(!is_quantity_breakdown_label("EMAIL@STORE.CA"));
+    }
+
+    #[test]
+    fn breakdown_extension_reads_its_own_arithmetic() {
+        // The plain form: quantity times unit price.
+        assert_eq!(breakdown_extension_cents("1 @ $0.98"), Some(98));
+        assert_eq!(breakdown_extension_cents("2 @ $9.54 ea"), Some(1908));
+        // The multi-buy fraction is N *for* X, not a unit price. Reading the
+        // money alone gets t_t_supermarket/2025-12-02 exactly wrong: its
+        // "2 @2/$4.47" holds 4.47, and 2 x 4.47 = 8.94 would refuse it.
+        assert_eq!(breakdown_extension_cents("2 @2/$4.47"), Some(447));
+        assert_eq!(breakdown_extension_cents("2 @ 1/ $8.99"), Some(1798));
+        // A weighed row states a rounded quantity, so its true extension is
+        // only known to a few cents. Declines to judge rather than guess.
+        assert_eq!(breakdown_extension_cents("1.38 lb @ $9.98/1b"), None);
+        assert_eq!(breakdown_extension_cents("0.825 kg @ $6.59/kg"), None);
+        // A fraction the receipt cannot honour exactly is not judged either.
+        assert_eq!(breakdown_extension_cents("1 @3/$1.00"), None);
+        // Not a breakdown at all.
+        assert_eq!(breakdown_extension_cents("LKK - Premium Soy Sauce"), None);
+    }
+
+    #[test]
+    fn amount_cents_ignores_tax_codes_and_reads_both_sign_conventions() {
+        assert_eq!(amount_cents("0.98"), Some(98));
+        assert_eq!(amount_cents("3.99h"), Some(399));
+        assert_eq!(amount_cents("$13.77"), Some(1377));
+        assert_eq!(amount_cents("9.00-"), Some(-900));
+        assert_eq!(amount_cents("-$6.00"), Some(-600));
+        // A bare tax code is not an amount.
+        assert_eq!(amount_cents("HH"), None);
+    }
+
+    #[test]
+    fn annotation_continuation_is_typed_but_priced_paren_prefixes_are_not() {
+        // Foody Mart's size/deal line, including the three of eight on
+        // foody_mart/2026-09-02 whose closing paren the OCR drops.
+        assert!(is_annotation_continuation_label(
+            "(李錦記特級鮮味生抽 500ml)@3.99(1/$0.98)"
+        ));
+        assert!(is_annotation_continuation_label(
+            "(##*# 500m1@3.99(1/$0.98)"
+        ));
+        // T&T prefixes ordinary item rows, which carry their own amounts.
+        assert!(!is_annotation_continuation_label(
+            "(SALE) RED POMELO W $2.32"
+        ));
+        assert!(!is_annotation_continuation_label("(SALE) WHITE POMELO"));
+        // A bare size annotation carries no deal and no amount either way.
+        assert!(!is_annotation_continuation_label("(500g)"));
     }
 
     #[test]

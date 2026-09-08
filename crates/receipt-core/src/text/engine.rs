@@ -34,7 +34,7 @@ pub fn extract_text_items(lines: &[String], summary_amounts: &HashSet<Money>) ->
     // own total ("1 @ $1.99  1.99" where the next item also costs 1.99) is
     // still treated as carrying the next item's price, and paren-subtext rows
     // pair forward instead of backward.
-    let price_drift = count_price_drift_evidence(&normalized_lines) >= PRICE_DRIFT_EVIDENCE_MIN;
+    let price_drift = count_price_drift_evidence(&normalized_lines).establishes_drift();
 
     for (i, line) in normalized_lines.iter().enumerate() {
         if total_line_idx.is_some_and(|total_idx| i > total_idx) {

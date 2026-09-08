@@ -153,52 +153,84 @@ pub(super) fn is_priced_generic_item_label(left_text: &str, full_text: &str) -> 
         && is_generic_counter_label(left_text)
 }
 
-/// Count qty rows whose trailing price fails to reconcile as the row's own
-/// qty×unit total — each is a witness that the price column drifted one row
-/// up relative to the text column (see `price_drift` in
-/// `extract_text_items`).
-pub(super) fn count_price_drift_evidence(lines: &[String]) -> usize {
-    lines
-        .iter()
-        .filter(|line| {
-            let line = line.trim();
-            // A section header carrying a trailing price is the strongest
-            // witness: straight receipts never price their "&& <Dept>" rows,
-            // so the amount can only be the first item's, drifted up. Bare
-            // counter labels ("Meat 4.19") are items, not headers.
-            if let Some((cents, _, price_start)) = extract_trailing_price_cents(line) {
-                let head = line[..price_start].trim();
-                if cents > Money::ZERO
-                    && !head.is_empty()
-                    && is_section_header_text(head)
-                    && !is_generic_counter_label(head)
-                {
-                    return true;
-                }
+/// The two kinds of witness that the price column drifted one row up relative
+/// to the text column (see `price_drift` in `extract_text_items`), counted
+/// apart because they are not equally strong.
+///
+/// A **priced section header** is conclusive on its own: straight receipts never
+/// price their `&& <Dept>` rows, so an amount on one can only be the first
+/// item's, drifted up. A **quantity row whose trailing price does not
+/// reconcile** is suggestive but forgeable by a single OCR slip, so those still
+/// need [`PRICE_DRIFT_EVIDENCE_MIN`] of them.
+///
+/// Summing the two and asking for three of anything — which is what this was
+/// before — makes the conclusive witness the weak one's hostage. It is why
+/// foody_mart/2026-09-02 read as straight: its one priced header (`&& 01-Grocery
+/// 0.98`) is exactly the evidence the threshold exists to trust, and its eight
+/// `1 @ $0.98` rows reconcile at quantity 1, so they witness nothing. Splitting
+/// the counts turns drift on for that receipt and, measured over the
+/// 143-receipt corpus, changes **no other receipt at all** — not the item count,
+/// not a description, not a category.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct DriftEvidence {
+    /// Section headers found carrying a trailing price.
+    pub(super) priced_headers: usize,
+    /// Quantity rows whose trailing price is not their own qty x unit.
+    pub(super) unreconciled_qty_rows: usize,
+}
+
+impl DriftEvidence {
+    pub(super) fn establishes_drift(self) -> bool {
+        self.priced_headers > 0 || self.unreconciled_qty_rows >= PRICE_DRIFT_EVIDENCE_MIN
+    }
+}
+
+/// Tally both kinds of drift witness over a receipt's lines.
+pub(super) fn count_price_drift_evidence(lines: &[String]) -> DriftEvidence {
+    let mut evidence = DriftEvidence::default();
+    for line in lines {
+        let line = line.trim();
+        // A section header carrying a trailing price is the strongest witness:
+        // straight receipts never price their "&& <Dept>" rows, so the amount
+        // can only be the first item's, drifted up. Bare counter labels
+        // ("Meat 4.19") are items, not headers.
+        if let Some((cents, _, price_start)) = extract_trailing_price_cents(line) {
+            let head = line[..price_start].trim();
+            if cents > Money::ZERO
+                && !head.is_empty()
+                && is_section_header_text(head)
+                && !is_generic_counter_label(head)
+            {
+                evidence.priced_headers += 1;
+                continue;
             }
-            if !looks_like_quantity_expression(line) {
-                return false;
-            }
-            let prices: Vec<Money> = re_find_prices()
-                .captures_iter(line)
-                .filter_map(|caps| caps.get(1).and_then(|m| parse_cents(m.as_str())))
-                .collect();
-            if prices.len() < 2 {
-                return false;
-            }
-            let trailing = extract_trailing_price_cents(line).map(|(c, _, _)| c);
-            if trailing != prices.last().copied() {
-                return false;
-            }
-            let Some(orphan) = trailing else {
-                return false;
-            };
-            orphan > Money::ZERO
-                && !parse_quantity_modifier(line)
-                    .map(|modifier| validate_quantity_price(orphan, &modifier))
-                    .unwrap_or(false)
-        })
-        .count()
+        }
+        if !looks_like_quantity_expression(line) {
+            continue;
+        }
+        let prices: Vec<Money> = re_find_prices()
+            .captures_iter(line)
+            .filter_map(|caps| caps.get(1).and_then(|m| parse_cents(m.as_str())))
+            .collect();
+        if prices.len() < 2 {
+            continue;
+        }
+        let trailing = extract_trailing_price_cents(line).map(|(c, _, _)| c);
+        if trailing != prices.last().copied() {
+            continue;
+        }
+        let Some(orphan) = trailing else {
+            continue;
+        };
+        if orphan > Money::ZERO
+            && !parse_quantity_modifier(line)
+                .map(|modifier| validate_quantity_price(orphan, &modifier))
+                .unwrap_or(false)
+        {
+            evidence.unreconciled_qty_rows += 1;
+        }
+    }
+    evidence
 }
 
 /// True when the nearest description-like line above `i` has already been
