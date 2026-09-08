@@ -161,12 +161,14 @@ pub enum Selection<'a> {
     Dir(&'a str),
     /// Every top-level subdirectory NOT named here, plus loose root-level cases.
     Excluding(&'a [&'a str]),
+    /// Fixtures whose expected JSON contains this exact value in `tags`.
+    Tag(&'a str),
 }
 
 impl Selection<'_> {
     fn takes_dir(&self, name: &str) -> bool {
         match self {
-            Self::All => true,
+            Self::All | Self::Tag(_) => true,
             Self::Dir(d) => name == *d,
             Self::Excluding(named) => !named.contains(&name),
         }
@@ -175,8 +177,28 @@ impl Selection<'_> {
     /// Loose `*.expected.json` sitting directly in the root belong to whichever
     /// selection is the catch-all, so they can never fall through the split.
     fn takes_root_files(&self) -> bool {
-        matches!(self, Self::All | Self::Excluding(_))
+        matches!(self, Self::All | Self::Excluding(_) | Self::Tag(_))
     }
+}
+
+fn fixture_has_tag(path: &Path, tag: &str) -> bool {
+    let expected: Value = serde_json::from_str(
+        &fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("read fixture metadata {}: {e}", path.display())),
+    )
+    .unwrap_or_else(|e| panic!("parse fixture metadata {}: {e}", path.display()));
+    let Some(tags) = expected.get("tags") else {
+        return false;
+    };
+    let tags = tags
+        .as_array()
+        .unwrap_or_else(|| panic!("{}: `tags` must be an array of strings", path.display()));
+    tags.iter().any(|value| {
+        value
+            .as_str()
+            .unwrap_or_else(|| panic!("{}: every `tags` entry must be a string", path.display()))
+            == tag
+    })
 }
 
 /// Collect the `*.expected.json` under `root` that `sel` covers. Filtering
@@ -300,6 +322,9 @@ pub fn run_cached_corpus_in(
 
     let mut expected_files = Vec::new();
     collect_selected(receipts_dir, sel, &mut expected_files);
+    if let Selection::Tag(tag) = sel {
+        expected_files.retain(|path| fixture_has_tag(path, tag));
+    }
     expected_files.sort();
 
     let mut ran = 0usize;
