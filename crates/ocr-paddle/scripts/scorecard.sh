@@ -11,6 +11,7 @@
 #   crates/ocr-paddle/scripts/scorecard.sh <corpus-dir>    # live, custom corpus
 #   crates/ocr-paddle/scripts/scorecard.sh '' --cached     # cached (server OCR) baseline
 #   crates/ocr-paddle/scripts/scorecard.sh '' --by-merchant
+#   crates/ocr-paddle/scripts/scorecard.sh '' --tag gift-card
 #
 # Any extra args after the corpus dir are passed straight to device_sim.
 set -euo pipefail

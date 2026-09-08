@@ -58,6 +58,7 @@ fn main() {
     let mut attrib = false;
     let mut reccached = false;
     let mut by_merchant = false;
+    let mut tag: Option<String> = None;
     let mut export_ocr = false;
     let mut probdump: Option<PathBuf> = None;
 
@@ -72,6 +73,7 @@ fn main() {
             "--attrib" => attrib = true,
             "--reccached" => reccached = true,
             "--by-merchant" => by_merchant = true,
+            "--tag" => tag = Some(args.next().expect("--tag needs a value")),
             "--export-ocr" => export_ocr = true,
             "--probdump" => {
                 probdump = Some(PathBuf::from(
@@ -165,8 +167,19 @@ fn main() {
             &path,
             dump,
             by_merchant,
+            tag.as_deref(),
         );
     } else {
+        if let Some(tag) = tag.as_deref() {
+            let expected = path.with_extension("expected.json");
+            if !expected.exists() || !fixture_has_tag(&expected, tag) {
+                eprintln!(
+                    "error: {} does not have tag {tag:?} in its expected JSON",
+                    path.display()
+                );
+                std::process::exit(2);
+            }
+        }
         let _ = run_single(&mut engine, cached, &mapping, today, &path, true);
     }
 }
@@ -184,6 +197,7 @@ fn print_usage() {
          \x20 <dir>           score every <stem>.jpg that has a <stem>.expected.json\n\
          \x20 --cached        feed desktop PaddleOCR <stem>.ocr.json instead of live ONNX\n\
          \x20 --by-merchant   add a per-merchant breakdown\n\
+         \x20 --tag TAG       score only fixtures tagged TAG in expected JSON\n\
          \x20 --dump          full extraction (+ per-image latency) for each image\n\
          \x20 --export-ocr    write <stem>.ocr.json for each image (seeds a NEW fixture)\n\
          \x20 --today YMD     date used for inference (default 2026-06-21)\n\
@@ -902,6 +916,31 @@ fn collect_jpgs(dir: &Path, all_jpg: &mut usize, out: &mut Vec<PathBuf>) {
     );
 }
 
+fn fixture_has_tag(expected_path: &Path, tag: &str) -> bool {
+    let expected: Value = serde_json::from_str(
+        &std::fs::read_to_string(expected_path)
+            .unwrap_or_else(|e| panic!("read fixture metadata {}: {e}", expected_path.display())),
+    )
+    .unwrap_or_else(|e| panic!("parse fixture metadata {}: {e}", expected_path.display()));
+    let Some(tags) = expected.get("tags") else {
+        return false;
+    };
+    let tags = tags.as_array().unwrap_or_else(|| {
+        panic!(
+            "{}: `tags` must be an array of strings",
+            expected_path.display()
+        )
+    });
+    tags.iter().any(|value| {
+        value.as_str().unwrap_or_else(|| {
+            panic!(
+                "{}: every `tags` entry must be a string",
+                expected_path.display()
+            )
+        }) == tag
+    })
+}
+
 fn run_corpus(
     engine: &mut Option<OcrEngine>,
     cached: bool,
@@ -910,6 +949,7 @@ fn run_corpus(
     dir: &Path,
     dump: bool,
     by_merchant: bool,
+    tag: Option<&str>,
 ) {
     // Walk subdirectories. The private corpus is grouped one directory per
     // merchant — a layout core's `private_e2e.rs` depends on to give each
@@ -922,11 +962,25 @@ fn run_corpus(
     let mut jpgs: Vec<PathBuf> = Vec::new();
     collect_jpgs(dir, &mut all_jpg, &mut jpgs);
     jpgs.sort();
+    let all_expected = jpgs.len();
+    if let Some(tag) = tag {
+        jpgs.retain(|jpg| fixture_has_tag(&jpg.with_extension("expected.json"), tag));
+        if jpgs.is_empty() {
+            eprintln!(
+                "error: no fixtures tagged {tag:?} found under {}",
+                dir.display()
+            );
+            std::process::exit(2);
+        }
+    }
     println!(
         "  corpus : {}  ({all_jpg} .jpg, {} with expected.json)",
         dir.display(),
-        jpgs.len()
+        all_expected
     );
+    if let Some(tag) = tag {
+        println!("  tag    : {tag}  ({} matching fixtures)", jpgs.len());
+    }
 
     let mut scores = Vec::new();
     let mut timings: Vec<ScanTimings> = Vec::new();

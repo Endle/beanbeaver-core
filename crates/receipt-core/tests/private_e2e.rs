@@ -35,6 +35,11 @@
 //! ```text
 //! BEANBEAVER_PRIVATE_TESTS_DIR=../beanbeaver-private-test \
 //!   cargo test --release -p receipt-core --test private_e2e
+//!
+//! BEANBEAVER_PRIVATE_TESTS_DIR=../beanbeaver-private-test \
+//! BEANBEAVER_PRIVATE_TEST_TAG=gift-card \
+//!   cargo test --release -p receipt-core --test private_e2e \
+//!   private_cached_e2e_tag -- --nocapture
 //! ```
 
 mod e2e_harness;
@@ -152,4 +157,20 @@ fn private_cached_e2e_other() {
         eprintln!("private_cached_e2e[other]: sweeping {swept:?}");
     }
     run_slice("other", &Selection::Excluding(NAMED), false);
+}
+
+/// Opt-in cross-merchant slice selected by fixture metadata. Keeping this as a
+/// single env-driven test lets feature work define tags in the private corpus
+/// without adding a Rust test function for every new tag.
+#[test]
+fn private_cached_e2e_tag() {
+    let Ok(tag) = std::env::var("BEANBEAVER_PRIVATE_TEST_TAG") else {
+        eprintln!("SKIP private_cached_e2e[tag]: BEANBEAVER_PRIVATE_TEST_TAG unset");
+        return;
+    };
+    assert!(
+        !tag.trim().is_empty(),
+        "BEANBEAVER_PRIVATE_TEST_TAG must not be empty"
+    );
+    run_slice(&format!("tag:{tag}"), &Selection::Tag(&tag), true);
 }
