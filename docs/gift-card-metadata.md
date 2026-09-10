@@ -14,6 +14,13 @@ implemented here.
 - Costco DoorDash and LCBO purchases: the associated `PC` reference and
   receipt-reported `ACTIVATED` annotation. Repeated product occurrences remain
   separate; missing/ambiguous occurrences leave their association unresolved.
+  Occurrences are keyed on the description *without* its item number, because
+  the parser keeps the number on one emitted line and strips it from the next
+  (`costco_biz_20260125` emits `DOORDASH2X50` and `399 DOORDASH2X50` for two
+  identical packs). The item-number fallback runs only when that key finds no
+  row: identical products share a number, so a fallback that always ran made
+  them permanently ambiguous — both real two-pack receipts in the corpus were
+  `unresolved: ["association"]` on clean OCR until this was measured.
 - Explicit pack notation such as `DOORDASH2X50`: two cards, denomination 5000
   cents, and derived total face value 10000 cents. The paid price stays on the
   item. A price of 40000 cents on `LCBO CARD` does not establish loaded value.
@@ -90,6 +97,14 @@ JSON `null` asserts absence. The same checker runs in cached E2E and
 `device_sim`, including fresh OCR. `device_sim --dump` shows the evidence and
 individual metadata failures. Committed OCR snapshots are not regenerated.
 
+A divergence is recorded, not omitted: inside the `gift_card` object,
+`known_failure_core` / `known_failure` list the tolerated fields (or `true`),
+a marked field that matches is reported as stale, and the entry-level and
+check-level markers umbrella it like any other assertion. The cached harness
+honours these; `device_sim` is marker-blind for `gift_card` exactly as it is
+for every other check, so a recorded defect shows as `✗ gift_card` there.
+Schema and the recorded cases are in `beanbeaver-private-test/CLAUDE.md` §2e.
+
 This is a breaking native record change. Future consumer updates must regenerate
 bindings and adapt record constructors before adopting the core tag. Neither
 mobile app is modified by this core-only change.
@@ -110,7 +125,9 @@ RUSTC_WRAPPER= ./crates/ffi/scripts/gift-card-smoke.sh
 ```
 
 Validation on 2026-09-09: workspace tests including the private cached corpus
-passed, as did the Swift wire smoke. Kotlin bindings were also generated from
+passed, as did the Swift wire smoke. The association fix above was measured
+the same way: per-receipt scorecards identical to baseline in both modes, and
+the two two-pack receipts went from unresolved to their photo-read references. Kotlin bindings were also generated from
 the new library. Full 144-receipt before/after scorecards had identical
 per-receipt outcomes in both modes: cached totals 144/144 and critical items
 1216/1265; fresh OCR totals 142/144 and critical items 1153/1265. Those baseline

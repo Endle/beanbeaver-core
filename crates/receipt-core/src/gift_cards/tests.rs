@@ -108,6 +108,77 @@ fn packs_and_identical_products_keep_independent_activation_references() {
     assert_eq!(g.reference, None);
     assert!(g.unresolved_fields.contains(&"association".into()));
 }
+/// What `parse_receipt` actually emits for two identical packs — the item
+/// number populated on both, and stripped from one description but not the
+/// other (`costco_biz_20260125`); or the same number on both with one OCR
+/// spelling missing its `X` (`2026-08-30_costco_235_05`). Keying on the raw
+/// description, or falling back to the shared item number, left both real
+/// receipts `unresolved: ["association"]` on clean OCR.
+#[test]
+fn identical_packs_resolve_with_item_numbers_as_the_parser_emits_them() {
+    let doc = OcrDocument::from_text("399 DOORDASH2X50 79.99\nPC 111111 ACTIVATED\n399 DOORDASH2X50 79.99\nPC 222222 ACTIVATED\nSUBTOTAL 159.98");
+    let mut items = vec![item("DOORDASH2X50"), item("399 DOORDASH2X50")];
+    for it in &mut items {
+        it.item_number = Some("399".into());
+    }
+    attach_purchases(&doc, "COSTCO", &mut items);
+    let a = items[0].gift_card.as_ref().unwrap();
+    let b = items[1].gift_card.as_ref().unwrap();
+    assert_eq!(a.reference.as_deref(), Some("111111"));
+    assert_eq!(b.reference.as_deref(), Some("222222"));
+    assert!(a.unresolved_fields.is_empty() && b.unresolved_fields.is_empty());
+
+    let doc = OcrDocument::from_text("399 DOORDASH2 50 79.99\nPC 333333 ACTIVATED\n399 DOORDASH2X50 79.99\nPC 444444 ACTIVATED\nSUBTOTAL 159.98");
+    let mut items = vec![item("399 DOORDASH2 50"), item("399 DOORDASH2X50")];
+    for it in &mut items {
+        it.item_number = Some("399".into());
+    }
+    attach_purchases(&doc, "COSTCO", &mut items);
+    assert_eq!(
+        items[0].gift_card.as_ref().unwrap().reference.as_deref(),
+        Some("333333")
+    );
+    assert_eq!(
+        items[1].gift_card.as_ref().unwrap().reference.as_deref(),
+        Some("444444")
+    );
+    // The mangled spelling has no pack notation, so no face value is derived
+    // for it — the price never stands in for one.
+    assert_eq!(items[0].gift_card.as_ref().unwrap().card_count, None);
+    assert_eq!(items[1].gift_card.as_ref().unwrap().card_count, Some(2));
+}
+
+/// The item-number fallback is for a description the parser rewrote past
+/// recognition; it never widens a key that already found its row.
+#[test]
+fn item_number_fallback_only_runs_when_the_description_finds_no_row() {
+    let doc = OcrDocument::from_text(
+        "399 DOORDASH2X50 79.99\nPC 111111 ACTIVATED\n810 LCBO CARD 400.00\nPC 222222 ACTIVATED\nSUBTOTAL 479.99",
+    );
+    let mut items = vec![item("DOORDASH GIFT"), item("LCBO CARD")];
+    items[0].item_number = Some("399".into());
+    attach_purchases(&doc, "COSTCO", &mut items);
+    assert_eq!(
+        items[0].gift_card.as_ref().unwrap().reference.as_deref(),
+        Some("111111")
+    );
+    assert_eq!(
+        items[1].gift_card.as_ref().unwrap().reference.as_deref(),
+        Some("222222")
+    );
+    // Two rewritten items sharing a number stay ambiguous rather than guessed.
+    let mut items = vec![item("DOORDASH GIFT"), item("DOORDASH GIFT")];
+    for it in &mut items {
+        it.item_number = Some("399".into());
+    }
+    attach_purchases(&doc, "COSTCO", &mut items);
+    for it in &items {
+        let g = it.gift_card.as_ref().unwrap();
+        assert_eq!(g.reference, None);
+        assert!(g.unresolved_fields.contains(&"association".into()));
+    }
+}
+
 #[test]
 fn absent_activation_is_unknown_and_non_costco_purchase_is_not_invented() {
     let doc = OcrDocument::from_text("810 LCBO CARD 400.00\nSUBTOTAL 400.00");

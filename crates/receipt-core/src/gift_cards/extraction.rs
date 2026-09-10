@@ -328,6 +328,13 @@ fn compact(s: &str) -> String {
         .flat_map(char::to_uppercase)
         .collect()
 }
+/// `compact` of the description with a leading printed item number removed,
+/// so `399 DOORDASH2X50` and `DOORDASH2X50` are the same product.
+fn product_key(description: &str) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"^\s*\d+\s+").unwrap());
+    compact(&re.replace(description, ""))
+}
 fn program(description: &str) -> Option<&'static str> {
     let d = compact(description);
     if d.contains("DOORDASH") {
@@ -360,28 +367,48 @@ pub(crate) fn attach_purchases(doc: &OcrDocument, merchant: &str, items: &mut [P
     // Establish an occurrence mapping before assigning any activation. Equal
     // products stay separate. If extraction lost an occurrence, no reference
     // is guessed from its position in the surviving item list.
+    //
+    // The key is the description WITHOUT its item number. The parser keeps
+    // the number on one emitted line and strips it from the next
+    // (costco_biz_20260125 emits `DOORDASH2X50` and `399 DOORDASH2X50` for
+    // two identical packs), so keying on the raw description made identical
+    // products look different — and an item-number fallback that matched
+    // every `399 …` row made them ambiguous instead, since identical products
+    // share a number by definition. The fallback now runs only when the key
+    // finds no row at all.
     let mut claimed = std::collections::HashSet::new();
+    let all_keys: Vec<_> = items.iter().map(|i| product_key(&i.description)).collect();
     let all_descriptions: Vec<_> = items.iter().map(|i| compact(&i.description)).collect();
     for i in 0..items.len() {
         let Some(issuer) = program(&items[i].description) else {
             continue;
         };
-        let key = &all_descriptions[i];
-        let candidates: Vec<_> = rows
+        let key = &all_keys[i];
+        let mut candidates: Vec<_> = rows
             .iter()
             .enumerate()
-            .filter(|(_, r)| {
-                let row = compact(r.text);
-                row.contains(key.as_str())
-                    || (items[i]
-                        .item_number
-                        .as_ref()
-                        .is_some_and(|n| r.text.starts_with(&format!("{n} ")))
-                        && program(r.text) == Some(issuer))
-            })
+            .filter(|(_, r)| compact(r.text).contains(key.as_str()))
             .map(|(p, _)| p)
             .collect();
-        let count = all_descriptions.iter().filter(|d| *d == key).count();
+        let mut count = all_keys.iter().filter(|k| *k == key).count();
+        if candidates.is_empty() {
+            if let Some(n) = items[i].item_number.as_deref() {
+                let prefix = format!("{n} ");
+                candidates = rows
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| r.text.starts_with(&prefix) && program(r.text) == Some(issuer))
+                    .map(|(p, _)| p)
+                    .collect();
+                count = items
+                    .iter()
+                    .filter(|it| {
+                        it.item_number.as_deref() == Some(n)
+                            && program(&it.description) == Some(issuer)
+                    })
+                    .count();
+            }
+        }
         let mut out = GiftCardPurchase {
             source_id: source_id("item", i, &document_text, &items[i].description),
             issuer: Some(issuer.into()),
