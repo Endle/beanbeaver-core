@@ -10,7 +10,7 @@
 use crate::date::Date;
 use crate::money::Money;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::common::ReceiptWarningKind;
 use crate::formatter::{
@@ -117,6 +117,7 @@ pub struct ProcessedReceipt {
 /// User corrections applied when regenerating beancount without re-running OCR.
 #[derive(Clone, Debug, Default)]
 pub struct ReceiptCorrections {
+    pub tenders: Option<Vec<crate::parser::ParsedReceiptTender>>,
     pub merchant: Option<String>,
     /// ISO `YYYY-MM-DD`. When set, clears the placeholder flag.
     pub date_iso: Option<String>,
@@ -143,6 +144,8 @@ pub struct ReceiptCorrections {
 /// One line of the item block as the user wants it recorded.
 #[derive(Clone, Debug)]
 pub struct ItemCorrection {
+    /// Explicitly carried by the editor; never inferred from description or list position.
+    pub gift_card: Option<crate::gift_cards::GiftCardPurchase>,
     pub description: String,
     /// Carry the original code when renaming a line. None preserves the prior
     /// code only when the description still matches; new lines default to None.
@@ -470,7 +473,7 @@ pub fn process_receipt_request(
     let detections_out = page.detections().to_vec();
     let ocr = transform(page);
 
-    let parsed = parse_receipt(
+    let mut parsed = parse_receipt(
         &ocr,
         rule_layers,
         image_filename,
@@ -479,6 +482,7 @@ pub fn process_receipt_request(
         today.year(),
     );
 
+    crate::gift_cards::set_currency(&mut parsed, request.currency);
     let confidence = field_confidence(&parsed);
     let (beancount, beanbeaver_id, document_relpath) =
         format_from_parsed(&parsed, request.format_context());
@@ -511,10 +515,8 @@ pub fn process_receipt_request(
 ///   exists — and a user who has just added the missing line should not still be
 ///   told a line is missing.
 /// - **Kept**: everything else, including `PriceAutoCorrected` (an audit note
-///   about a repair that did happen) and `TenderMismatch`. The tender finding is
-///   the one loose end: it compares the payment block against the total, so
-///   editing the total can strand it, and recomputing it needs the OCR lines,
-///   which this path does not have.
+///   about a repair that did happen). `TenderMismatch` is refreshed separately
+///   when tenders or the total change, using retained OCR text for cash change.
 fn refreshed_warnings(
     parsed: &ParsedReceiptData,
     items_replaced: bool,
@@ -624,6 +626,7 @@ pub fn reformat_with_context(
             .map(|item| (item.description.as_str(), item))
             .collect();
 
+        let mut gift_sources = HashSet::new();
         let mut rebuilt = Vec::with_capacity(items.len());
         for (i, item) in items.iter().enumerate() {
             // Strict: this is a number the user typed. The lenient parser reads
@@ -647,6 +650,7 @@ pub fn reformat_with_context(
                 )?
             } else if let Some(prior) = previous.get(item.description.as_str()) {
                 ParsedReceiptItem {
+                    gift_card: None,
                     item_number: None,
                     description: item.description.clone(),
                     price,
@@ -663,9 +667,41 @@ pub fn reformat_with_context(
                     .get(item.description.as_str())
                     .and_then(|prior| prior.item_number.clone())
             });
+            corrected.gift_card = item.gift_card.clone();
+            if let Some(gift) = &mut corrected.gift_card {
+                if !gift_sources.insert(gift.source_id.clone()) {
+                    return Err("duplicate gift-card purchase source in edited items".into());
+                }
+                let prior = parsed
+                    .items
+                    .iter()
+                    .filter_map(|i| i.gift_card.as_ref())
+                    .find(|g| !gift.source_id.is_empty() && gift.source_id == g.source_id);
+                gift.correct_from(prior.ok_or("gift-card source no longer matches this receipt; reselect the source after reprocessing")?)?;
+            }
             rebuilt.push(corrected);
         }
         parsed_out.items = rebuilt;
+    }
+    if let Some(tenders) = &corrections.tenders {
+        parsed_out.tenders = tenders.clone();
+        let mut gift_sources = HashSet::new();
+        for tender in &mut parsed_out.tenders {
+            if tender.amount < Money::ZERO {
+                return Err("payment amount must not be negative".into());
+            }
+            if let Some(gift) = &mut tender.gift_card {
+                if !gift_sources.insert(gift.source_id.clone()) {
+                    return Err("duplicate gift-card payment source in edited tenders".into());
+                }
+                let prior = parsed
+                    .tenders
+                    .iter()
+                    .filter_map(|t| t.gift_card.as_ref())
+                    .find(|g| !gift.source_id.is_empty() && gift.source_id == g.source_id);
+                gift.correct_from(prior.ok_or("gift-card source no longer matches this receipt; reselect the source after reprocessing")?)?;
+            }
+        }
     }
     if let Some(total) = &corrections.total {
         parsed_out.total = Money::parse_strict(total).map_err(|e| format!("total: {e}"))?;
@@ -678,7 +714,33 @@ pub fn reformat_with_context(
             Some(Money::parse_strict(subtotal).map_err(|e| format!("subtotal: {e}"))?);
     }
 
-    if corrections.items.is_some()
+    if corrections.tenders.is_some() || corrections.total.is_some() {
+        parsed_out
+            .warnings
+            .retain(|w| w.kind != ReceiptWarningKind::TenderMismatch);
+        let lines: Vec<_> = parsed_out.raw_text.lines().map(String::from).collect();
+        let tenders: Vec<_> = parsed_out
+            .tenders
+            .iter()
+            .map(|t| crate::fields::TenderLine {
+                source_line_index: 0,
+                raw_label: t.raw_label.clone(),
+                amount_cents: t.amount.cents(),
+                kind: "",
+            })
+            .collect();
+        if !crate::fields::tenders_reconcile(&lines, &tenders, parsed_out.total.cents()) {
+            parsed_out.warnings.push(ParsedReceiptWarning {
+                kind: ReceiptWarningKind::TenderMismatch,
+                message:
+                    "payment amounts do not match the receipt total; review the payment details"
+                        .into(),
+                after_item_index: None,
+            });
+        }
+    }
+    if corrections.tenders.is_some()
+        || corrections.items.is_some()
         || corrections.total.is_some()
         || corrections.tax.is_some()
         || corrections.subtotal.is_some()
@@ -719,6 +781,7 @@ mod tests {
             date_is_placeholder: false,
             total: "10.00".into(),
             items: vec![ParsedReceiptItem {
+                gift_card: None,
                 item_number: None,
                 description: "Milk".into(),
                 price: "10.00".into(),
@@ -750,6 +813,7 @@ mod tests {
     fn reformat_applies_merchant_and_date_overrides() {
         let parsed = sample_parsed();
         let corrections = ReceiptCorrections {
+            tenders: None,
             merchant: Some("Costco Wholesale".into()),
             date_iso: Some("2026-03-01".into()),
             items: None,
@@ -789,6 +853,7 @@ mod tests {
     /// No corrections at all — the shape every new field has to leave alone.
     fn no_corrections() -> ReceiptCorrections {
         ReceiptCorrections {
+            tenders: None,
             merchant: None,
             date_iso: None,
             items: None,
@@ -814,6 +879,7 @@ mod tests {
 
     fn item(description: &str, price: &str, tag_path: &str) -> ItemCorrection {
         ItemCorrection {
+            gift_card: None,
             item_number: None,
             description: description.into(),
             price: price.into(),
@@ -853,6 +919,7 @@ mod tests {
         assert_eq!(scanned.as_deref(), Some("grocery/dairy"));
 
         let corrections = ReceiptCorrections {
+            tenders: None,
             items: Some(vec![item("MILK", "6.69", "grocery/dairy")]),
             ..no_corrections()
         };
@@ -884,6 +951,7 @@ mod tests {
         let parsed = sample_parsed();
         for bad in ["12x.99", "$12.34", "1,234.56", "", "abc", "12.345"] {
             let corrections = ReceiptCorrections {
+                tenders: None,
                 items: Some(vec![item("MILK", bad, "")]),
                 ..no_corrections()
             };
@@ -898,6 +966,7 @@ mod tests {
                 (
                     "total",
                     ReceiptCorrections {
+                        tenders: None,
                         total: Some(bad.to_string()),
                         ..no_corrections()
                     },
@@ -905,6 +974,7 @@ mod tests {
                 (
                     "tax",
                     ReceiptCorrections {
+                        tenders: None,
                         tax: Some(bad.to_string()),
                         ..no_corrections()
                     },
@@ -912,6 +982,7 @@ mod tests {
                 (
                     "subtotal",
                     ReceiptCorrections {
+                        tenders: None,
                         subtotal: Some(bad.to_string()),
                         ..no_corrections()
                     },
@@ -930,6 +1001,7 @@ mod tests {
     fn ordinary_corrections_still_apply() {
         let parsed = sample_parsed();
         let corrections = ReceiptCorrections {
+            tenders: None,
             items: Some(vec![item("MILK", "6.69", "")]),
             total: Some("7.56".into()),
             tax: Some("0.87".into()),
@@ -945,6 +1017,7 @@ mod tests {
     fn a_renamed_line_is_reclassified_from_its_new_text() {
         let parsed = sample_parsed();
         let corrections = ReceiptCorrections {
+            tenders: None,
             items: Some(vec![item("BONELESS CHICKEN THIGH", "10.00", "")]),
             ..no_corrections()
         };
@@ -970,6 +1043,7 @@ mod tests {
     fn a_line_the_user_left_alone_keeps_the_classification_the_parse_gave_it() {
         let mut parsed = sample_parsed();
         parsed.items[0] = ParsedReceiptItem {
+            gift_card: None,
             item_number: None,
             description: "TIDE CQLDWTR (Cold Water)".into(),
             price: "10.00".into(),
@@ -981,6 +1055,7 @@ mod tests {
 
         // Same text, new price — the shape of "I edited a different line".
         let corrections = ReceiptCorrections {
+            tenders: None,
             items: Some(vec![item("TIDE CQLDWTR (Cold Water)", "12.00", "")]),
             ..no_corrections()
         };
@@ -1019,6 +1094,7 @@ mod tests {
     fn a_chosen_tag_path_overrules_the_classifier_and_reaches_the_tags() {
         let parsed = sample_parsed();
         let corrections = ReceiptCorrections {
+            tenders: None,
             // Text the snacks rules do not match, filed by hand.
             items: Some(vec![item("WHITE RABBIT", "10.00", "grocery/snacks")]),
             ..no_corrections()
@@ -1042,6 +1118,7 @@ mod tests {
     fn a_chosen_tag_with_no_account_takes_its_nearest_mapped_ancestor() {
         let parsed = sample_parsed();
         let corrections = ReceiptCorrections {
+            tenders: None,
             items: Some(vec![item("Whatever", "10.00", "grocery/meat/chicken")]),
             ..no_corrections()
         };
@@ -1061,6 +1138,7 @@ mod tests {
     fn an_undeclared_tag_path_is_an_error() {
         let parsed = sample_parsed();
         let corrections = ReceiptCorrections {
+            tenders: None,
             items: Some(vec![item("Milk", "10.00", "grocery/nonsuch")]),
             ..no_corrections()
         };
@@ -1086,6 +1164,7 @@ mod tests {
         parsed.items[0].price = "5.00".into();
 
         let short = ReceiptCorrections {
+            tenders: None,
             items: Some(vec![item("Milk", "5.00", "")]),
             ..no_corrections()
         };
@@ -1100,6 +1179,7 @@ mod tests {
         );
 
         let fixed = ReceiptCorrections {
+            tenders: None,
             items: Some(vec![item("Milk", "5.00", ""), item("Bread", "5.00", "")]),
             ..no_corrections()
         };
@@ -1130,6 +1210,7 @@ mod tests {
         );
 
         let replaced = ReceiptCorrections {
+            tenders: None,
             items: Some(vec![item("Milk", "10.00", "")]),
             ..no_corrections()
         };
@@ -1148,6 +1229,7 @@ mod tests {
         parsed.subtotal = Some("100.00".into());
 
         let corrections = ReceiptCorrections {
+            tenders: None,
             total: Some("10.00".into()),
             subtotal: Some("10.00".into()),
             ..no_corrections()
@@ -1165,6 +1247,7 @@ mod tests {
     fn reformat_rejects_invalid_date_iso() {
         let parsed = sample_parsed();
         let corrections = ReceiptCorrections {
+            tenders: None,
             merchant: None,
             date_iso: Some("not-a-date".into()),
             items: None,
@@ -1191,6 +1274,7 @@ mod tests {
         let mut parsed = sample_parsed();
         parsed.raw_text = "COSTCO\n**** 1234\nTOTAL 10.00".into();
         parsed.tenders = vec![crate::parser::ParsedReceiptTender {
+            gift_card: None,
             amount: "10.00".into(),
             account: None,
             kind: "card".into(),

@@ -66,6 +66,7 @@ ablation (**not** implemented), is in
 | `ocr_line_grouping` / `detection_normalization` | Geometry cleanup before parse |
 | `parser` | Orchestrates field + item extraction |
 | `fields` | Merchant, date, tax, total, tenders |
+| `gift_cards` | Gift-card purchase/redemption evidence and correction provenance |
 | `text` | Line-oriented item extraction (dense grocery layouts) |
 | `spatial` | BBox/column-aware item extraction |
 | `categories` + `rules` | Classifier TOML → tags/accounts |
@@ -218,6 +219,9 @@ from one resolved match set. `RuleBook::explain` uses the same computation.
 The FFI `ReceiptItem` carries `tag_path` explicitly so a scan/reformat round-trip
 preserves the winning path even when another rule adds an unrelated semantic tag.
 Consumer migration details are in [receipt-contract-migration.md](receipt-contract-migration.md).
+
+Gift-card metadata and correction/serialization contracts are described in
+[gift-card-metadata.md](gift-card-metadata.md).
 
 ### Output identity
 

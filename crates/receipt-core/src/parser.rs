@@ -20,6 +20,7 @@ pub struct ParserRuleLayers {
 
 #[derive(Clone, Debug)]
 pub struct ParsedReceiptItem {
+    pub gift_card: Option<crate::gift_cards::GiftCardPurchase>,
     pub description: String,
     /// Merchant-specific printed item code; preserves leading zeros.
     pub item_number: Option<String>,
@@ -50,6 +51,7 @@ pub use crate::common::ReceiptWarning as ParsedReceiptWarning;
 
 #[derive(Clone, Debug)]
 pub struct ParsedReceiptTender {
+    pub gift_card: Option<crate::gift_cards::GiftCardRedemption>,
     pub amount: Money,
     pub account: Option<String>,
     pub kind: String,
@@ -149,6 +151,7 @@ fn build_item(
     };
 
     ParsedReceiptItem {
+        gift_card: None,
         item_number: None,
         description,
         price,
@@ -177,6 +180,7 @@ pub fn classified_item(
 ) -> ParsedReceiptItem {
     let classification = categories::classify_item(&description, &rule_layers.category_rules);
     ParsedReceiptItem {
+        gift_card: None,
         item_number: None,
         description,
         price,
@@ -243,6 +247,7 @@ pub fn item_with_tag_path(
     }
     let account = account_for_chosen_tag(tag_path, rule_layers);
     Ok(ParsedReceiptItem {
+        gift_card: None,
         item_number: None,
         description,
         price,
@@ -534,7 +539,7 @@ pub fn parse_receipt(
     // Sign-correct unsigned line-item discounts (e.g. FreshCo "INSTANT
     // SAVINGS $5.00"), covering both the spatial and text paths at their
     // single merge point.
-    let items: Vec<ParsedReceiptItem> = items
+    let mut items: Vec<ParsedReceiptItem> = items
         .into_iter()
         .map(|mut item| {
             if !item.price.is_negative() && is_unsigned_discount_line(&item.description) {
@@ -621,9 +626,13 @@ pub fn parse_receipt(
 
     warnings.extend(uncategorized_warnings(&items));
 
+    crate::gift_cards::attach_purchases(doc, &merchant, &mut items);
+    let gift_cards = crate::gift_cards::extract_redemptions(doc, &merchant, &tender_lines);
     let tenders = tender_lines
         .into_iter()
-        .map(|tender| ParsedReceiptTender {
+        .zip(gift_cards)
+        .map(|(tender, gift_card)| ParsedReceiptTender {
+            gift_card,
             amount: Money::from_cents(tender.amount_cents),
             account: None,
             kind: tender.kind.to_string(),

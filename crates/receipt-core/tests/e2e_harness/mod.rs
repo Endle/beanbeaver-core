@@ -12,6 +12,8 @@
 
 #![allow(dead_code)] // each test binary uses only the entry point it needs
 
+mod gift_cards;
+
 use receipt_core::money::Money;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -634,6 +636,8 @@ pub fn run_cached_corpus_in(
                 }
             }
         }
+
+        case_fail.extend(gift_cards::check(&parsed, &expected));
 
         // A known_failure that unexpectedly passed must be removed.
         for k in &known {
