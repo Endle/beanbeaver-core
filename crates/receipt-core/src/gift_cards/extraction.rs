@@ -84,6 +84,9 @@ fn amounts(s: &str) -> Vec<i64> {
             let boundary = |c: char| !c.is_alphanumeric() && !matches!(c, ',' | '.' | '-');
             s[..m.start()].chars().next_back().map_or(true, boundary)
                 && s[m.end()..].chars().next().map_or(true, boundary)
+                // OCR can put spaces between the sign and the amount/currency.
+                && !s[..m.start()].trim_end().ends_with('-')
+                && !s[m.end()..].trim_start().starts_with('-')
         })
         .filter_map(|m| {
             Money::parse_strict(&m.as_str().trim_start_matches('$').trim().replace(',', ""))
@@ -120,6 +123,33 @@ fn block_end(text: &str) -> bool {
     ]
     .iter()
     .any(|s| u.contains(s))
+}
+
+fn shop_payment_boundary(rows: &[Row<'_>], pos: usize) -> bool {
+    let upper = rows[pos].text.to_ascii_uppercase();
+    if !upper.contains("SHOP CARD")
+        || crate::fields::classify_tender_line(&upper) != Some("gift_card")
+        || upper.contains("RESP")
+    {
+        return false;
+    }
+    // A bare Shop Card label can be the payment whose amount OCR lost, or
+    // half of a split "Shop Card / Resp: Approved" authorization annotation.
+    // Only the payment closes the preceding card's block.
+    if upper == "SHOP CARD" {
+        for near in [
+            pos.checked_sub(1),
+            (pos + 1 < rows.len()).then_some(pos + 1),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if rows[near].text.to_ascii_uppercase().starts_with("RESP") {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 pub(crate) fn extract_redemptions(
@@ -174,7 +204,7 @@ pub(crate) fn extract_redemptions(
                     .map_or(0, |p| p + 1);
                 let start = (previous..pos)
                     .rev()
-                    .find(|p| block_end(rows[*p].text))
+                    .find(|p| block_end(rows[*p].text) || shop_payment_boundary(&rows, *p))
                     .map_or(previous, |p| p + 1);
                 (start, pos + 1)
             } else {
@@ -244,18 +274,22 @@ pub(crate) fn extract_redemptions(
                         .find("AMOUNT:")
                         .unwrap_or(tail.len());
                     let mut found = amounts(&tail[..cut]);
-                    if found.is_empty() {
+                    let mut has_amount = amount_re().is_match(&tail[..cut]);
+                    if found.is_empty() && !has_amount {
                         let prefix = &row.text[..label.start()];
                         let upper = prefix.to_ascii_uppercase();
                         if !upper.contains("AMOUNT:")
                             && !upper.contains(&t.raw_label.to_ascii_uppercase())
                         {
                             found = amounts(prefix);
+                            has_amount = amount_re().is_match(prefix);
                         }
                     }
                     // Split rows can run value-before-label in OCR order. Only an
                     // otherwise standalone amount qualifies; never borrow a tender.
-                    if found.is_empty() {
+                    // An explicit but invalid amount (e.g. a separated minus)
+                    // must not be replaced by another row's standalone value.
+                    if found.is_empty() && !has_amount {
                         for near in [j.checked_sub(1), (j + 1 < block.len()).then_some(j + 1)]
                             .into_iter()
                             .flatten()

@@ -327,19 +327,67 @@ fn malformed_negative_and_partially_read_balances_are_not_repaired() {
     for amount in [
         "1,50.00",
         "-10.00",
+        "- 10.00",
+        "- $10.00",
+        "$ - 10.00",
         "10.00-",
+        "10.00 -",
         "1.50.00",
         "9999999999999999999999.00",
     ] {
-        let cards = redemption(&format!("Gift Card 5.00\nBAL: {amount}"));
-        assert_eq!(cards[0].remaining_balance_cents, None, "{amount}");
-        assert!(cards[0]
-            .unresolved_fields
-            .contains(&"remaining_balance_cents".into()));
+        for following_row in ["", "\n99.00"] {
+            let cards = redemption(&format!("Gift Card 5.00\nBAL: {amount}{following_row}"));
+            assert_eq!(cards[0].remaining_balance_cents, None, "{amount}");
+            assert!(cards[0]
+                .unresolved_fields
+                .contains(&"remaining_balance_cents".into()));
+        }
     }
     let cards = redemption("Gift Card 5.00\n************1234 EXP:2028/12/31 BAL: 90.30");
     assert_eq!(cards[0].expiry_date.as_deref(), Some("2028/12/31"));
     assert_eq!(cards[0].remaining_balance_cents, Some(9030));
+}
+
+#[test]
+fn an_unreadable_shop_payment_cannot_donate_metadata_to_the_next_card() {
+    for previous_payment in ["Shop Card unreadable", "Shop Card"] {
+        for response in [
+            "Shop Card Resp: Approved",
+            "Shop Card\nResp: Approved",
+            "Resp: Approved\nShop Card",
+        ] {
+            let cards = redemption(&format!(
+                "TOTAL 75.00\nAPP#: 111111\nREMAINING BALANCE: $90.00\n{previous_payment}\n************2222\n{response}\nShop Card 25.00"
+            ));
+            assert_eq!(cards.len(), 1, "{previous_payment}; {response}");
+            let card = &cards[0];
+            assert_eq!(
+                card.normalized_identifier.as_deref(),
+                Some("************2222")
+            );
+            assert_eq!(card.authorization_reference, None);
+            assert_eq!(card.remaining_balance_cents, None);
+            assert!(card.unresolved_fields.is_empty());
+            assert!(card
+                .evidence
+                .iter()
+                .all(|e| !e.text.contains("111111") && !e.text.contains("90.00")));
+
+            // The response annotation belongs to the current authorization
+            // block; treating it as a payment boundary would lose this ID/auth.
+            let cards = redemption(&format!(
+                "TOTAL 75.00\nAPP#: 111111\nREMAINING BALANCE: $90.00\n{previous_payment}\n************2222\nAPP#: 222222\n{response}\nREMAINING BALANCE: $15.00\nShop Card 25.00"
+            ));
+            let card = &cards[0];
+            assert_eq!(
+                card.normalized_identifier.as_deref(),
+                Some("************2222")
+            );
+            assert_eq!(card.authorization_reference.as_deref(), Some("222222"));
+            assert_eq!(card.remaining_balance_cents, Some(1500));
+            assert!(card.unresolved_fields.is_empty());
+        }
+    }
 }
 
 #[test]

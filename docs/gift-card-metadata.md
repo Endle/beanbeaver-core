@@ -47,6 +47,12 @@ mask positions, and a masked final digit are retained. `printed_identifier`
 keeps the original OCR spelling. OCR character errors are not corrected by
 inventing digits from receipt arithmetic.
 
+An unreadable Costco Shop Card payment still bounds the next card's metadata;
+the `Shop Card / Resp: Approved` authorization annotation does not. Negative
+balances remain unresolved even when OCR separates the sign from the amount
+or currency symbol. An explicit invalid amount cannot borrow a neighboring
+standalone value.
+
 Each metadata record retains `evidence` with a field name, source line index,
 and the source text. Indices address **nonempty, trimmed lines of `raw_text`**.
 Text is retained inside the evidence so storing a metadata object does not
