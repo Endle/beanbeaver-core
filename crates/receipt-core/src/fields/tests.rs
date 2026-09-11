@@ -843,6 +843,30 @@ fn tenders_ignores_change_and_cash_back_lines() {
 }
 
 #[test]
+fn a_bare_master_label_is_a_card_tender() {
+    // T&T prints the Mastercard tender as `Master`, alone on its row when the
+    // grouper keeps the amount separate and `Master $14.48` when it does not.
+    // Both shapes are real (2026-08-25 T&T, both captures).
+    for lines in [
+        vec![
+            "TOTAL $14.48".to_string(),
+            "Master".to_string(),
+            "$14.48".to_string(),
+        ],
+        vec!["TOTAL $14.48".to_string(), "Master $14.48".to_string()],
+    ] {
+        let tenders = extract_tenders(&lines);
+        assert_eq!(tenders.len(), 1, "{lines:?}");
+        assert_eq!(tenders[0].kind, "card");
+        assert_eq!(tenders[0].amount_cents, 1_448);
+        assert!(tenders_reconcile(&lines, &tenders, 1_448));
+    }
+    // A row that goes on to say more is a product, not a tender.
+    assert_eq!(classify_tender_line("MASTER CHEF SAUCE 3.99"), None);
+    assert_eq!(classify_tender_line("MASTER OF NONE 12.00"), None);
+}
+
+#[test]
 fn change_is_the_last_amount_on_a_merged_row() {
     // Costco's customer copy prints the card charge and the change on
     // consecutive rows, and line grouping merges them. Reading the FIRST
