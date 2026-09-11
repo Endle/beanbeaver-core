@@ -506,7 +506,7 @@ pub fn parse_receipt(
     let spatial_layout =
         doc.has_useful_bbox_data() && parse_helpers::is_spatial_layout_receipt(full_text);
 
-    let outcome = if spatial_layout {
+    let mut outcome = if spatial_layout {
         let spatial = spatial::extract_spatial_items(doc);
         if spatial.items.is_empty() {
             text::extract_text_items(&item_lines, &summary_amounts)
@@ -516,6 +516,7 @@ pub fn parse_receipt(
     } else {
         text::extract_text_items(&item_lines, &summary_amounts)
     };
+    crate::extraction::fold_zero_priced_loads(&mut outcome);
     let mut warnings = outcome.warnings;
     let items = outcome.items.into_iter().map(|item| {
         let item_number = item.item_number.filter(|_| {

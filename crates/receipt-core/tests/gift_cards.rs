@@ -97,6 +97,41 @@ fn scan_context_and_metadata_survive_serialization_and_reformatting() {
     );
 }
 
+/// Dollarama prints a gift card as a zero-priced SKU, a load row that names its
+/// own amount, the card serial, and the terminal's activation slip — all
+/// *before* TOTAL. The slip's `Amount` row is a priced line to a text parser,
+/// so the one card used to come out as three items summing to twice the total.
+/// Identifiers here are synthetic.
+#[test]
+fn dollarama_gift_card_is_one_item_charged_on_its_load_row() {
+    let parsed = scan(
+        "DOLLARAMA\nAMAZON.CA $25 01234567890 0.00\nBH 25 25.00\n6300000000000000\nTRANSACTION RECORD\nAccount GIFT CARD\nTrans Type ACTIVATE\nAmount $25.00\nReference # 000000000000\nApproved\n*** CUSTOMER COPY ***\nTOTAL $25.00\nMASTERCARD $25.00",
+    );
+    let items: Vec<_> = parsed
+        .items
+        .iter()
+        .map(|i| (i.description.as_str(), i.price.to_string()))
+        .collect();
+    assert_eq!(
+        items,
+        vec![("AMAZON.CA $25 01234567890", "25.00".to_string())]
+    );
+    assert!(
+        parsed.items[0].tags.iter().any(|t| t == "gift_card"),
+        "tags: {:?}",
+        parsed.items[0].tags
+    );
+    let kinds: Vec<_> = parsed.warnings.iter().map(|w| w.kind).collect();
+    assert!(
+        kinds.contains(&receipt_core::common::ReceiptWarningKind::PriceAutoCorrected),
+        "the fold must be auditable: {kinds:?}"
+    );
+    assert!(
+        !kinds.contains(&receipt_core::common::ReceiptWarningKind::TotalMismatch),
+        "{kinds:?}"
+    );
+}
+
 #[test]
 fn identical_purchases_reorder_without_merging_or_losing_unresolved_evidence() {
     let parsed=scan("COSTCO\n399 DOORDASH2X50 79.99\nPC 111111 ACTIVATED\n399 DOORDASH2X50 79.99\nPC unreadable ACTIVATED\nSUBTOTAL 159.98\nTOTAL 159.98\nMASTERCARD 159.98");

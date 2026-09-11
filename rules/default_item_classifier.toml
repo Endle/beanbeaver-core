@@ -893,6 +893,18 @@ priority = 0
 exact_only = false
 
 [[rules]]
+id = "amazon_gift_card"
+# Dollarama's gift-card mall prints the card as "AMAZON.CA $25". Like LCBO CARD
+# this is bare `gift_card`, deliberately account-less: an Amazon card is spent
+# on anything, so no expense account can be named at purchase time. Exact only —
+# AMAZON is a brand-ish token whose fuzzy neighbourhood is not worth entering,
+# and it is always printed in full.
+keywords = ["AMAZON"]
+tags = ["gift_card"]
+priority = 0
+exact_only = true
+
+[[rules]]
 id = "semantic_tag_0105"
 # Costco prints these as "399 DOORDASH2X50" — the denomination is glued to the
 # brand, so the keyword has to match mid-token, which the substring path does.
