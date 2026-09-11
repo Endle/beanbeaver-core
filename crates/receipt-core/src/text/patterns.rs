@@ -56,11 +56,18 @@ pub(crate) const SKIP_PRICED_LINES_IN_BACKWARD_DESC_SEARCH: bool = true;
 /// See [`DriftEvidence`](crate::text::rows::DriftEvidence).
 pub(crate) const PRICE_DRIFT_EVIDENCE_MIN: usize = 3;
 
+/// Rows that are never items. Most are summary or payment vocabulary; the
+/// `^ACCT:` / `^ACCOUNT:` / `^AMOUNT` / `^REFERENCE` / `AUTH` / `TRANSACTION`
+/// family is the payment terminal's own slip, which normally prints *after*
+/// TOTAL and never reaches this loop. Dollarama prints a gift card's
+/// activation slip between the items and TOTAL, and its `Amount  $25.00`
+/// row is exactly a priced line — it read as a third copy of the card until
+/// AMOUNT joined the list. No corpus receipt names a product AMOUNT.
 pub(crate) fn re_skip_patterns() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)TOTAL|SUBTOTAL|SUB\s+TOTAL|TOTALS?\s+ON|^TAX$|^HST|^GST|^PST|AFTER\s+TAX|^\s*\d+\s*%$|^CASH\b|^CREDIT\b|^DEBIT\b|^CHANGE\b|^BALANCE|^VISA\b|^MASTERCARD\b|^AMEX\b|^APPROVED\b|^ACTIVATED\b|^PC\s+\d|^ACCT:|^ACCOUNT:|^REFERENCE|THANK YOU|WELCOME|RECEIPT|TRANSACTION|^POINTS\b|^REWARDS\b|^EARNED\b|^SAVED$|^YOU SAVED|PRICE\s+MATCH|^CARD|AUTH|REF\s*#|SLIP\s*#|^TILL|CASHIER|\bSTORE\b|^PHONE|ADDRESS|SIGNATURE|Merchant|^QTY$|^UNIT$|^SAV$|ITEM\s+COUNT|NUMBER\s+OF\s+ITEMS|XXXX+|^CAD|VERIFIED|^PIN$|CUSTOMER\s+COPY|COPY$|Optimum|Redeemed",
+            r"(?i)TOTAL|SUBTOTAL|SUB\s+TOTAL|TOTALS?\s+ON|^TAX$|^HST|^GST|^PST|AFTER\s+TAX|^\s*\d+\s*%$|^CASH\b|^CREDIT\b|^DEBIT\b|^CHANGE\b|^BALANCE|^VISA\b|^MASTERCARD\b|^AMEX\b|^APPROVED\b|^ACTIVATED\b|^PC\s+\d|^ACCT:|^ACCOUNT:|^AMOUNT\b|^REFERENCE|THANK YOU|WELCOME|RECEIPT|TRANSACTION|^POINTS\b|^REWARDS\b|^EARNED\b|^SAVED$|^YOU SAVED|PRICE\s+MATCH|^CARD|AUTH|REF\s*#|SLIP\s*#|^TILL|CASHIER|\bSTORE\b|^PHONE|ADDRESS|SIGNATURE|Merchant|^QTY$|^UNIT$|^SAV$|ITEM\s+COUNT|NUMBER\s+OF\s+ITEMS|XXXX+|^CAD|VERIFIED|^PIN$|CUSTOMER\s+COPY|COPY$|Optimum|Redeemed",
         )
         .unwrap()
     })

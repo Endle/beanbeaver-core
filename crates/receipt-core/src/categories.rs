@@ -1098,6 +1098,15 @@ mod tests {
             );
         }
 
+        // Amazon card off a Dollarama gift-card mall: same shape as LCBO CARD.
+        assert_eq!(key("AMAZON.CA $25 07675062289"), None);
+        assert!(
+            tags("AMAZON.CA $25 07675062289")
+                .iter()
+                .any(|x| x == "gift_card"),
+            "AMAZON missing tag gift_card"
+        );
+
         assert_eq!(
             key("2773717 MONSTER VRTY").as_deref(),
             Some("grocery/drink")
