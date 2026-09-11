@@ -43,6 +43,8 @@ use receipt_core::process::{process_receipt, ProcessedReceipt};
 use receipt_core::rules::default_parser_rule_layers;
 use scan::{process_image, process_image_timed, ScanTimings};
 use serde_json::Value;
+#[path = "../../receipt-core/tests/e2e_harness/gift_cards.rs"]
+mod gift_card_expectations;
 
 /// Matches `ocr_paddle::prep::OCR_IMAGE_PADDING` (the desktop server pads 50px
 /// before OCR, so `.ocr.json` coords + dims are in that padded space).
@@ -834,6 +836,13 @@ fn run_single(
                 it.tag_path.as_deref().unwrap_or("-")
             );
         }
+        for (index, item) in d.items.iter().enumerate() {
+            if let Some(gift) = &item.gift_card {
+                println!("item[{index}] gift_card: {gift:#?}");
+            }
+        }
+        println!("tenders: {:#?}", d.tenders);
+        println!("OCR text:\n{}", d.raw_text);
         println!("\n{}", pr.beancount);
         if let Some(t) = &timings {
             println!("\n{}", fmt_timings_line(t));
@@ -846,7 +855,13 @@ fn run_single(
     }
     let expected: Value =
         serde_json::from_str(&std::fs::read_to_string(&expected_path).ok()?).ok()?;
-    Some((score(name, &expected, d, mapping), timings))
+    let scored = score(name, &expected, d, mapping);
+    if dump {
+        for error in &scored.gift_card_errors {
+            println!("gift_card: {error}");
+        }
+    }
+    Some((scored, timings))
 }
 
 /// Recursively collect every `<stem>.jpg` under `dir`, sorted.
@@ -1365,6 +1380,7 @@ struct FixtureScore {
     subtotal_ok: Option<bool>,
     tax_ok: Option<bool>,
     merchant_group: String,
+    gift_card_errors: Vec<String>,
 }
 
 impl FixtureScore {
@@ -1376,6 +1392,7 @@ impl FixtureScore {
             && self.count_ok.unwrap_or(true)
             && self.subtotal_ok.unwrap_or(true)
             && self.tax_ok.unwrap_or(true)
+            && self.gift_card_errors.is_empty()
     }
     fn notes(&self) -> String {
         let mut n = Vec::new();
@@ -1396,6 +1413,9 @@ impl FixtureScore {
         }
         if !self.total_ok {
             n.push("total");
+        }
+        if !self.gift_card_errors.is_empty() {
+            n.push("gift_card");
         }
         if n.is_empty() {
             String::new()
@@ -1517,6 +1537,7 @@ fn score(
         subtotal_ok,
         tax_ok,
         merchant_group: merchant_group_key(raw_merchant),
+        gift_card_errors: gift_card_expectations::check(d, expected),
     }
 }
 

@@ -12,6 +12,8 @@
 
 #![allow(dead_code)] // each test binary uses only the entry point it needs
 
+mod gift_cards;
+
 use receipt_core::money::Money;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -532,24 +534,37 @@ pub fn run_cached_corpus_in(
                                 .is_some_and(|k| category_matches(c, k, &mapping))
                         })
                 });
-                let item_failed = matched.is_empty() || !price_ok || !cat_ok;
+                // An entry's optional `gift_card` metadata is part of the same
+                // entry: the entry-level marker umbrellas it, and a field-level
+                // marker inside the object narrows that. See gift_cards.rs.
+                let gift = gift_cards::item_metadata(ci, &parsed.items, true);
+                let line_failed = matched.is_empty() || !price_ok || !cat_ok;
+                let item_failed = line_failed || gift.as_ref().is_some_and(|g| g.failed());
                 if item_failed && !item_known {
-                    let got: Vec<_> = matched
-                        .iter()
-                        .map(|it| {
-                            (
-                                it.description.as_str(),
-                                it.price.to_string(),
-                                it.account.as_deref(),
-                            )
-                        })
-                        .collect();
-                    msgs.push(format!("item '{desc}' (price {price}, cat {want_cat:?}) unmatched; candidates {got:?}"));
+                    if line_failed {
+                        let got: Vec<_> = matched
+                            .iter()
+                            .map(|it| {
+                                (
+                                    it.description.as_str(),
+                                    it.price.to_string(),
+                                    it.account.as_deref(),
+                                )
+                            })
+                            .collect();
+                        msgs.push(format!("item '{desc}' (price {price}, cat {want_cat:?}) unmatched; candidates {got:?}"));
+                    }
+                    if let Some(g) = &gift {
+                        msgs.extend(g.errors.iter().cloned());
+                    }
                     real_failure = true;
                 } else if !item_failed && item_known {
                     msgs.push(format!(
                         "item '{desc}' marked known_failure but matched — remove the marker"
                     ));
+                }
+                if let Some(g) = gift {
+                    msgs.extend(g.stale);
                 }
             }
             if real_failure {
@@ -590,29 +605,41 @@ pub fn run_cached_corpus_in(
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 let got = parsed.tenders.get(i);
-                let entry_failed = match got {
+                let line_failed = match got {
                     None => true,
                     Some(t) => {
                         !price_matches(want_amount, t.amount)
                             || want_kind.is_some_and(|k| k != t.kind)
                     }
                 };
+                // Same shape as critical_items: the entry's `gift_card` object
+                // fails or passes with the entry, under the same markers.
+                let gift = gift_cards::tender_metadata(i, wt, got, true);
+                let entry_failed = line_failed || gift.as_ref().is_some_and(|g| g.failed());
                 if entry_failed && !entry_known {
                     real_failure = true;
-                    msgs.push(match got {
-                        None => format!(
-                            "tender[{i}] expected {want_kind:?} {want_amount}, but only {} tender(s) parsed",
-                            parsed.tenders.len()
-                        ),
-                        Some(t) => format!(
-                            "tender[{i}] expected {want_kind:?} {want_amount}, got \"{}\" {} ({})",
-                            t.kind, t.amount, t.raw_label
-                        ),
-                    });
+                    if line_failed {
+                        msgs.push(match got {
+                            None => format!(
+                                "tender[{i}] expected {want_kind:?} {want_amount}, but only {} tender(s) parsed",
+                                parsed.tenders.len()
+                            ),
+                            Some(t) => format!(
+                                "tender[{i}] expected {want_kind:?} {want_amount}, got \"{}\" {} ({})",
+                                t.kind, t.amount, t.raw_label
+                            ),
+                        });
+                    }
+                    if let Some(g) = &gift {
+                        msgs.extend(g.errors.iter().cloned());
+                    }
                 } else if !entry_failed && entry_known {
                     msgs.push(format!(
                         "tender[{i}] marked known_failure but matched — remove the marker"
                     ));
+                }
+                if let Some(g) = gift {
+                    msgs.extend(g.stale);
                 }
             }
             for (i, extra) in parsed.tenders.iter().enumerate().skip(want.len()) {

@@ -31,6 +31,11 @@ use receipt_core::process::{
 use receipt_core::rules::RuleBook as CoreRuleBook;
 use scan::{Engine as OcrEngine, ScanRequest, ScanTimings as CoreScanTimings};
 
+mod gift_cards;
+pub use gift_cards::{
+    GiftCardActivation, GiftCardEvidence, GiftCardExpiry, GiftCardPurchase, GiftCardRedemption,
+};
+
 uniffi::setup_scaffolding!();
 
 /// Calendar date passed in from Swift (used for date inference + placeholder).
@@ -44,6 +49,7 @@ pub struct DateYmd {
 /// One parsed line item.
 #[derive(uniffi::Record)]
 pub struct ReceiptItem {
+    pub gift_card: Option<GiftCardPurchase>,
     pub description: String,
     /// Merchant-specific printed item code; preserves leading zeros.
     pub item_number: Option<String>,
@@ -77,6 +83,7 @@ pub struct ItemTag {
 /// One payment tender (split tender / multi-payment receipts).
 #[derive(uniffi::Record)]
 pub struct ReceiptTender {
+    pub gift_card: Option<GiftCardRedemption>,
     pub amount: String,
     pub account: Option<String>,
     pub kind: String,
@@ -389,6 +396,7 @@ pub struct ParseOptions {
 /// user actually touched.
 #[derive(uniffi::Record)]
 pub struct ReceiptEdits {
+    pub tenders: Option<Vec<ReceiptTender>>,
     pub merchant: Option<String>,
     /// ISO `YYYY-MM-DD`.
     pub date_iso: Option<String>,
@@ -417,6 +425,7 @@ pub struct ReceiptEdits {
 /// One line of the item block, as [`ReceiptEdits::items`] carries it.
 #[derive(uniffi::Record)]
 pub struct EditedItem {
+    pub gift_card: Option<GiftCardPurchase>,
     pub description: String,
     /// Carry the original code when renaming a line. None preserves the prior
     /// code only when the description still matches; new lines default to None.
@@ -818,13 +827,34 @@ pub fn reformat_receipt(
     options: ParseOptions,
 ) -> Result<ReceiptResult, ScanError> {
     let parsed = receipt_result_to_parsed(&previous);
+    let tenders = edits
+        .tenders
+        .map(|tenders| {
+            tenders
+                .into_iter()
+                .map(|t| {
+                    Ok(ParsedReceiptTender {
+                        amount: Money::parse_strict(&t.amount).map_err(|msg| ScanError::Parse {
+                            msg: msg.to_string(),
+                        })?,
+                        account: t.account,
+                        kind: t.kind,
+                        raw_label: t.raw_label,
+                        gift_card: t.gift_card.map(Into::into),
+                    })
+                })
+                .collect::<Result<Vec<_>, ScanError>>()
+        })
+        .transpose()?;
     let corrections = ReceiptCorrections {
+        tenders,
         merchant: edits.merchant,
         date_iso: edits.date_iso,
         items: edits.items.map(|items| {
             items
                 .into_iter()
                 .map(|item| ItemCorrection {
+                    gift_card: item.gift_card.map(Into::into),
                     item_number: item.item_number,
                     description: item.description,
                     price: item.price,
@@ -929,6 +959,7 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
             .items
             .into_iter()
             .map(|i| ReceiptItem {
+                gift_card: i.gift_card.map(Into::into),
                 item_number: i.item_number,
                 description: i.description,
                 price: i.price.to_string(),
@@ -956,6 +987,7 @@ fn to_result(p: ProcessedReceipt, timings: ScanTimings) -> ReceiptResult {
             .tenders
             .into_iter()
             .map(|t| ReceiptTender {
+                gift_card: t.gift_card.map(Into::into),
                 amount: t.amount.to_string(),
                 account: t.account,
                 kind: t.kind,
@@ -1053,6 +1085,7 @@ fn receipt_result_to_parsed(r: &ReceiptResult) -> ParsedReceiptData {
             .items
             .iter()
             .map(|i| ParsedReceiptItem {
+                gift_card: i.gift_card.clone().map(Into::into),
                 item_number: i.item_number.clone(),
                 description: i.description.clone(),
                 price: Money::from_decimal_str(&i.price),
@@ -1086,6 +1119,7 @@ fn receipt_result_to_parsed(r: &ReceiptResult) -> ParsedReceiptData {
             .tenders
             .iter()
             .map(|t| ParsedReceiptTender {
+                gift_card: t.gift_card.clone().map(Into::into),
                 amount: Money::from_decimal_str(&t.amount),
                 account: t.account.clone(),
                 kind: t.kind.clone(),
@@ -1135,6 +1169,7 @@ mod tests {
             tax: None,
             subtotal: Some("10.00".into()),
             items: vec![ReceiptItem {
+                gift_card: None,
                 item_number: None,
                 tag_path: Some("grocery/dairy".into()),
                 description: "Milk".into(),
@@ -1147,6 +1182,7 @@ mod tests {
             raw_text: "COSTCO\n**** 1234\nTOTAL 10.00".into(),
             image_filename: "costco.jpg".into(),
             tenders: vec![ReceiptTender {
+                gift_card: None,
                 amount: "10.00".into(),
                 account: None,
                 kind: "card".into(),
@@ -1315,6 +1351,7 @@ mod tests {
 
     fn no_edits() -> ReceiptEdits {
         ReceiptEdits {
+            tenders: None,
             merchant: None,
             date_iso: None,
             items: None,
@@ -1326,6 +1363,7 @@ mod tests {
 
     fn edits_with(items: Vec<EditedItem>) -> ReceiptEdits {
         ReceiptEdits {
+            tenders: None,
             items: Some(items),
             ..no_edits()
         }
@@ -1333,6 +1371,7 @@ mod tests {
 
     fn edited(description: &str, price: &str, tag_path: &str) -> EditedItem {
         EditedItem {
+            gift_card: None,
             item_number: None,
             description: description.into(),
             price: price.into(),
@@ -1421,6 +1460,7 @@ mod tests {
             "Expenses:Tax:HST".into(),
             Some("deadbeef".into()),
             ReceiptEdits {
+                tenders: None,
                 merchant: Some("Costco Wholesale".into()),
                 date_iso: Some("2026-02-19".into()),
                 ..no_edits()
@@ -1466,6 +1506,7 @@ mod tests {
             "Expenses:Tax:HST".into(),
             None,
             ReceiptEdits {
+                tenders: None,
                 merchant: None,
                 date_iso: Some("bogus".into()),
                 ..no_edits()
@@ -1650,5 +1691,149 @@ mod tests {
         assert_eq!(paths.first(), Some(&"grocery"), "least specific first");
         assert!(paths.contains(&"grocery/meat/chicken"));
         assert!(explained.tags.iter().all(|t| !t.display.is_empty()));
+    }
+    fn reformat_gifts(
+        previous: ReceiptResult,
+        edits: ReceiptEdits,
+    ) -> Result<ReceiptResult, ScanError> {
+        reformat_receipt(
+            previous,
+            DateYmd {
+                year: 2026,
+                month: 9,
+                day: 9,
+            },
+            "Liabilities:CreditCard".into(),
+            "CAD".into(),
+            "Expenses:Tax:HST".into(),
+            None,
+            edits,
+            ParseOptions::default(),
+        )
+    }
+
+    #[test]
+    fn gift_metadata_crosses_both_ffi_directions_and_corrections_keep_evidence() {
+        use receipt_core::gift_cards as g;
+        let mut previous = sample_previous();
+        let purchase = g::GiftCardPurchase {
+            source_id: "item:0".into(),
+            issuer: Some("DoorDash".into()),
+            currency: Some("CAD".into()),
+            activation: g::GiftCardActivation::Activated,
+            reference_label: Some("PC".into()),
+            reference: Some("123456789".into()),
+            card_count: Some(2),
+            denomination_cents: Some(5000),
+            total_face_value_cents: Some(10000),
+            face_value_derived: true,
+            evidence: vec![g::GiftCardEvidence {
+                field: "item".into(),
+                line_index: 3,
+                text: "399 DOORDASH2X50 79.99".into(),
+            }],
+            ..Default::default()
+        };
+        let payment = g::GiftCardRedemption {
+            source_id: "tender:0".into(),
+            issuer: Some("LCBO".into()),
+            currency: Some("CAD".into()),
+            printed_identifier: Some("123456xxxxx7654321x".into()),
+            normalized_identifier: Some("123456*****7654321*".into()),
+            remaining_balance_cents: Some(0),
+            authorization_reference: Some("456789".into()),
+            expiry: g::GiftCardExpiry::NoExpiry,
+            evidence: vec![
+                g::GiftCardEvidence {
+                    field: "amount_used".into(),
+                    line_index: 9,
+                    text: "Gift Card 10.00".into(),
+                },
+                g::GiftCardEvidence {
+                    field: "remaining_balance_cents".into(),
+                    line_index: 10,
+                    text: "BAL: 0.00".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        previous.items[0].gift_card = Some(purchase.clone().into());
+        previous.tenders[0].kind = "gift_card".into();
+        previous.tenders[0].gift_card = Some(payment.clone().into());
+        let roundtrip = reformat_gifts(previous, no_edits()).unwrap();
+        assert_eq!(roundtrip.items[0].gift_card, Some(purchase.clone().into()));
+        assert_eq!(roundtrip.tenders[0].gift_card, Some(payment.clone().into()));
+        let mut gift: GiftCardPurchase = purchase.clone().into();
+        gift.reference = Some("999999".into());
+        let mut renamed = edited("My DoorDash pack", "10.00", "");
+        renamed.gift_card = Some(gift);
+        let mut corrected: GiftCardRedemption = payment.clone().into();
+        corrected.remaining_balance_cents = Some(9030);
+        let edits = ReceiptEdits {
+            items: Some(vec![edited("New row", "0.00", ""), renamed]),
+            tenders: Some(vec![ReceiptTender {
+                gift_card: Some(corrected),
+                amount: "10.00".into(),
+                account: None,
+                kind: "gift_card".into(),
+                raw_label: "Gift Card".into(),
+            }]),
+            ..no_edits()
+        };
+        let corrected = reformat_gifts(roundtrip, edits).unwrap();
+        assert_eq!(corrected.items[0].gift_card, None);
+        let pack = corrected.items[1].gift_card.as_ref().unwrap();
+        assert_eq!(pack.reference.as_deref(), Some("999999"));
+        assert_eq!(
+            pack.evidence,
+            purchase
+                .evidence
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(pack.corrected_fields, vec!["reference"]);
+        let card = corrected.tenders[0].gift_card.as_ref().unwrap();
+        assert_eq!(card.remaining_balance_cents, Some(9030));
+        assert_eq!(
+            card.evidence,
+            payment
+                .evidence
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(card.corrected_fields, vec!["remaining_balance_cents"]);
+        let again = reformat_gifts(corrected, no_edits()).unwrap();
+        assert_eq!(
+            again.tenders[0]
+                .gift_card
+                .as_ref()
+                .unwrap()
+                .remaining_balance_cents,
+            Some(9030)
+        );
+        assert!(again.beancount.contains("Assets:GiftCards:PENDING"));
+    }
+
+    #[test]
+    fn corrected_tender_amounts_are_strict_and_reconciliation_is_not_fudged() {
+        let make = |amount: &str| ReceiptEdits {
+            tenders: Some(vec![ReceiptTender {
+                gift_card: None,
+                amount: amount.into(),
+                account: None,
+                kind: "gift_card".into(),
+                raw_label: "Gift Card".into(),
+            }]),
+            ..no_edits()
+        };
+        assert!(reformat_gifts(sample_previous(), make("12x.34")).is_err());
+        let result = reformat_gifts(sample_previous(), make("9.00")).unwrap();
+        assert_eq!(result.tenders[0].amount, "9.00");
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.kind == ReceiptWarningKind::TenderMismatch));
     }
 }

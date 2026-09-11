@@ -5,11 +5,12 @@ use std::sync::OnceLock;
 
 #[derive(Clone, Debug)]
 pub struct TenderLine {
+    pub source_line_index: usize,
     pub raw_label: String,
     pub amount_cents: i64,
     pub kind: &'static str,
 }
-pub(super) fn classify_tender_line(line_upper: &str) -> Option<&'static str> {
+pub(crate) fn classify_tender_line(line_upper: &str) -> Option<&'static str> {
     // Reject noise lines that contain price-paired keywords but aren't tenders.
     if line_upper.contains("BALANCE") {
         return None;
@@ -30,6 +31,15 @@ pub(super) fn classify_tender_line(line_upper: &str) -> Option<&'static str> {
         || line_upper.contains("GIFT CRD")
         || line_upper.contains("SHOP CARD")
     {
+        // Receipt footers advertise gift cards and prizes with currency amounts.
+        // These words describe an offer, not a payment made on this receipt.
+        if line_upper.contains("GIFT CARDS")
+            || line_upper
+                .split(|c: char| !c.is_ascii_alphabetic())
+                .any(|word| matches!(word, "WIN" | "CHANCE" | "SURVEY"))
+        {
+            return None;
+        }
         return Some("gift_card");
     }
     if line_upper.contains("MERCH CRED")
@@ -104,6 +114,7 @@ fn tender_from_authorization_block(lines: &[String]) -> Option<TenderLine> {
                 return None;
             }
             return Some(TenderLine {
+                source_line_index: idx,
                 raw_label: trim_tender_label(line),
                 amount_cents,
                 kind,
@@ -191,6 +202,7 @@ pub fn extract_tenders(lines: &[String]) -> Vec<TenderLine> {
             consumed_next = true;
         }
         tenders.push(TenderLine {
+            source_line_index: idx,
             raw_label: trim_tender_label(line),
             amount_cents,
             kind,

@@ -27,6 +27,7 @@ pub(crate) mod detection_normalization;
 pub(crate) mod extraction;
 pub(crate) mod fields;
 pub(crate) mod formatter;
+pub mod gift_cards;
 pub mod merchant_details;
 pub mod merchant_match;
 pub(crate) mod merchant_vocab;
