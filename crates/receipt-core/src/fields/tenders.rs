@@ -53,7 +53,7 @@ pub(crate) fn classify_tender_line(line_upper: &str) -> Option<&'static str> {
         || line_upper.contains("AMEX")
         || line_upper.contains("AMERICAN EXPRESS")
         || line_upper.contains("DEBIT")
-        || re_bare_master_label().is_match(line_upper)
+        || re_bare_card_label().is_match(line_upper)
     {
         return Some("card");
     }
@@ -62,15 +62,22 @@ pub(crate) fn classify_tender_line(line_upper: &str) -> Option<&'static str> {
     }
     None
 }
-/// T&T (and Sunny Foodmart) print the Mastercard tender as a bare `Master`,
-/// so the substring test above never sees it: 17 corpus receipts carry the
-/// line and not one of them produced a tender. The label is either alone on
-/// its row or grouped with its amount (`Master $14.48`), and nothing else --
-/// a row that goes on to say more (`MASTER CHEF SAUCE 3.99`) is a product,
-/// which is why this is anchored at both ends rather than a `contains`.
-pub(super) fn re_bare_master_label() -> &'static Regex {
+/// Two card labels the substring tests above never see, each the whole row
+/// (optionally with its amount) and nothing else:
+///
+/// - T&T and Sunny Foodmart print the Mastercard tender as a bare `Master`.
+///   17 corpus receipts carry the line; none produced a tender.
+/// - Foody Mart prints `Credit Card` (44 receipts; likewise none).
+///
+/// Anchored at both ends rather than `contains`, because a row that goes on
+/// to say more is something else: `MASTER CHEF SAUCE 3.99` is a product, and
+/// `CREDIT CARD SALE` is the terminal slip's own header (five receipts),
+/// which sits above amount rows that are not tenders.
+pub(super) fn re_bare_card_label() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^\s*MASTER(?:\s*\$?\s*[\d.,]+)?\s*$").unwrap())
+    RE.get_or_init(|| {
+        Regex::new(r"^\s*(?:MASTER|CREDIT\s+CARD\.?)(?:\s*\$?\s*[\d.,]+)?\s*$").unwrap()
+    })
 }
 pub(super) fn re_cash_label() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
