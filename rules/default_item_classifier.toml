@@ -28,7 +28,13 @@
 #           misses, so the bare token has to be a keyword too — and at three
 #           characters it is exactly the fuzzy neighbourhood this list exists
 #           for. Listed here, it matches as `\bTPD\b` and nothing else.
-exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD"]
+#   ORANGE  (fruit, legacy_0006) fuzzy-matched "RANGE" inside "Grain Fed Free
+#           Range Chic" at Bestco and filed a $15.88 chicken as fruit. GINGER/
+#           FINGER again: nothing misread, the words are one letter apart.
+#           Every fruit orange in the corpus is printed in full; the only
+#           "ORANG" is a truncated CRUSH ZERO, which is a drink either way.
+#   POCKY   (snacks, legacy_0067) is a brand, five letters, one from ROCKY.
+exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD", "ORANGE", "POCKY"]
 
 # BRANDS — text that names the maker, blanked out before any keyword is matched.
 #
@@ -112,14 +118,17 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0001"
-keywords = ["CHICKEN", "CHICKN", "BEEF", "BEAF", "PORK", "BACON", "SAUSAGE", "HAM", "TURKEY", "LAMB", "STEAK", "GROUND MEAT", "MEATBALL", "SALAMI", "PEPPERONI", "PROSCIUTTO", "ROTISSERIE", "DRUMSTICK", "MEAT", "BEEF BELLY", "BEEF BELLY ROLL", "ANGUS", "DUCK FEET", "DUCK LEG", "DUCK WING", "DUCK BREAST", "BRISKET"]
+keywords = ["CHICKEN", "CHICKN", "FREE RANGE CHIC", "BEEF", "BEAF", "PORK", "BACON", "SAUSAGE", "HAM", "TURKEY", "LAMB", "STEAK", "GROUND MEAT", "MEATBALL", "SALAMI", "PEPPERONI", "PROSCIUTTO", "ROTISSERIE", "DRUMSTICK", "MEAT", "BEEF BELLY", "BEEF BELLY ROLL", "ANGUS", "DUCK FEET", "DUCK LEG", "DUCK WING", "DUCK BREAST", "BRISKET"]
 tags = ["grocery/meat"]
 priority = 0
 exact_only = false
 
 [[rules]]
 id = "semantic_tag_0100"
-keywords = ["CHICKEN", "ROTISSERIE CHICKEN"]
+# "FREE RANGE CHIC" is Bestco's 25-column truncation of "Grain Fed Free Range
+# Chicken" — the bare "CHIC" would be a substring of CHICORY and CHICKPEA, so
+# the phrase is the keyword.
+keywords = ["CHICKEN", "ROTISSERIE CHICKEN", "FREE RANGE CHIC"]
 tags = ["grocery/meat/chicken"]
 priority = 0
 exact_only = false
@@ -439,7 +448,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0029"
-keywords = ["PAPER TOWEL", "TOILET PAPER", "TISSUE", "BATH TISS", "KLEENEX", "SCOTTIES", "SC0TTIES", "CASHMERE", "NAPKIN", "NAPKINS", "ALUMINUM FOIL", "PLASTIC WRAP", "CLING WRAP", "PARCHMENT", "WAX PAPER", "TRASH BAG", "GARBAGE BAG", "ZIPLOC", "STORAGE BAG", "SANDWICH BAG", "SPONGE", "DISH SOAP", "DISHWASHER", "LAUNDRY DETERGENT", "LAUNDRY", "POWERWASH", "FABRIC SOFTENER", "BLEACH", "CLEANER", "CLEANING", "DISINFECTANT", "LYSOL", "CLOROX", "WINDEX", "MR CLEAN", "FEBREZE", "AIR FRESHENER", "CANDLE", "LIGHT BULB", "BATTERY", "BATTERIES"]
+keywords = ["PAPER TOWEL", "TOILET PAPER", "TISSUE", "DISPOSABLE GLOVES", "GLOVES", "BATH TISS", "KLEENEX", "SCOTTIES", "SC0TTIES", "CASHMERE", "NAPKIN", "NAPKINS", "ALUMINUM FOIL", "PLASTIC WRAP", "CLING WRAP", "PARCHMENT", "WAX PAPER", "TRASH BAG", "GARBAGE BAG", "ZIPLOC", "STORAGE BAG", "SANDWICH BAG", "SPONGE", "DISH SOAP", "DISHWASHER", "LAUNDRY DETERGENT", "LAUNDRY", "POWERWASH", "FABRIC SOFTENER", "BLEACH", "CLEANER", "CLEANING", "DISINFECTANT", "LYSOL", "CLOROX", "WINDEX", "MR CLEAN", "FEBREZE", "AIR FRESHENER", "CANDLE", "LIGHT BULB", "BATTERY", "BATTERIES"]
 tags = ["household/supply"]
 priority = 0
 exact_only = false
@@ -505,6 +514,17 @@ id = "legacy_0039"
 keywords = ["SKITTLE GUMM", "SNACK BITES"]
 tags = ["grocery/snacks"]
 priority = 0
+exact_only = false
+
+[[rules]]
+id = "milk_bites_snack"
+# LTC "Mango Milk Bites" (芒果奶糕) is a milk candy sold from Bestco's Taxed
+# Grocery section. Both of its words are somebody else's keyword — MANGO is
+# fruit and MILK is dairy, priority 0 each — so this outranks them for the
+# account. It does not remove their tags; bundled rules never do.
+keywords = ["MILK BITES"]
+tags = ["grocery/snacks"]
+priority = 80
 exact_only = false
 
 [[rules]]
@@ -757,7 +777,7 @@ exact_only = true
 
 [[rules]]
 id = "legacy_0067"
-keywords = ["SANDWICH BISCUITS", "BISCUITS(MATCHA)", "BISCUITS MATCHA"]
+keywords = ["SANDWICH BISCUITS", "BISCUITS(MATCHA)", "BISCUITS MATCHA", "POCKY", "BISCUIT STICK"]
 tags = ["grocery/snacks"]
 priority = 80
 exact_only = false
