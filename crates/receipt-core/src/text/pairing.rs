@@ -502,12 +502,19 @@ pub(super) fn describe_below_priced_header(
         // 5.59" / "S & B - Wasabi  2.68"). The header's price belongs to that
         // name regardless; skipping it would cross the whole section's pairing
         // by one.
+        //
+        // A bare counter label is such a name too ("&& 03-Meat 8.07" /
+        // "Meat  10.43" / "Meat"): it is also a section word, and refusing it
+        // here — while the block below accepts it — handed the header's 8.07
+        // to the *second* Meat and left the first with 10.43. Identical labels
+        // hide the swap; two different items would not.
         if rows.drift && re_trailing_price().is_match(next_line) {
             if let Some((_, _, price_start)) = extract_trailing_price_cents(next_line) {
                 let head = next_line[..price_start].trim();
                 let cleaned_head = strip_leading_receipt_codes(head);
                 if !cleaned_head.is_empty()
-                    && !is_section_header_text(&cleaned_head)
+                    && (!is_section_header_text(&cleaned_head)
+                        || is_generic_counter_label(&cleaned_head))
                     && alpha_ratio(&cleaned_head) >= 0.5
                 {
                     return Some((j, cleaned_head));
@@ -552,6 +559,19 @@ pub(super) fn describe_below_priced_header(
 /// `drift_paren_forward` is the difference between skipping a priced row and
 /// stopping at it: under drift the price belongs to the item immediately below,
 /// so a priced row in the way means the search has already gone too far.
+///
+/// A quantity row carrying no trailing total (`1 @ $1.99` — its only amount
+/// is its unit price) is not a priced row and does not stop the walk. Under a
+/// two-row lift it is exactly what stands between a paren row and the next
+/// item's name: Foody Mart prints `name / (details) / 1 @ $unit` per item, the
+/// lifted price lands on the paren row, and the qty row below it belongs to
+/// the same item. Stopping there lost the second Celery on foody_mart_51_05 —
+/// the search declared "already too far" one row short of the name it was
+/// after. The test is the engine loop's own `has_trailing_total`, and it must
+/// be that strict: a qty row with an unreconciled total (`3.37 lb @ $2.98/lb
+/// 7.45`, the row below `(WRER) 10.04` on foody_mart_137_73) is carrying the
+/// NEXT item's price and is that item's territory; passing it would hand the
+/// paren row's amount one item too far and cross the section.
 pub(super) fn describe_forward(
     index: usize,
     drift_paren_forward: bool,
@@ -562,7 +582,10 @@ pub(super) fn describe_forward(
             return None;
         }
         let next_line = rows.all[j].trim();
-        if line_has_trailing_price(next_line) {
+        let unit_price_only = looks_like_quantity_expression(next_line)
+            && !re_trailing_total_presence().is_match(next_line)
+            && !qty_row_owns_trailing_total(next_line);
+        if line_has_trailing_price(next_line) && !unit_price_only {
             if drift_paren_forward {
                 return None;
             }
