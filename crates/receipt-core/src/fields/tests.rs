@@ -867,6 +867,29 @@ fn a_bare_master_label_is_a_card_tender() {
 }
 
 #[test]
+fn a_bare_credit_card_label_is_a_card_tender() {
+    // Foody Mart's payment row, alone or grouped with its amount.
+    for lines in [
+        vec![
+            "Total after Tax 51.05".to_string(),
+            "Credit Card".to_string(),
+            "51.05".to_string(),
+        ],
+        vec![
+            "Total after Tax 51.05".to_string(),
+            "Credit Card 51.05".to_string(),
+        ],
+    ] {
+        let tenders = extract_tenders(&lines);
+        assert_eq!(tenders.len(), 1, "{lines:?}");
+        assert_eq!(tenders[0].kind, "card");
+        assert_eq!(tenders[0].amount_cents, 5_105);
+    }
+    // The terminal slip's header is not a tender.
+    assert_eq!(classify_tender_line("CREDIT CARD SALE"), None);
+}
+
+#[test]
 fn change_is_the_last_amount_on_a_merged_row() {
     // Costco's customer copy prints the card charge and the change on
     // consecutive rows, and line grouping merges them. Reading the FIRST
