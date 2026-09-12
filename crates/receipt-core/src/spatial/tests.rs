@@ -768,3 +768,10 @@ fn keeps_costco_discount_row_whose_slash_ocr_read_as_a_space() {
         outcome.warnings
     );
 }
+
+#[test]
+fn at_sign_read_as_a_zero_is_still_a_quantity_row() {
+    use super::rows::looks_like_quantity_expression;
+    assert!(looks_like_quantity_expression("1 0 $1.51"));
+    assert!(!looks_like_quantity_expression("1 0 1.51"));
+}

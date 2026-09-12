@@ -1108,3 +1108,107 @@ fn recovers_weighed_item_with_space_separated_tax_flags() {
     // The weight row must not also leak as an item of its own.
     assert_eq!(items.len(), 1, "{items:?}");
 }
+
+#[test]
+fn two_row_lift_reaches_the_next_name_past_a_unit_price_qty_row() {
+    // Foody Mart 2026-09-09_foody_mart_51_05, vegetable + meat sections. The
+    // amount column sits two rows above its text: each `&&` banner carries
+    // the first item's price, and the first item's deal subtext carries the
+    // second's. The forward walk from that subtext used to stop at the
+    // item's own `1 @ $1.99` row — a unit price, not a total — one row short
+    // of the second Celery, and the second Celery's own qty row arrived from
+    // OCR as `1 0 $1.51` (the `@` read as a zero), which then posed as an
+    // item named "1 0 $". The two Meat rows show the counter-label case: the
+    // banner's 8.07 belongs to the FIRST `Meat`, even though that name row
+    // carries the second's 10.43 and "Meat" is also a section word.
+    let lines = vec![
+        "&& 02-Vegetable 1.99".to_string(),
+        "Celery".to_string(),
+        "(EH25)@1.99(2/$3.50) 1.51".to_string(),
+        "1 @ $1.99".to_string(),
+        "Celery".to_string(),
+        "(E225)@1.99(2/$3.50)".to_string(),
+        "1 0 $1.51".to_string(),
+        "&& 03-Meat 8.07".to_string(),
+        "Meat 10.43".to_string(),
+        "(1)".to_string(),
+        "Meat".to_string(),
+        "(10)".to_string(),
+        "Sub Total 22.00".to_string(),
+    ];
+    let summary_amounts = HashSet::from([Money::from_cents(2200)]);
+
+    let crate::extraction::ExtractionOutcome { items, warnings } =
+        extract_text_items(&lines, &summary_amounts);
+    let observed: Vec<(String, Money)> = items
+        .into_iter()
+        .map(|item| (item.description, item.price))
+        .collect();
+
+    assert_eq!(
+        observed,
+        vec![
+            ("Celery".to_string(), Money::from_cents(199)),
+            ("Celery".to_string(), Money::from_cents(151)),
+            ("Meat".to_string(), Money::from_cents(807)),
+            ("Meat".to_string(), Money::from_cents(1043)),
+        ],
+        "{observed:?}"
+    );
+    assert!(
+        !warnings.iter().any(|w| w.message.contains("1.51")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn unit_price_qty_row_with_a_drifted_total_still_stops_the_forward_walk() {
+    // Foody Mart 2026-07-09_foody_mart_137_73: "(WRER) 10.04" prefers
+    // forward (the name above it looks like a continuation of the priced
+    // Silkie Chicken row), but the weight row below carries the NEXT item's
+    // 7.45. That row is Meat's territory: passing it would give Meat the
+    // 10.04 and Fresh Chicken Wings the 7.45 — swapped.
+    let lines = vec![
+        "&& 03-Meat 1.39".to_string(),
+        "Pork Liver".to_string(),
+        "Silkie Chicken (L) 14.98".to_string(),
+        "Fresh Chicken Wings".to_string(),
+        "(WRER) 10.04".to_string(),
+        "3.37 lb @ $2.98/lb 7.45".to_string(),
+        "Meat".to_string(),
+        "()".to_string(),
+        "Sub Total 33.86".to_string(),
+    ];
+    let summary_amounts = HashSet::from([Money::from_cents(3386)]);
+
+    let crate::extraction::ExtractionOutcome { items, .. } =
+        extract_text_items(&lines, &summary_amounts);
+    let observed: Vec<(String, Money)> = items
+        .into_iter()
+        .map(|item| (item.description, item.price))
+        .collect();
+
+    assert!(
+        observed
+            .iter()
+            .any(|(d, p)| d.starts_with("Fresh Chicken Wings") && *p == Money::from_cents(1004)),
+        "{observed:?}"
+    );
+    assert!(
+        observed.contains(&("Meat".to_string(), Money::from_cents(745))),
+        "{observed:?}"
+    );
+}
+
+#[test]
+fn at_sign_read_as_a_zero_is_still_a_quantity_row() {
+    use super::quantity::{looks_like_quantity_expression, parse_quantity_modifier};
+    // `1 @ $1.51` as OCR delivers it on foody_mart_43_95 and _51_05.
+    assert!(looks_like_quantity_expression("1 0 $1.51"));
+    let modifier = parse_quantity_modifier("1 0 $1.51").expect("count-at-price");
+    assert_eq!(modifier.quantity, 1);
+    assert_eq!(modifier.unit_price, Some(Money::from_cents(151)));
+    // Without the `$`, or without the spaces, the zero is just a digit.
+    assert!(!looks_like_quantity_expression("1 0 1.51"));
+    assert!(!looks_like_quantity_expression("10 1.51"));
+}

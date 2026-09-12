@@ -234,9 +234,17 @@ pub(crate) fn re_trailing_letter_fraction_price() -> &'static Regex {
     })
 }
 
+/// `<count> @ $<unit>`, or the same row with the `@` read as a zero.
+///
+/// OCR turns the at-sign into `0` on Foody Mart's qty rows — `1 @ $1.51`
+/// arrives as `1 0 $1.51` — and a row that no longer looks like a quantity
+/// is a priced row with `1 0 $` for a description: it emitted a phantom item
+/// on foody_mart_43_95 and swallowed the second Celery's name on
+/// foody_mart_51_05. The substituted form demands whitespace on both sides
+/// of the zero and the `$`, which a real `10 $…` count never prints.
 pub(crate) fn re_count_at_price() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^(\d+)\s*@\s*\$?(-?\d+\.\d{2})").unwrap())
+    RE.get_or_init(|| Regex::new(r"^(\d+)(?:\s*@\s*\$?|\s+[0Oo]\s+\$)(-?\d+\.\d{2})").unwrap())
 }
 
 pub(crate) fn re_weight_at_price() -> &'static Regex {

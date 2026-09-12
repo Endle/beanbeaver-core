@@ -103,9 +103,11 @@ pub(crate) fn re_receipt_metadata_patterns() -> &'static Regex {
     })
 }
 
+/// `<count> @ $<unit>`, or the same row with the `@` read as a zero — see the
+/// text path's twin for the receipts that motivated the second form.
 pub(crate) fn re_count_at_price() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)^\d+\s*@\s*\$?-?\d+\.\d{2}").unwrap())
+    RE.get_or_init(|| Regex::new(r"(?i)^\d+(?:\s*@\s*\$?|\s+[0O]\s+\$)-?\d+\.\d{2}").unwrap())
 }
 
 pub(crate) fn re_weight_at_price() -> &'static Regex {
