@@ -84,6 +84,29 @@ pub(super) fn is_return_deadline_context(lines: &[String], line_index: usize) ->
     });
     has_return_label && !has_intervening_date
 }
+
+/// Survey footers can contain a contest closing date that otherwise outranks
+/// a numeric transaction timestamp. Require an explicit closing label nearby;
+/// an intervening date consumes that label, so it cannot hide a later purchase.
+fn is_contest_deadline_context(lines: &[String], line_index: usize) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let label = RE.get_or_init(|| Regex::new(r"(?i)\bCONTEST\s+(?:ENDS|CLOSES)\b").unwrap());
+    for index in (line_index.saturating_sub(2)..=line_index).rev() {
+        let line = &lines[index];
+        if index < line_index
+            && (re_separated_date().is_match(line)
+                || re_compact_date().is_match(line)
+                || re_month_name_date().is_match(line)
+                || re_dmy_month_name_date().is_match(line))
+        {
+            break;
+        }
+        if label.is_match(line) {
+            return true;
+        }
+    }
+    false
+}
 pub(super) fn month_number_from_name(name: &str) -> Option<i32> {
     match name.get(..3).unwrap_or("").to_ascii_lowercase().as_str() {
         "jan" => Some(1),
@@ -216,7 +239,9 @@ pub fn extract_date(lines: &[String], full_text: &str, current_year: i32) -> Opt
 
     for (line_index, line) in source_lines.iter().enumerate() {
         let normalized_line = normalize_decimal_spacing(line);
-        if is_return_deadline_context(&source_lines, line_index) {
+        if is_return_deadline_context(&source_lines, line_index)
+            || is_contest_deadline_context(&source_lines, line_index)
+        {
             continue;
         }
         let hint_bonus = if re_date_context_hint().is_match(&normalized_line) {

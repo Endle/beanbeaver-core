@@ -15,6 +15,8 @@ use regex::Regex;
 use crate::detection_normalization::{boxes_overlap_y, Detection};
 use crate::money::Money;
 
+mod summary;
+
 fn summary_label_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -111,6 +113,9 @@ enum AmountClaim {
     /// Loyalty row: what belongs to it is a points figure (`125 PTS`), never
     /// money, so a price overlapping it is the neighbouring item's.
     PointsOnly,
+    /// Authorization codes are identifiers; a nearby monetary balance is not
+    /// their value, even when the two boxes overlap.
+    ReferenceOnly,
 }
 
 impl AmountClaim {
@@ -121,6 +126,11 @@ impl AmountClaim {
             Self::Never => false,
             Self::NegativeOnly => is_negative_amount(text),
             Self::PointsOnly => is_points_amount(text),
+            Self::ReferenceOnly => {
+                let text = text.trim();
+                text.chars().all(|c| c.is_ascii_alphanumeric())
+                    && text.chars().any(|c| c.is_ascii_digit())
+            }
         }
     }
 }
@@ -193,6 +203,9 @@ fn is_negative_amount(text: &str) -> bool {
 /// other chains word it differently (Costco prints `TPD/<sku>`), which is why
 /// this wants to move into the merchant rules data rather than grow inline.
 fn amount_claim(text: &str) -> AmountClaim {
+    if is_approval_code_label(text) {
+        return AmountClaim::ReferenceOnly;
+    }
     if is_code_stub_label(text)
         || is_transaction_id_label(text)
         || is_self_checkout_header_label(text)
@@ -210,6 +223,16 @@ fn amount_claim(text: &str) -> AmountClaim {
         return AmountClaim::PointsOnly;
     }
     AmountClaim::Any
+}
+
+fn is_approval_code_label(text: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)^\s*APPROVAL\s+CODE\s*:?\s*$").unwrap())
+        .is_match(text)
+}
+
+fn is_standalone_money(text: &str) -> bool {
+    Money::parse_strict(text.trim().trim_start_matches('$').trim()).is_ok() && text.contains('.')
 }
 
 /// True for the loyalty rows that report points rather than money — FreshCo
@@ -830,6 +853,7 @@ fn pair_columns(
     dets: &[Detection],
     left: &[usize],
     right: &[usize],
+    middle_claims: &[Option<usize>],
     grid: Option<&IndentGrid>,
 ) -> Vec<Option<usize>> {
     let mut assigned_prices = vec![false; right.len()];
@@ -842,6 +866,10 @@ fn pair_columns(
     let mut last_eligible_claimed = false;
     let x_order = x_order(dets);
     for (position, &left_index) in left.iter().enumerate() {
+        if middle_claims[position].is_some() {
+            last_eligible_claimed = true;
+            continue;
+        }
         let mut claim = amount_claim(&dets[left_index].text);
         // A breakdown row holds the extended price on some chains and nothing on
         // others. Rather than key that off the merchant, read it off the
@@ -912,6 +940,48 @@ fn pair_columns(
     claims
 }
 
+/// A large-font total can start inside MIDDLE while the smaller tender amount
+/// below it starts in RIGHT. Reserve the clearly aligned summary amount before
+/// first-fit pairing can give that summary its neighbour's payment as well.
+/// Only exact summary labels participate; item layouts keep their normal path.
+/// Ambiguous candidates, or a closer label/RIGHT amount, leave pairing alone.
+fn summary_middle_claims(
+    dets: &[Detection],
+    left: &[usize],
+    middle: &[usize],
+    right: &[usize],
+) -> Vec<Option<usize>> {
+    left.iter()
+        .map(|&anchor| {
+            if !is_summary_anchor_label(&dets[anchor].text) {
+                return None;
+            }
+            let candidates: Vec<_> = middle
+                .iter()
+                .copied()
+                .filter(|&m| {
+                    let amount = &dets[m];
+                    let distance = (amount.center_y - dets[anchor].center_y).abs();
+                    is_standalone_money(&amount.text)
+                        && amount.min_x > dets[anchor].min_x
+                        && boxes_overlap_y(&dets[anchor], amount, PAIR_OVERLAP_GATE)
+                        && centers_agree(dets, m, &[anchor])
+                        && !left.iter().any(|&other| {
+                            other != anchor
+                                && dets[other].min_x < amount.min_x
+                                && (dets[other].center_y - amount.center_y).abs() <= distance
+                        })
+                        && !right.iter().any(|&r| {
+                            is_standalone_money(&dets[r].text)
+                                && (dets[r].center_y - dets[anchor].center_y).abs() <= distance
+                        })
+                })
+                .collect();
+            (candidates.len() == 1).then(|| candidates[0])
+        })
+        .collect()
+}
+
 /// Whether the row at `position` should hand `right_index` to a following row.
 ///
 /// Indentation says a row stands *off* the column its neighbours pair from, and
@@ -975,6 +1045,11 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
 
     // Partition into LEFT / MIDDLE / RIGHT, preserving detection order so the
     // subsequent stable center_y sorts match the Python list semantics.
+    let summary_groups = summary::reconciled_groups(dets);
+    let mut reserved = vec![false; dets.len()];
+    for &i in summary_groups.iter().flatten() {
+        reserved[i] = true;
+    }
     let mut left: Vec<usize> = Vec::new();
     let mut middle: Vec<usize> = Vec::new();
     let mut right: Vec<usize> = Vec::new();
@@ -982,6 +1057,9 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
         .iter()
         .any(|det| is_self_checkout_header_label(&det.text));
     for (index, det) in dets.iter().enumerate() {
+        if reserved[index] {
+            continue;
+        }
         let x_norm = det.min_x / image_width;
         if x_norm > RIGHT_COLUMN_CUT && is_amount_shaped(&det.text) {
             right.push(index);
@@ -1003,15 +1081,20 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
     // receipt's main price column, then pair again with the yield enabled. The
     // grid cannot be measured before the first pass because the column is
     // *defined* as the one the claims come from.
-    let baseline = pair_columns(dets, &left, &right, None);
+    let middle_claims = summary_middle_claims(dets, &left, &middle, &right);
+    let baseline = pair_columns(dets, &left, &right, &middle_claims, None);
     let claims = match indent_grid(dets, &left, &baseline) {
-        Some(grid) => pair_columns(dets, &left, &right, Some(&grid)),
+        Some(grid) => pair_columns(dets, &left, &right, &middle_claims, Some(&grid)),
         None => baseline,
     };
 
     let mut assigned_prices = vec![false; right.len()];
     let mut lines: Vec<Vec<usize>> = Vec::new();
     for (position, &left_index) in left.iter().enumerate() {
+        if let Some(mid) = middle_claims[position] {
+            lines.push(vec![left_index, mid]);
+            continue;
+        }
         match claims[position] {
             Some(slot) => {
                 lines.push(vec![left_index, right[slot]]);
@@ -1032,9 +1115,19 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
     let y_threshold = adaptive_middle_y_threshold(dets);
     let overlap_threshold = 0.25;
     for &mid_index in &middle {
+        if middle_claims.contains(&Some(mid_index)) {
+            continue;
+        }
         let mut best_line: Option<usize> = None;
         let mut best_score: Option<(u8, f64, f64)> = None;
         for (line_idx, line) in lines.iter().enumerate() {
+            if is_standalone_money(&dets[mid_index].text)
+                && line
+                    .iter()
+                    .any(|&i| amount_claim(&dets[i].text) == AmountClaim::ReferenceOnly)
+            {
+                continue;
+            }
             let overlap_ratio = line_overlap_ratio(dets, mid_index, line);
             let center_distance = (dets[mid_index].center_y - line_center_y(dets, line)).abs();
             if overlap_ratio < overlap_threshold && center_distance > y_threshold {
@@ -1064,6 +1157,7 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
     }
 
     // Within-line left-to-right, then lines top-to-bottom (both stable).
+    lines.extend(summary_groups);
     for line in &mut lines {
         line.sort_by(|&a, &b| {
             dets[a]
@@ -1119,6 +1213,131 @@ mod tests {
         // top row first, item before price
         assert_eq!(lines[0], vec![0, 1]);
         assert_eq!(lines[1], vec![2, 3]);
+    }
+
+    #[test]
+    fn approval_code_cannot_claim_a_gift_card_balance() {
+        let dets = vec![
+            det_span("Approval Code:", 130.0, 1228.0, 1281.0),
+            det_span("123456", 560.0, 1216.0, 1272.0),
+            det_span("$81.20", 714.0, 1252.0, 1311.0),
+            det_span("Gift Card Balance:", 130.0, 1269.0, 1321.0),
+        ];
+        assert_eq!(
+            rendered(&dets, 1000.0),
+            ["Approval Code: 123456", "Gift Card Balance: $81.20"]
+        );
+        // Reference numbers in the right column still belong to their label.
+        let dets = vec![
+            det("Approval Code:", 130.0, 400.0),
+            det("123456", 750.0, 400.0),
+        ];
+        assert_eq!(rendered(&dets, 1000.0), ["Approval Code: 123456"]);
+    }
+
+    #[test]
+    fn wide_total_does_not_claim_the_next_tenders_amount() {
+        let dets = vec![
+            det_span("$32.00", 636.0, 1045.0, 1102.0),
+            det_span("TOTAL", 138.0, 1065.0, 1112.0),
+            det_span("$12.00", 727.0, 1086.0, 1142.0),
+            det_span("TENDER", 461.0, 1097.0, 1148.0),
+            det_span("Corp Gift Card", 134.0, 1103.0, 1157.0),
+        ];
+        assert_eq!(
+            rendered(&dets, 1000.0),
+            ["TOTAL $32.00", "Corp Gift Card TENDER $12.00"]
+        );
+    }
+
+    fn shifted_summary() -> Vec<Detection> {
+        let labels = [
+            "Sub Total",
+            "HST",
+            "hst5%",
+            "Total after Tax",
+            "Credit Card",
+        ];
+        let centers = [200.0, 240.0, 280.0, 340.0, 420.0];
+        let values = ["50.00", "0.00", "0.00", "50.00", "50.00"];
+        let mut dets = Vec::new();
+        for ((label, center), value) in labels.into_iter().zip(centers).zip(values) {
+            dets.push(det(label, 150.0, center));
+            dets.push(det_span(value, 750.0, center + 20.0, center + 80.0));
+        }
+        dets
+    }
+
+    #[test]
+    fn tilted_summary_uses_printed_order_and_two_independent_sums() {
+        let dets = shifted_summary();
+        assert_eq!(
+            rendered(&dets, 1000.0),
+            [
+                "Sub Total 50.00",
+                "HST 0.00",
+                "hst5% 0.00",
+                "Total after Tax 50.00",
+                "Credit Card 50.00"
+            ]
+        );
+        let mut taxed = dets;
+        taxed[3].text = "2.50".into();
+        taxed[5].text = "1.00".into();
+        taxed[7].text = "53.50".into();
+        taxed[9].text = "53.50".into();
+        assert_eq!(summary::reconciled_groups(&taxed).len(), 5);
+    }
+
+    #[test]
+    fn summary_alignment_requires_complete_local_unambiguous_evidence() {
+        for (index, value) in [
+            (7, "49.00"),
+            (9, "20.00"),
+            (3, "1.00"),
+            (1, "-50.00"),
+            (8, "Gift Card"),
+        ] {
+            let mut dets = shifted_summary();
+            dets[index].text = value.into();
+            assert!(
+                summary::reconciled_groups(&dets).is_empty(),
+                "{index}: {value}"
+            );
+        }
+        let mut missing = shifted_summary();
+        missing.pop();
+        assert!(summary::reconciled_groups(&missing).is_empty());
+        let mut extra = shifted_summary();
+        extra.push(det("10.00", 800.0, 320.0));
+        assert!(summary::reconciled_groups(&extra).is_empty());
+        let mut distant = shifted_summary();
+        distant[9] = det("50.00", 750.0, 600.0);
+        assert!(summary::reconciled_groups(&distant).is_empty());
+        let mut prose = shifted_summary();
+        prose.push(det("Another purchase", 150.0, 315.0));
+        assert!(summary::reconciled_groups(&prose).is_empty());
+    }
+
+    #[test]
+    fn middle_summary_amount_requires_a_unique_better_fit() {
+        let dets = vec![
+            det("TOTAL", 100.0, 200.0),
+            det("10.00", 650.0, 200.0),
+            det("20.00", 750.0, 200.0),
+        ];
+        // A RIGHT amount at least as close defeats the middle candidate.
+        assert_eq!(summary_middle_claims(&dets, &[0], &[1], &[2]), [None]);
+        let mut extra = dets[..2].to_vec();
+        extra.push(det("5.00", 670.0, 200.0));
+        assert_eq!(summary_middle_claims(&extra, &[0], &[1, 2], &[]), [None]);
+        let mut neighbor = dets[..2].to_vec();
+        neighbor[0] = det("TOTAL", 100.0, 215.0);
+        neighbor.push(det("Another item", 100.0, 200.0));
+        assert_eq!(
+            summary_middle_claims(&neighbor, &[0, 2], &[1], &[]),
+            [None, None]
+        );
     }
 
     #[test]

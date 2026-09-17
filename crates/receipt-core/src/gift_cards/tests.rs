@@ -45,6 +45,60 @@ fn split_balance_and_missing_balance_are_different() {
     assert_eq!(cards[1].expiry, GiftCardExpiry::Unknown);
 }
 #[test]
+fn balance_labels_survive_missing_colons_without_matching_longer_words() {
+    for label in ["BAL", "REMAINING BALANCE", "Gift Card Balance"] {
+        let cards = redemption(&format!(
+            "Gift Card 12.00\nAUTHOR.#:123456 {label} 18.00\nGift Card 3.00\n{label}: 0.00"
+        ));
+        assert_eq!(cards.len(), 2);
+        assert_eq!(cards[0].remaining_balance_cents, Some(1800), "{label}");
+        assert_eq!(cards[1].remaining_balance_cents, Some(0), "{label}");
+        assert!(cards[0].unresolved_fields.is_empty());
+    }
+    for label in ["BALLOON", "BALANCE", "GLOBAL", "REMAINING BALANCES"] {
+        let cards = redemption(&format!("Gift Card 12.00\n{label} 18.00"));
+        assert_eq!(cards[0].remaining_balance_cents, None, "{label}");
+    }
+}
+
+#[test]
+fn colonless_balance_keeps_invalid_amounts_and_conflicts_unresolved() {
+    for detail in [
+        "BAL -18.00",
+        "BAL 1,80.00",
+        "BAL 18.00\nBAL 19.00",
+        "BAL unreadable",
+    ] {
+        let cards = redemption(&format!("Gift Card 12.00\n{detail}"));
+        assert_eq!(cards[0].remaining_balance_cents, None, "{detail}");
+        assert!(cards[0]
+            .unresolved_fields
+            .contains(&"remaining_balance_cents".into()));
+    }
+    let cards = redemption("Gift Card 12.00\nBAL\nGift Card 3.00\nBAL 18.00\nPOINTS BAL 99.00");
+    assert_eq!(cards[0].remaining_balance_cents, None);
+    assert_eq!(cards[1].remaining_balance_cents, Some(1800));
+}
+
+#[test]
+fn authorization_reference_survives_spacing_between_punctuation() {
+    for label in [
+        "AUTHOR.#:",
+        "AUTHOR. #:",
+        "AUTHOR . # :",
+        "AUTH :",
+        "APP #:",
+        "Approval Code:",
+    ] {
+        let cards = redemption(&format!("Gift Card 12.00\n{label}123456 BAL 18.00"));
+        assert_eq!(
+            cards[0].authorization_reference.as_deref(),
+            Some("123456"),
+            "{label}"
+        );
+    }
+}
+#[test]
 fn conflicts_and_unreadable_values_stay_unresolved() {
     let cards = redemption("Gift Card 10.00\n123456xxxxx1112223x\n123456xxxxx4445556x\nBAL: 10.00\nBAL: 20.00\nEXP:???\nGift Card 2.00\nBAL: unreadable");
     assert_eq!(cards[0].printed_identifier, None);
