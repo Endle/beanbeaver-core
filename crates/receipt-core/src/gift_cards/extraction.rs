@@ -58,7 +58,9 @@ fn identifier_re() -> &'static Regex {
 fn balance_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?i)\b(?:BAL\s*:|REMAINING\s+BALANCE\s*:|GIFT\s+CARD\s+BALANCE\s*:)").unwrap()
+        // OCR may drop the colon. Keep whole-label boundaries so BAL does
+        // not become a prefix match for unrelated words or balance labels.
+        Regex::new(r"(?i)\b(?:BAL|REMAINING\s+BALANCE|GIFT\s+CARD\s+BALANCE)\b\s*:?").unwrap()
     })
 }
 fn amount_re() -> &'static Regex {
@@ -68,7 +70,7 @@ fn amount_re() -> &'static Regex {
 fn auth_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?i)\b(?:AUTH[O0]R\.?|AUTH|APP)\b\s*[.#:]*\s*([A-Z0-9]+)").unwrap()
+        Regex::new(r"(?i)\b(?:APPROVAL\s+CODE|AUTH[O0]R\.?|AUTH|APP)\b[\s.#:]*([A-Z0-9]+)").unwrap()
     })
 }
 fn expiry_re() -> &'static Regex {

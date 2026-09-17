@@ -322,6 +322,33 @@ fn a_return_deadline_alone_is_not_a_purchase_date() {
 }
 
 #[test]
+fn contest_deadlines_are_not_transaction_dates() {
+    for deadline in [
+        "Contest ends Sep 1 2026. Skill testing question",
+        "Contest ends\nSep 1 2026. Skill testing question",
+        "Contest ends\non\n2026-09-01",
+        "testing question Contest ends Sep 1 2026. answered to win",
+    ] {
+        assert_eq!(extract_date(&[], deadline, 2026), None, "{deadline}");
+        for text in [
+            format!("06/15/26 20:15:16\n{deadline}"),
+            format!("{deadline}\n06/15/26 20:15:16"),
+        ] {
+            assert_eq!(
+                extract_date(&[], &text, 2026).map(|d| d.to_string()),
+                Some("2026-06-15".into()),
+                "{text}"
+            );
+        }
+    }
+    // A nearby mention of a contest without a deadline is not a date label.
+    assert_eq!(
+        extract_date(&[], "Enter our contest\n06/15/26 20:15:16", 2026).map(|d| d.to_string()),
+        Some("2026-06-15".into())
+    );
+}
+
+#[test]
 fn date_parses_dotted_month_abbreviation() {
     // Clover also prints an abbreviation period: "02-Apr.-2026 2:27:39p.m."
     let lines = vec!["02-Apr.-2026 2:27:39p.m.".to_string()];
