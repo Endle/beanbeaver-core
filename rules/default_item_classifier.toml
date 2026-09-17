@@ -208,7 +208,16 @@ id = "legacy_0008"
 # outranks "VEGETABLE" (9) on `keyword_length` at equal priority, so the oil
 # stays Seasoning. Corpus: "Unico - Vegetable Oil" is asserted as Seasoning and
 # must remain so.
-keywords = ["LETTUCE", "SPINACH", "KALE", "CABBAGE", "BROCCOLI", "CAULIFLOWER", "CARROT", "CELERY", "CUCUMBER", "CUKES", "TOMATO", "TOMATOES", "PEPPER", "PEPPERS", "ONION", "POTATO", "POTATOES", "SWEET POTATO", "MUSHROOM", "ZUCCHINI", "SQUASH", "EGGPLANT", "ASPARAGUS", "CORN", "GREEN BEAN", "PEA", "PEAS", "EDAMAME", "BOK CHOY", "SHEPHERDS PURSE", "NAPA", "RADISH", "TURNIP", "BEET", "ARTICHOKE", "LEEK", "SCALLION", "SHALLOT", "CHIVE", "CILANTRO", "PARSLEY", "BASIL", "DILL", "TOFU", "BEAN SPROUT", "SPROUTS", "SALAD", "COLESLAW", "GREENS", "VEGETABLES", "VEGETABLE"]
+#
+# "WATERCRESS" is here for the same reason "WINTER MELON" is in legacy_0007:
+# legacy_0027's "WATER" matches inside it, so 西洋菜 booked as a Drink. The
+# 10-char keyword outranks the 5-char one on `keyword_length` at equal
+# priority; "WATER" itself is untouched, so bottled water stays a Drink.
+#
+# "OKRA" matched nothing at all before — Foody Mart's "Chinese Okras" (包裝長勝瓜)
+# and C&C's "Chinese Okra" both fell through to no category. Corpus:
+# foody_mart 2026-09-16 $48.81.
+keywords = ["LETTUCE", "SPINACH", "KALE", "CABBAGE", "BROCCOLI", "CAULIFLOWER", "CARROT", "CELERY", "CUCUMBER", "CUKES", "TOMATO", "TOMATOES", "PEPPER", "PEPPERS", "ONION", "POTATO", "POTATOES", "SWEET POTATO", "MUSHROOM", "ZUCCHINI", "SQUASH", "EGGPLANT", "ASPARAGUS", "CORN", "GREEN BEAN", "PEA", "PEAS", "EDAMAME", "BOK CHOY", "SHEPHERDS PURSE", "NAPA", "RADISH", "TURNIP", "BEET", "ARTICHOKE", "LEEK", "SCALLION", "SHALLOT", "CHIVE", "WATERCRESS", "OKRA", "CILANTRO", "PARSLEY", "BASIL", "DILL", "TOFU", "BEAN SPROUT", "SPROUTS", "SALAD", "COLESLAW", "GREENS", "VEGETABLES", "VEGETABLE"]
 tags = ["grocery/vegetable"]
 priority = 0
 exact_only = false
@@ -276,6 +285,12 @@ id = "legacy_0017"
 # vermicelli) appears only on the Chinese sub-line, which PP-OCRv5 does not
 # reliably detect. Without the brand the line classifies as nothing at all.
 #
+# "INSTANT NOO" is the truncated form, in the same spirit as "DRIED NOOD" above
+# it: Foody Mart cuts descriptions at ~25 chars, so "MK - Hot Beef Instant Noo"
+# loses the word that identifies it and the flavour keyword "BEEF" claims the
+# line for Meat instead. The 11-char prefix outranks "BEEF" (4) on
+# `keyword_length` at equal priority. Corpus: foody_mart 2026-09-16 $48.81.
+#
 # "SWEET POTATO VERMICELLI" is here for the mirror-image reason: it is a dried
 # starch noodle, but the produce rule's "SWEET POTATO" (12) outranks bare
 # "VERMICELLI" (10) on `keyword_length` at equal priority, so T&T's
@@ -284,7 +299,7 @@ id = "legacy_0017"
 # wins the same tiebreak "CORN STARCH" already relies on, so the vegetable
 # sweet potato is untouched. Corpus: t_t_supermarket 2026-09-15 $16.20 and
 # 2026-06-23 $12.94 must both be Staple.
-keywords = ["RICE", "PASTA", "NOODLE", "NOODLES", "DRIED NOOD", "SPAGHETTI", "MACARONI", "PENNE", "FLOUR", "SUGAR", "OIL", "OLIVE OIL", "CANOLA OIL", "VINEGAR", "OATMEAL", "OATS", "CEREAL", "QUINOA", "COUSCOUS", "BARLEY", "MILLET", "LENTIL", "LENTILS", "CHICKPEA", "BEAN", "BEANS", "BLACK BEAN", "KIDNEY BEAN", "PINTO BEAN", "INSTANT NOODLE", "INSTANT NOODLES", "LONGKOU", "VERMICELLI", "SWEET POTATO VERMICELLI", "RAMEN", "DANDAN", "CORN STARCH", "CORNSTARCH", "SHODOSHIMA"]
+keywords = ["RICE", "PASTA", "NOODLE", "NOODLES", "DRIED NOOD", "SPAGHETTI", "MACARONI", "PENNE", "FLOUR", "SUGAR", "OIL", "OLIVE OIL", "CANOLA OIL", "VINEGAR", "OATMEAL", "OATS", "CEREAL", "QUINOA", "COUSCOUS", "BARLEY", "MILLET", "LENTIL", "LENTILS", "CHICKPEA", "BEAN", "BEANS", "BLACK BEAN", "KIDNEY BEAN", "PINTO BEAN", "INSTANT NOODLE", "INSTANT NOODLES", "INSTANT NOO", "LONGKOU", "VERMICELLI", "SWEET POTATO VERMICELLI", "RAMEN", "DANDAN", "CORN STARCH", "CORNSTARCH", "SHODOSHIMA"]
 tags = ["grocery/staple"]
 priority = 0
 exact_only = false
