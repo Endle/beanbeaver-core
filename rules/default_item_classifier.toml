@@ -275,7 +275,16 @@ id = "legacy_0017"
 # keyword two entries back has nothing to match; 紅薯粉絲 (sweet potato
 # vermicelli) appears only on the Chinese sub-line, which PP-OCRv5 does not
 # reliably detect. Without the brand the line classifies as nothing at all.
-keywords = ["RICE", "PASTA", "NOODLE", "NOODLES", "DRIED NOOD", "SPAGHETTI", "MACARONI", "PENNE", "FLOUR", "SUGAR", "OIL", "OLIVE OIL", "CANOLA OIL", "VINEGAR", "OATMEAL", "OATS", "CEREAL", "QUINOA", "COUSCOUS", "BARLEY", "MILLET", "LENTIL", "LENTILS", "CHICKPEA", "BEAN", "BEANS", "BLACK BEAN", "KIDNEY BEAN", "PINTO BEAN", "INSTANT NOODLE", "INSTANT NOODLES", "LONGKOU", "VERMICELLI", "RAMEN", "DANDAN", "CORN STARCH", "CORNSTARCH", "SHODOSHIMA"]
+#
+# "SWEET POTATO VERMICELLI" is here for the mirror-image reason: it is a dried
+# starch noodle, but the produce rule's "SWEET POTATO" (12) outranks bare
+# "VERMICELLI" (10) on `keyword_length` at equal priority, so T&T's
+# "T&T SWEET POTATO VERMICELLI" booked as Vegetable while the same product
+# printed "SW POTATO WIDE VERMICELLI" booked as Staple. The 23-char compound
+# wins the same tiebreak "CORN STARCH" already relies on, so the vegetable
+# sweet potato is untouched. Corpus: t_t_supermarket 2026-09-15 $16.20 and
+# 2026-06-23 $12.94 must both be Staple.
+keywords = ["RICE", "PASTA", "NOODLE", "NOODLES", "DRIED NOOD", "SPAGHETTI", "MACARONI", "PENNE", "FLOUR", "SUGAR", "OIL", "OLIVE OIL", "CANOLA OIL", "VINEGAR", "OATMEAL", "OATS", "CEREAL", "QUINOA", "COUSCOUS", "BARLEY", "MILLET", "LENTIL", "LENTILS", "CHICKPEA", "BEAN", "BEANS", "BLACK BEAN", "KIDNEY BEAN", "PINTO BEAN", "INSTANT NOODLE", "INSTANT NOODLES", "LONGKOU", "VERMICELLI", "SWEET POTATO VERMICELLI", "RAMEN", "DANDAN", "CORN STARCH", "CORNSTARCH", "SHODOSHIMA"]
 tags = ["grocery/staple"]
 priority = 0
 exact_only = false
