@@ -11,6 +11,15 @@ enum Label {
     Card,
 }
 
+/// Exact-match only, and deliberately narrower than the sibling
+/// [`super::is_summary_anchor_label`]: no `T[OCQDG0]TAL` confusion set, no
+/// trailing colon, and `CREDIT CARD` rather than the card brands.
+///
+/// The cost is reach, not safety — the block is all-or-nothing, so one label
+/// this misses declines the whole correction and pairing falls back to the
+/// path it took before. Widen it against a corpus diff, one form at a time; a
+/// looser vocabulary here reserves detections *ahead of* first-fit pairing,
+/// which is the expensive direction to be wrong in.
 fn label(text: &str) -> Option<Label> {
     let text = text.trim().to_ascii_uppercase();
     match text.as_str() {
@@ -66,7 +75,19 @@ pub(super) fn reconciled_groups(dets: &[Detection]) -> Vec<Vec<usize>> {
             .iter()
             .map(|&i| dets[i].y_max - dets[i].y_min)
             .fold(0.0, f64::max);
-        let left_edge = labels.iter().map(|&i| dets[i].min_x).fold(0.0, f64::max);
+        // Seeded at -inf, not 0.0: de-padding subtracts the OCR pad from every
+        // point, so a label box that starts inside the pad has a negative
+        // `min_x` and a 0.0 seed would win the max — admitting amounts printed
+        // to the *left* of the labels.
+        let left_edge = labels
+            .iter()
+            .map(|&i| dets[i].min_x)
+            .fold(f64::NEG_INFINITY, f64::max);
+        // The window runs downward from the first label because that is the
+        // drift this exists to undo: the amount column lags its labels. A
+        // column that leans *up* far enough to put an amount above
+        // `first.y_min` is not recovered here — see the note on
+        // `PAIR_OVERLAP_GATE`, which compensates for the up-lean case.
         let amounts: Vec<_> = order
             .iter()
             .copied()

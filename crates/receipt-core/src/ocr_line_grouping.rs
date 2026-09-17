@@ -231,8 +231,18 @@ fn is_approval_code_label(text: &str) -> bool {
         .is_match(text)
 }
 
+/// True for a detection that is *nothing but* an amount — `12.34`, `$12.34`.
+///
+/// Deliberately stricter than [`Money::parse_strict`], which pads a one-digit
+/// fraction and tolerates a trailing dot: an amount column always prints two
+/// decimals, so a bare `1.5` on a summary row is a size or a weight, and
+/// reading it as money is how a stray token gets reserved as a total. Also
+/// stricter than [`amount_cents`], which reads an amount out of a *larger*
+/// string (`3.99h`); here the whole detection has to be the amount.
 fn is_standalone_money(text: &str) -> bool {
-    Money::parse_strict(text.trim().trim_start_matches('$').trim()).is_ok() && text.contains('.')
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^\s*\$?\s*-?\d+\.\d{2}\s*$").unwrap())
+        .is_match(text)
 }
 
 /// True for the loyalty rows that report points rather than money — FreshCo
@@ -963,6 +973,11 @@ fn summary_middle_claims(
                     let amount = &dets[m];
                     let distance = (amount.center_y - dets[anchor].center_y).abs();
                     is_standalone_money(&amount.text)
+                        // A summary figure is never negative. Without this a
+                        // discount printed in MIDDLE is reservable by the
+                        // TOTAL above it, which `pair_columns` would have
+                        // refused — see `AmountClaim::NegativeOnly`.
+                        && !is_negative_amount(&amount.text)
                         && amount.min_x > dets[anchor].min_x
                         && boxes_overlap_y(&dets[anchor], amount, PAIR_OVERLAP_GATE)
                         && centers_agree(dets, m, &[anchor])
@@ -1114,18 +1129,26 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
     // MIDDLE descriptions attach to the best-aligned existing line.
     let y_threshold = adaptive_middle_y_threshold(dets);
     let overlap_threshold = 0.25;
+    // Both flags are per detection, so hoist them out of the nested scan: the
+    // inner loop would otherwise re-run `amount_claim`'s regex set once per
+    // line per candidate.
+    let mut claimed_by_summary = vec![false; dets.len()];
+    for &claim in middle_claims.iter().flatten() {
+        claimed_by_summary[claim] = true;
+    }
+    let is_reference_row: Vec<bool> = dets
+        .iter()
+        .map(|det| amount_claim(&det.text) == AmountClaim::ReferenceOnly)
+        .collect();
     for &mid_index in &middle {
-        if middle_claims.contains(&Some(mid_index)) {
+        if claimed_by_summary[mid_index] {
             continue;
         }
+        let mid_is_money = is_standalone_money(&dets[mid_index].text);
         let mut best_line: Option<usize> = None;
         let mut best_score: Option<(u8, f64, f64)> = None;
         for (line_idx, line) in lines.iter().enumerate() {
-            if is_standalone_money(&dets[mid_index].text)
-                && line
-                    .iter()
-                    .any(|&i| amount_claim(&dets[i].text) == AmountClaim::ReferenceOnly)
-            {
+            if mid_is_money && line.iter().any(|&i| is_reference_row[i]) {
                 continue;
             }
             let overlap_ratio = line_overlap_ratio(dets, mid_index, line);
@@ -1338,6 +1361,31 @@ mod tests {
             summary_middle_claims(&neighbor, &[0, 2], &[1], &[]),
             [None, None]
         );
+    }
+
+    #[test]
+    fn a_summary_label_never_reserves_a_negative_middle_amount() {
+        // Reservation runs ahead of `pair_columns`, so it has to refuse what
+        // pairing would have refused. A summary figure is never negative: the
+        // only amount here is a discount, and TOTAL must leave it alone.
+        let discount = vec![det("TOTAL", 100.0, 200.0), det("-10.00", 650.0, 200.0)];
+        assert_eq!(summary_middle_claims(&discount, &[0], &[1], &[]), [None]);
+        // Same geometry, positive amount: the reservation still happens.
+        let plain = vec![det("TOTAL", 100.0, 200.0), det("10.00", 650.0, 200.0)];
+        assert_eq!(summary_middle_claims(&plain, &[0], &[1], &[]), [Some(1)]);
+    }
+
+    #[test]
+    fn standalone_money_wants_two_decimals_and_nothing_else() {
+        for text in ["12.34", "$12.34", " $ 12.34 ", "-12.34"] {
+            assert!(is_standalone_money(text), "{text}");
+        }
+        // A one-digit fraction is a size or a weight (`CRAISINS 1.8`), a
+        // trailing dot is not an amount, and a tax code or a thousands comma
+        // means the detection carries more than its amount.
+        for text in ["1.5", "50.", "1234", "3.99h", "1,234.56", "GIFT CARD", ""] {
+            assert!(!is_standalone_money(text), "{text}");
+        }
     }
 
     #[test]
