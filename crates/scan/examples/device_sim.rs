@@ -167,9 +167,11 @@ fn main() {
             &mapping,
             today,
             &path,
-            dump,
-            by_merchant,
-            tag.as_deref(),
+            CorpusOptions {
+                dump,
+                by_merchant,
+                tag: tag.as_deref(),
+            },
         );
     } else {
         if let Some(tag) = tag.as_deref() {
@@ -956,15 +958,20 @@ fn fixture_has_tag(expected_path: &Path, tag: &str) -> bool {
     })
 }
 
+/// Fixture selection and reporting controls for a corpus run.
+struct CorpusOptions<'a> {
+    dump: bool,
+    by_merchant: bool,
+    tag: Option<&'a str>,
+}
+
 fn run_corpus(
     engine: &mut Option<OcrEngine>,
     cached: bool,
     mapping: &HashMap<String, String>,
     today: Date,
     dir: &Path,
-    dump: bool,
-    by_merchant: bool,
-    tag: Option<&str>,
+    options: CorpusOptions<'_>,
 ) {
     // Walk subdirectories. The private corpus is grouped one directory per
     // merchant — a layout core's `private_e2e.rs` depends on to give each
@@ -978,7 +985,7 @@ fn run_corpus(
     collect_jpgs(dir, &mut all_jpg, &mut jpgs);
     jpgs.sort();
     let all_expected = jpgs.len();
-    if let Some(tag) = tag {
+    if let Some(tag) = options.tag {
         jpgs.retain(|jpg| fixture_has_tag(&jpg.with_extension("expected.json"), tag));
         if jpgs.is_empty() {
             eprintln!(
@@ -993,7 +1000,7 @@ fn run_corpus(
         dir.display(),
         all_expected
     );
-    if let Some(tag) = tag {
+    if let Some(tag) = options.tag {
         println!("  tag    : {tag}  ({} matching fixtures)", jpgs.len());
     }
 
@@ -1006,7 +1013,7 @@ fn run_corpus(
             skipped_no_ocr += 1;
             continue;
         }
-        if let Some((s, t)) = run_single(engine, cached, mapping, today, jpg, dump) {
+        if let Some((s, t)) = run_single(engine, cached, mapping, today, jpg, options.dump) {
             let mark = if s.is_fully_ok() { "✓" } else { "✗" };
             println!(
                 "{mark} {:<42} {:<22} items {}/{}{}",
@@ -1046,7 +1053,7 @@ fn run_corpus(
     if !timings.is_empty() {
         print_latency(&timings);
     }
-    if by_merchant {
+    if options.by_merchant {
         print_by_merchant(&scores);
     }
 }
