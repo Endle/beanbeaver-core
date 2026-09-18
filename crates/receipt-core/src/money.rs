@@ -91,9 +91,9 @@ impl Money {
     /// Parse a decimal string, rejecting anything that is not money.
     ///
     /// The counterpart to [`Money::from_decimal_str`], and the one to use on
-    /// **input a human typed**. The lenient parser reads `"12x.99"` as `$0.00`
+    /// **input a human typed**. The lenient parser reads `"12x.99"` as `$0.99`
     /// and `"$12.34"` as `$0.34` — silently, with no way for a caller to tell
-    /// those from a real zero. That is tolerable over text this crate emitted
+    /// those from legitimate amounts. That is tolerable over text this crate emitted
     /// itself; it is not tolerable over a correction, where the whole point of
     /// the edit is that the number matters.
     ///
@@ -105,8 +105,8 @@ impl Money {
     /// from one meant as a decimal point, and guessing is how `1,50` becomes
     /// `$150.00`.
     ///
-    /// Unlike the lenient parser this is also overflow-safe; `whole * 100` there
-    /// wraps in release and panics in debug on absurd input.
+    /// Accepts the full range of `i64` cents and reports out-of-range amounts
+    /// as errors instead of substituting zero like the lenient parser.
     pub fn parse_strict(value: &str) -> Result<Money, MoneyParseError> {
         let bad = || MoneyParseError {
             input: value.to_string(),
@@ -150,20 +150,16 @@ impl Money {
             _ => frac_str.parse().map_err(|_| bad())?,
         };
 
-        let cents = whole
-            .checked_mul(100)
-            .and_then(|c| c.checked_add(frac))
-            .ok_or_else(bad)?;
-        Ok(Money(if negative { -cents } else { cents }))
+        Self::from_decimal_parts(whole, frac, negative).ok_or_else(bad)
     }
 
-    /// Parse a decimal string. **Lenient and total**: anything unparseable reads
-    /// as zero, and more than two fractional digits truncate.
+    /// Parse a decimal string. **Lenient and total**: unparseable components
+    /// read as zero, more than two fractional digits truncate, and overflow
+    /// when combining the components into cents becomes zero.
     ///
-    /// This is deliberately bug-compatible with the `decimal_to_cents` it
+    /// The permissive syntax preserves the `decimal_to_cents` behavior this
     /// replaces, because it runs on the reformat path over text this crate
-    /// previously emitted. Tightening it is a behaviour change and needs its own
-    /// corpus diff.
+    /// previously emitted. Use [`Money::parse_strict`] to validate external input.
     pub fn from_decimal_str(value: &str) -> Self {
         let trimmed = value.trim();
         if trimmed.is_empty() {
@@ -179,8 +175,16 @@ impl Money {
             frac.push('0');
         }
         let frac_value = frac.parse::<i64>().unwrap_or(0);
-        let value = whole * 100 + frac_value;
-        Money(if negative { -value } else { value })
+        Self::from_decimal_parts(whole, frac_value, negative).unwrap_or(Money::ZERO)
+    }
+
+    fn from_decimal_parts(whole: i64, fraction: i64, negative: bool) -> Option<Self> {
+        // Apply the sign before checking the range: i64::MIN has a magnitude
+        // one cent larger than i64::MAX. The wider intermediate also prevents
+        // overflow when scaling the whole part in either parser.
+        let magnitude = i128::from(whole) * 100 + i128::from(fraction);
+        let cents = if negative { -magnitude } else { magnitude };
+        i64::try_from(cents).ok().map(Money)
     }
 
     #[inline]
@@ -208,7 +212,7 @@ impl Money {
 impl fmt::Display for Money {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let sign = if self.0 < 0 { "-" } else { "" };
-        let abs = self.0.abs();
+        let abs = self.0.unsigned_abs();
         write!(f, "{sign}{}.{:02}", abs / 100, abs % 100)
     }
 }
@@ -357,14 +361,25 @@ mod tests {
     /// through the FFI would start rejecting this crate's own output.
     #[test]
     fn parse_strict_round_trips_every_rendered_amount() {
-        for cents in [0, 1, -1, 99, 100, -12_345, 22_197, i64::MAX / 100] {
+        for cents in [
+            i64::MIN,
+            i64::MIN + 1,
+            -12_345,
+            -1,
+            0,
+            1,
+            99,
+            100,
+            22_197,
+            i64::MAX - 1,
+            i64::MAX,
+        ] {
             let m = Money::from_cents(cents);
             assert_eq!(Money::parse_strict(&m.to_string()), Ok(m), "cents {cents}");
         }
     }
 
-    /// The lenient parser computes `whole * 100` unchecked, so this input panics
-    /// in debug and wraps in release. Strict parsing reports it instead.
+    /// Strict parsing must distinguish valid limits from out-of-range amounts.
     #[test]
     fn parse_strict_reports_overflow_rather_than_wrapping() {
         // i64::MAX is 9_223_372_036_854_775_807 cents, so this is the largest
@@ -373,9 +388,32 @@ mod tests {
             Money::parse_strict("92233720368547758.07"),
             Ok(Money::from_cents(i64::MAX))
         );
+        assert_eq!(
+            Money::parse_strict("-92233720368547758.08"),
+            Ok(Money::from_cents(i64::MIN))
+        );
         // One cent more, and a whole part too large to scale at all.
         assert!(Money::parse_strict("92233720368547758.08").is_err());
+        assert!(Money::parse_strict("-92233720368547758.09").is_err());
+        assert!(Money::parse_strict("92233720368547759").is_err());
+        assert!(Money::parse_strict("-92233720368547759").is_err());
         assert!(Money::parse_strict("999999999999999999999").is_err());
+    }
+
+    #[test]
+    fn lenient_parsing_returns_zero_on_overflow() {
+        for input in [
+            "92233720368547758.08",
+            "-92233720368547758.09",
+            "92233720368547759",
+            "-92233720368547759",
+            "9223372036854775807.99",
+            "-9223372036854775807.99",
+        ] {
+            assert_eq!(Money::from_decimal_str(input), Money::ZERO, "{input}");
+            assert_eq!(input.parse::<Money>(), Ok(Money::ZERO), "{input}");
+            assert_eq!(Money::from(input), Money::ZERO, "{input}");
+        }
     }
 
     #[test]
@@ -390,7 +428,7 @@ mod tests {
 
     #[test]
     fn round_trips_through_text() {
-        for cents in [-100_000i64, -697, -5, 0, 5, 697, 100_000] {
+        for cents in [i64::MIN, -100_000, -697, -5, 0, 5, 697, 100_000, i64::MAX] {
             let m = Money::from_cents(cents);
             assert_eq!(Money::from_decimal_str(&m.to_string()), m, "{cents}");
         }
