@@ -91,7 +91,7 @@ fn load_row_amount(card: &ExtractedItem, load: &ExtractedItem) -> Option<Money> 
 /// ```text
 /// AMAZON.CA $25        07675062289    0.00
 /// BH 25                               25.00
-///   6300012693211842
+///   6300000000000000
 /// ```
 ///
 /// — so both extractors emit two items and the one card is counted twice:
