@@ -473,3 +473,80 @@ fn same_row_activation_is_preserved_and_conflicting_references_are_unresolved() 
     assert_eq!(gift.reference, None);
     assert!(gift.unresolved_fields.contains(&"reference".into()));
 }
+
+const SLIP: &str = "TRANSACTION RECORD\nAccount : GIFT CARD\nTrans Type ACTIVATE\nAmount $25.00\nReference # 000000000001\nApproved\n*** CUSTOMER COPY ***";
+
+#[test]
+fn an_approved_activation_slip_describes_its_card() {
+    let doc = OcrDocument::from_text(&format!(
+        "AMAZON.CA $25 01234567890 25.00\n6300000000000000\n{SLIP}\nTOTAL $25.00"
+    ));
+    let mut items = vec![item("AMAZON.CA $25 01234567890")];
+    attach_purchases(&doc, "DOLLARAMA", &mut items);
+    let gift = items[0].gift_card.as_ref().unwrap();
+    assert_eq!(gift.activation, GiftCardActivation::Activated);
+    assert_eq!(gift.reference_label.as_deref(), Some("Reference #"));
+    assert_eq!(gift.reference.as_deref(), Some("000000000001"));
+    assert_eq!(gift.card_count, Some(1));
+    assert_eq!(gift.denomination_cents, Some(2500));
+    assert_eq!(gift.total_face_value_cents, Some(2500));
+    assert!(
+        gift.unresolved_fields.is_empty(),
+        "{:?}",
+        gift.unresolved_fields
+    );
+    // The issuer is not on the slip, and the selling merchant is not one.
+    assert_eq!(gift.issuer, None);
+}
+
+#[test]
+fn a_payment_slip_or_a_non_card_item_gets_no_purchase_record() {
+    let payment = SLIP.replace("ACTIVATE", "PURCHASE");
+    let doc = OcrDocument::from_text(&format!("AMAZON.CA $25 25.00\n{payment}"));
+    let mut items = vec![item("AMAZON.CA $25")];
+    attach_purchases(&doc, "FOODY MART", &mut items);
+    assert!(items[0].gift_card.is_none());
+
+    let doc = OcrDocument::from_text(&format!("PAPER TOWEL 25.00\n{SLIP}"));
+    let mut items = vec![item("PAPER TOWEL")];
+    attach_purchases(&doc, "DOLLARAMA", &mut items);
+    assert!(items[0].gift_card.is_none());
+}
+
+#[test]
+fn activation_needs_approval_and_a_decline_is_unresolved() {
+    let doc = OcrDocument::from_text(&format!(
+        "AMAZON.CA $25 25.00\n{}",
+        SLIP.replace("Approved\n", "")
+    ));
+    let mut items = vec![item("AMAZON.CA $25")];
+    attach_purchases(&doc, "DOLLARAMA", &mut items);
+    let gift = items[0].gift_card.as_ref().unwrap();
+    assert_eq!(gift.activation, GiftCardActivation::Unknown);
+    assert!(gift.unresolved_fields.is_empty());
+
+    let doc = OcrDocument::from_text(&format!(
+        "AMAZON.CA $25 25.00\n{}",
+        SLIP.replace("Approved", "DECLINED")
+    ));
+    let mut items = vec![item("AMAZON.CA $25")];
+    attach_purchases(&doc, "DOLLARAMA", &mut items);
+    let gift = items[0].gift_card.as_ref().unwrap();
+    assert_eq!(gift.activation, GiftCardActivation::Unknown);
+    assert!(gift.unresolved_fields.contains(&"activation".into()));
+}
+
+#[test]
+fn more_cards_than_slips_leaves_every_card_unassociated() {
+    let doc = OcrDocument::from_text(&format!(
+        "AMAZON.CA $25 25.00\nPNGO 25-500CAD 25.00\n{SLIP}\nTOTAL $50.00"
+    ));
+    let mut items = vec![item("AMAZON.CA $25"), item("PNGO 25-500CAD")];
+    attach_purchases(&doc, "DOLLARAMA", &mut items);
+    for item in &items {
+        let gift = item.gift_card.as_ref().unwrap();
+        assert_eq!(gift.unresolved_fields, vec!["association".to_string()]);
+        assert_eq!(gift.reference, None);
+        assert_eq!(gift.activation, GiftCardActivation::Unknown);
+    }
+}
