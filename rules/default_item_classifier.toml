@@ -949,6 +949,19 @@ priority = 0
 exact_only = true
 
 [[rules]]
+id = "pngo_gift_card"
+# Dollarama's variable-denomination card, printed "PNGO 25-500CAD" above a
+# "Variable 25-500" load row. The receipt's own activation slip names it
+# (Account : GIFT CARD, same card number as the serial under the load row).
+# Bare `gift_card` for the same reason as AMAZON: it is spent later, on
+# anything. Exact only — a four-letter code with no fuzzy neighbourhood worth
+# entering.
+keywords = ["PNGO"]
+tags = ["gift_card"]
+priority = 0
+exact_only = true
+
+[[rules]]
 id = "semantic_tag_0105"
 # Costco prints these as "399 DOORDASH2X50" — the denomination is glued to the
 # brand, so the keyword has to match mid-token, which the substring path does.
