@@ -1106,6 +1106,14 @@ mod tests {
                 .any(|x| x == "gift_card"),
             "AMAZON missing tag gift_card"
         );
+        // Its variable-denomination sibling off the same mall.
+        assert_eq!(key("PNGO 25-500CAD 07675067936"), None);
+        assert!(
+            tags("PNGO 25-500CAD 07675067936")
+                .iter()
+                .any(|x| x == "gift_card"),
+            "PNGO missing tag gift_card"
+        );
 
         assert_eq!(
             key("2773717 MONSTER VRTY").as_deref(),
