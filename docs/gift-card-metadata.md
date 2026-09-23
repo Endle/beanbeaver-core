@@ -24,6 +24,15 @@ implemented here.
 - Explicit pack notation such as `DOORDASH2X50`: two cards, denomination 5000
   cents, and derived total face value 10000 cents. The paid price stays on the
   item. A price of 40000 cents on `LCBO CARD` does not establish loaded value.
+- Terminal activation slips (Dollarama): outside Costco, a `TRANSACTION
+  RECORD` block that says `ACTIVATE` describes one card. Its `Reference #`
+  is kept under that label. Its `Amount` is what was loaded, so it gives a
+  count of 1 and that denomination; the total is marked derived, like a pack.
+  `Activated` requires the slip's `Approved`, and a decline leaves activation
+  unresolved. Slips pair with gift-card-tagged items in printed order, but
+  only when the counts match. Otherwise each such item is unresolved on
+  `association`. The same block for an ordinary card payment says `PURCHASE`
+  and is ignored. The slip names no issuer, so `issuer` stays absent.
 
 A `PC` reference is preserved under that label. It is not an individual card
 identity and is not linked to redemption identifiers.

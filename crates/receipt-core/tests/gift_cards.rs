@@ -121,6 +121,14 @@ fn dollarama_gift_card_is_one_item_charged_on_its_load_row() {
         "tags: {:?}",
         parsed.items[0].tags
     );
+    // The terminal's activation slip describes the card it activated.
+    let gift = parsed.items[0]
+        .gift_card
+        .as_ref()
+        .expect("purchase metadata");
+    assert_eq!(gift.activation, GiftCardActivation::Activated);
+    assert_eq!(gift.reference.as_deref(), Some("000000000000"));
+    assert_eq!(gift.denomination_cents, Some(2500));
     let kinds: Vec<_> = parsed.warnings.iter().map(|w| w.kind).collect();
     assert!(
         kinds.contains(&receipt_core::common::ReceiptWarningKind::PriceAutoCorrected),
@@ -153,6 +161,14 @@ fn dollarama_variable_gift_card_is_one_item_charged_on_its_load_row() {
         "tags: {:?}",
         parsed.items[0].tags
     );
+    // The terminal's activation slip describes the card it activated.
+    let gift = parsed.items[0]
+        .gift_card
+        .as_ref()
+        .expect("purchase metadata");
+    assert_eq!(gift.activation, GiftCardActivation::Activated);
+    assert_eq!(gift.reference.as_deref(), Some("000000000000"));
+    assert_eq!(gift.denomination_cents, Some(2500));
     let kinds: Vec<_> = parsed.warnings.iter().map(|w| w.kind).collect();
     assert!(
         kinds.contains(&receipt_core::common::ReceiptWarningKind::PriceAutoCorrected),

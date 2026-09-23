@@ -396,6 +396,7 @@ fn pack_re() -> &'static Regex {
 
 pub(crate) fn attach_purchases(doc: &OcrDocument, merchant: &str, items: &mut [ParsedReceiptItem]) {
     if !merchant.to_ascii_uppercase().contains("COSTCO") {
+        attach_activation_slips(doc, items);
         return;
     }
     let document_text = doc.full_text();
@@ -534,6 +535,151 @@ pub(crate) fn attach_purchases(doc: &OcrDocument, merchant: &str, items: &mut [P
                 out.face_value_derived = out.total_face_value_cents.is_some();
                 evidence(&mut out.evidence, "face_value", &rows[pos]);
             }
+        }
+        items[i].gift_card = Some(out);
+    }
+}
+
+fn slip_reference_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)^REFERENCE\s*#\s*:?\s*(\d+)$").unwrap())
+}
+fn has_word(text: &str, word: &str) -> bool {
+    text.split(|c: char| !c.is_alphanumeric())
+        .any(|w| w.eq_ignore_ascii_case(word))
+}
+fn is_gift_card_item(item: &ParsedReceiptItem) -> bool {
+    item.tags
+        .iter()
+        .any(|t| t == "gift_card" || t.ends_with("/gift_card"))
+}
+
+/// The payment terminal's `TRANSACTION RECORD` blocks that record an
+/// `ACTIVATE`, each bounded by the next record or the first footer line.
+fn activation_slips<'r, 'a>(rows: &'r [Row<'a>]) -> Vec<&'r [Row<'a>]> {
+    let is_record = |r: &Row<'_>| compact(r.text) == "TRANSACTIONRECORD";
+    let mut slips = Vec::new();
+    for (start, _) in rows.iter().enumerate().filter(|(_, r)| is_record(r)) {
+        let end = (start + 1..rows.len())
+            .find(|p| is_record(&rows[*p]) || block_end(rows[*p].text))
+            .unwrap_or(rows.len());
+        let slip = &rows[start..end];
+        if slip.iter().any(|r| has_word(r.text, "ACTIVATE")) {
+            slips.push(slip);
+        }
+    }
+    slips
+}
+
+/// Purchase metadata from terminal activation slips, for merchants that sell
+/// cards through the payment terminal rather than annotating the product row.
+///
+/// Dollarama prints one slip per card, between the items and TOTAL:
+///
+/// ```text
+/// TRANSACTION RECORD
+/// Account       : GIFT CARD
+/// Trans Type    : ACTIVATE
+/// Amount        : $25.00
+/// Reference #   : 000000000000
+/// Approved
+/// ```
+///
+/// A slip activates one card, and its `Amount` is what was loaded onto it, so
+/// it supports a count of 1 and that denomination; the item's price is not
+/// consulted. Activation is reported only for a slip that also says
+/// `Approved`, and a declined one leaves it unresolved.
+///
+/// Slips pair with the receipt's gift-card items in printed order, and only
+/// when the counts agree. Otherwise every such item is left unresolved on
+/// `association` rather than handed a neighbour's reference. The same block
+/// is printed for ordinary card payments (Foody Mart, Home Hardware), which
+/// say `PURCHASE` and are never read here.
+fn attach_activation_slips(doc: &OcrDocument, items: &mut [ParsedReceiptItem]) {
+    let rows = rows(doc);
+    let slips = activation_slips(&rows);
+    let cards: Vec<usize> = (0..items.len())
+        .filter(|i| is_gift_card_item(&items[*i]))
+        .collect();
+    if slips.is_empty() || cards.is_empty() {
+        return;
+    }
+    let document_text = doc.full_text();
+    let purchase = |i: usize, description: &str| GiftCardPurchase {
+        source_id: source_id("item", i, &document_text, description),
+        ..Default::default()
+    };
+    if slips.len() != cards.len() {
+        for &i in &cards {
+            let mut out = purchase(i, &items[i].description);
+            unresolved(&mut out.unresolved_fields, "association");
+            for slip in &slips {
+                evidence(&mut out.evidence, "association", &slip[0]);
+            }
+            items[i].gift_card = Some(out);
+        }
+        return;
+    }
+    for (&i, slip) in cards.iter().zip(&slips) {
+        let mut out = purchase(i, &items[i].description);
+        evidence(&mut out.evidence, "association", &slip[0]);
+        let mut refs = Vec::new();
+        let mut unread_reference = false;
+        let mut loads = Vec::new();
+        let mut unread_load = false;
+        let mut approved = false;
+        let mut declined = false;
+        for row in slip.iter() {
+            let upper = row.text.to_ascii_uppercase();
+            if upper.starts_with("REFERENCE") {
+                out.reference_label = Some("Reference #".into());
+                evidence(&mut out.evidence, "reference", row);
+                match slip_reference_re().captures(row.text) {
+                    Some(c) => refs.push(c[1].to_string()),
+                    None => unread_reference = true,
+                }
+            }
+            if upper.starts_with("AMOUNT") {
+                evidence(&mut out.evidence, "face_value", row);
+                match amounts(&row.text["AMOUNT".len()..])[..] {
+                    [cents] => loads.push(cents),
+                    _ => unread_load = true,
+                }
+            }
+            if has_word(row.text, "ACTIVATE") {
+                evidence(&mut out.evidence, "activation", row);
+            }
+            if upper.contains("DECLINED") || upper.contains("NOT APPROVED") {
+                declined = true;
+                evidence(&mut out.evidence, "activation", row);
+            } else if has_word(row.text, "APPROVED") {
+                approved = true;
+                evidence(&mut out.evidence, "activation", row);
+            }
+        }
+        out.reference = unique(
+            &refs,
+            unread_reference,
+            &mut out.unresolved_fields,
+            "reference",
+        );
+        if declined {
+            unresolved(&mut out.unresolved_fields, "activation");
+        } else if approved {
+            out.activation = GiftCardActivation::Activated;
+        }
+        if let Some(cents) = unique(
+            &loads,
+            unread_load,
+            &mut out.unresolved_fields,
+            "denomination_cents",
+        )
+        .filter(|c| *c > 0)
+        {
+            out.card_count = Some(1);
+            out.denomination_cents = Some(cents);
+            out.total_face_value_cents = Some(cents);
+            out.face_value_derived = true;
         }
         items[i].gift_card = Some(out);
     }
