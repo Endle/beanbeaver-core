@@ -224,6 +224,14 @@ id = "legacy_0008"
 # and C&C's "Chinese Okra" both fell through to no category. Corpus:
 # foody_mart 2026-09-16 $48.81.
 #
+# "SOYA BEAN" is a vegetable by decision: Foody Mart prints its 大黃豆芽 (soybean
+# sprouts, sold by weight under 02-Vegetable) as "Soya Bean", and bare "BEAN"
+# in legacy_0017 filed it as Staple. The 9-char keyword outranks "BEAN" (4) on
+# `keyword_length`. Deliberately NOT bare "SOYBEAN": it would pull SOYBEAN
+# OIL / soy milk here. "SOYBEAN SPROUT" was already a vegetable via SPROUTS.
+# (CILANTRO moved to legacy_0019, seasoning, beside CORIANDER: same herb, and
+# the corpus had filed the two names under two different accounts.)
+#
 # "FRESH SMOOTH TO" is the truncated form of Sunrise's "Fresh Smooth Tofu"
 # (日昇鮮滑滑豆腐皇), the same idiom as "INSTANT NOO": Foody Mart cuts
 # descriptions at ~25 chars, so "Sunrise - Fresh Smooth To" never contains
@@ -232,7 +240,7 @@ id = "legacy_0008"
 # "Oasis Smoothie" and this prefix cannot fuzzy-match a smoothie back. Not the
 # shorter "SMOOTH TO", which "Smooth Toffee" would contain. Corpus: foody_mart
 # 2026-09-20 $41.51, 2026-07-22 $56.07 and 2026-07-29 $110.05.
-keywords = ["LETTUCE", "SPINACH", "KALE", "CABBAGE", "BROCCOLI", "CAULIFLOWER", "CARROT", "CELERY", "CUCUMBER", "CUKES", "TOMATO", "TOMATOES", "PEPPER", "PEPPERS", "ONION", "POTATO", "POTATOES", "SWEET POTATO", "MUSHROOM", "ZUCCHINI", "SQUASH", "EGGPLANT", "ASPARAGUS", "CORN", "GREEN BEAN", "PEA", "PEAS", "EDAMAME", "BOK CHOY", "SHEPHERDS PURSE", "NAPA", "RADISH", "TURNIP", "BEET", "ARTICHOKE", "LEEK", "SCALLION", "SHALLOT", "CHIVE", "WATERCRESS", "OKRA", "CILANTRO", "PARSLEY", "BASIL", "DILL", "TOFU", "FRESH SMOOTH TO", "BEAN SPROUT", "SPROUTS", "SALAD", "COLESLAW", "GREENS", "VEGETABLES", "VEGETABLE"]
+keywords = ["LETTUCE", "SPINACH", "KALE", "CABBAGE", "BROCCOLI", "CAULIFLOWER", "CARROT", "CELERY", "CUCUMBER", "CUKES", "TOMATO", "TOMATOES", "PEPPER", "PEPPERS", "ONION", "POTATO", "POTATOES", "SWEET POTATO", "MUSHROOM", "ZUCCHINI", "SQUASH", "EGGPLANT", "ASPARAGUS", "CORN", "GREEN BEAN", "SOYA BEAN", "PEA", "PEAS", "EDAMAME", "BOK CHOY", "SHEPHERDS PURSE", "NAPA", "RADISH", "TURNIP", "BEET", "ARTICHOKE", "LEEK", "SCALLION", "SHALLOT", "CHIVE", "WATERCRESS", "OKRA", "PARSLEY", "BASIL", "DILL", "TOFU", "FRESH SMOOTH TO", "BEAN SPROUT", "SPROUTS", "SALAD", "COLESLAW", "GREENS", "VEGETABLES", "VEGETABLE"]
 tags = ["grocery/vegetable"]
 priority = 0
 exact_only = false
@@ -359,7 +367,7 @@ exact_only = false
 # `keyword_length` for "*ZHy Turkey Noodle Sauce 2" (周黑鸭火鸡面酱) — a sauce FOR
 # noodles, not a noodle. Same shape as VEGETABLE OIL beating VEGETABLE.
 id = "legacy_0019"
-keywords = ["VEGETABLE OIL", "CORN OIL", "SESAME OIL", "SESAMEOIL", "GARLIC", "GINGER", "GREEN ONION", "GREEN ONIONS", "CHILI PEPPER", "RED CHILI PEPPER", "CHILLI", "DRIED CHILLI", "CRUSHED CHILLI", "SPICE", "SEASONING", "SALT", "ROCK SUGAR", "PAPRIKA", "CUMIN", "CORIANDER", "TURMERIC", "CINNAMON", "NUTMEG", "OREGANO", "THYME", "ROSEMARY", "BAY LEAF", "CURRY", "CHILI POWDER", "CAYENNE", "SAUCE", "NOODLE SAUCE", "SOY SAUCE", "BEAN SAUCE", "FISH SAUCE", "OYSTER SAUCE", "HOISIN", "WASABI", "SRIRACHA", "HOT SAUCE", "KETCHUP", "MUSTARD", "MAYONNAISE", "MAYO", "RELISH", "BBQ SAUCE", "TERIYAKI", "WORCESTERSHIRE", "PERICARPIUM ZANTHOXYLI", "PERICARPIURN ZANTHOXYLI", "SALSA", "HUMMUS", "GUACAMOLE", "PESTO", "CHINA TIME HONORED BRAND", "YUQUAN FRESH PRESERVED", "SOYBEAN PASTE", "MONOSODIUM", "MSG", "VEGOIL", "PRESERVED VEG"]
+keywords = ["VEGETABLE OIL", "CORN OIL", "SESAME OIL", "SESAMEOIL", "GARLIC", "GINGER", "GREEN ONION", "GREEN ONIONS", "CHILI PEPPER", "RED CHILI PEPPER", "CHILLI", "DRIED CHILLI", "CRUSHED CHILLI", "SPICE", "SEASONING", "SALT", "ROCK SUGAR", "PAPRIKA", "CUMIN", "CORIANDER", "CILANTRO", "TURMERIC", "CINNAMON", "NUTMEG", "OREGANO", "THYME", "ROSEMARY", "BAY LEAF", "CURRY", "CHILI POWDER", "CAYENNE", "SAUCE", "NOODLE SAUCE", "SOY SAUCE", "BEAN SAUCE", "FISH SAUCE", "OYSTER SAUCE", "HOISIN", "WASABI", "SRIRACHA", "HOT SAUCE", "KETCHUP", "MUSTARD", "MAYONNAISE", "MAYO", "RELISH", "BBQ SAUCE", "TERIYAKI", "WORCESTERSHIRE", "PERICARPIUM ZANTHOXYLI", "PERICARPIURN ZANTHOXYLI", "SALSA", "HUMMUS", "GUACAMOLE", "PESTO", "CHINA TIME HONORED BRAND", "YUQUAN FRESH PRESERVED", "SOYBEAN PASTE", "MONOSODIUM", "MSG", "VEGOIL", "PRESERVED VEG"]
 tags = ["grocery/seasoning"]
 priority = 0
 exact_only = false
