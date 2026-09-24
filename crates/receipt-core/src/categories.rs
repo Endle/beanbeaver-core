@@ -1115,6 +1115,17 @@ mod tests {
             "PNGO missing tag gift_card"
         );
 
+        // Foody Mart truncates Sunrise's "Fresh Smooth Tofu" before TOFU; the
+        // fuzzy SMOOTHIE used to claim it for juice. A real smoothie still is.
+        assert_eq!(
+            key("Sunrise - Fresh Smooth To").as_deref(),
+            Some("grocery/vegetable")
+        );
+        assert_eq!(
+            key("Oasis Smoothie Tropical M").as_deref(),
+            Some("grocery/drink/juice")
+        );
+
         assert_eq!(
             key("2773717 MONSTER VRTY").as_deref(),
             Some("grocery/drink")
