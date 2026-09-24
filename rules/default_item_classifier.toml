@@ -34,7 +34,13 @@
 #           Every fruit orange in the corpus is printed in full; the only
 #           "ORANG" is a truncated CRUSH ZERO, which is a drink either way.
 #   POCKY   (snacks, legacy_0067) is a brand, five letters, one from ROCKY.
-exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD", "ORANGE", "POCKY"]
+#   SMOOTHIE (juice, legacy_0025) fuzzy-matched "Fresh Smooth" in Foody Mart's
+#           truncated "Sunrise - Fresh Smooth To" and C&C's "SUNRISE FRESH
+#           SMOOTH" -- tofu, filed as juice. The corpus's one real smoothie
+#           ("Oasis Smoothie Tropical M") prints the word in full.
+#   FRESH SMOOTH TO (vegetable, legacy_0008) is that tofu's truncated name.
+#           Exact-only so it cannot fuzzy-match a smoothie in turn.
+exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD", "ORANGE", "POCKY", "SMOOTHIE", "FRESH SMOOTH TO"]
 
 # BRANDS — text that names the maker, blanked out before any keyword is matched.
 #
@@ -217,7 +223,16 @@ id = "legacy_0008"
 # "OKRA" matched nothing at all before — Foody Mart's "Chinese Okras" (包裝長勝瓜)
 # and C&C's "Chinese Okra" both fell through to no category. Corpus:
 # foody_mart 2026-09-16 $48.81.
-keywords = ["LETTUCE", "SPINACH", "KALE", "CABBAGE", "BROCCOLI", "CAULIFLOWER", "CARROT", "CELERY", "CUCUMBER", "CUKES", "TOMATO", "TOMATOES", "PEPPER", "PEPPERS", "ONION", "POTATO", "POTATOES", "SWEET POTATO", "MUSHROOM", "ZUCCHINI", "SQUASH", "EGGPLANT", "ASPARAGUS", "CORN", "GREEN BEAN", "PEA", "PEAS", "EDAMAME", "BOK CHOY", "SHEPHERDS PURSE", "NAPA", "RADISH", "TURNIP", "BEET", "ARTICHOKE", "LEEK", "SCALLION", "SHALLOT", "CHIVE", "WATERCRESS", "OKRA", "CILANTRO", "PARSLEY", "BASIL", "DILL", "TOFU", "BEAN SPROUT", "SPROUTS", "SALAD", "COLESLAW", "GREENS", "VEGETABLES", "VEGETABLE"]
+#
+# "FRESH SMOOTH TO" is the truncated form of Sunrise's "Fresh Smooth Tofu"
+# (日昇鮮滑滑豆腐皇), the same idiom as "INSTANT NOO": Foody Mart cuts
+# descriptions at ~25 chars, so "Sunrise - Fresh Smooth To" never contains
+# TOFU, and "Fresh Smooth" fuzzy-matched the juice rule's SMOOTHIE instead.
+# Both are exact-only (see `exact_only_keywords`), so SMOOTHIE still catches
+# "Oasis Smoothie" and this prefix cannot fuzzy-match a smoothie back. Not the
+# shorter "SMOOTH TO", which "Smooth Toffee" would contain. Corpus: foody_mart
+# 2026-09-20 $41.51, 2026-07-22 $56.07 and 2026-07-29 $110.05.
+keywords = ["LETTUCE", "SPINACH", "KALE", "CABBAGE", "BROCCOLI", "CAULIFLOWER", "CARROT", "CELERY", "CUCUMBER", "CUKES", "TOMATO", "TOMATOES", "PEPPER", "PEPPERS", "ONION", "POTATO", "POTATOES", "SWEET POTATO", "MUSHROOM", "ZUCCHINI", "SQUASH", "EGGPLANT", "ASPARAGUS", "CORN", "GREEN BEAN", "PEA", "PEAS", "EDAMAME", "BOK CHOY", "SHEPHERDS PURSE", "NAPA", "RADISH", "TURNIP", "BEET", "ARTICHOKE", "LEEK", "SCALLION", "SHALLOT", "CHIVE", "WATERCRESS", "OKRA", "CILANTRO", "PARSLEY", "BASIL", "DILL", "TOFU", "FRESH SMOOTH TO", "BEAN SPROUT", "SPROUTS", "SALAD", "COLESLAW", "GREENS", "VEGETABLES", "VEGETABLE"]
 tags = ["grocery/vegetable"]
 priority = 0
 exact_only = false
