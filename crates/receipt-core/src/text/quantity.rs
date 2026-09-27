@@ -161,6 +161,22 @@ pub(super) fn looks_like_quantity_expression(text: &str) -> bool {
         }
     }
 
+    // The same shape after OCR lost the deal's `$`. The deal tail prints at the
+    // right edge of the row and fades first: "(<size>)@5.99(1/$2.98)" has come
+    // back as "(15)@5.99(1/82.98", with the `$` read as `8` and the closing
+    // paren dropped. Without `/$` the row matched nothing above, so its tail
+    // was taken for the row's own price: a phantom 82.98 line. The bridge
+    // running straight into an `N/` fraction identifies the deal on its own.
+    // Nothing after the slash is read, so no guess is made about the amount.
+    if upper.starts_with('(') {
+        static RE_BRIDGE_INTO_FRACTION: OnceLock<Regex> = OnceLock::new();
+        let re_bridge_into_fraction = RE_BRIDGE_INTO_FRACTION
+            .get_or_init(|| Regex::new(r"\)\s*[0@]?\d+\.\d{2}\s*\(\s*\d{1,2}\s*/").unwrap());
+        if re_bridge_into_fraction.is_match(&upper) {
+            return true;
+        }
+    }
+
     if upper.contains('@') && upper.contains("/$") {
         let compact: String = upper
             .chars()
