@@ -104,7 +104,8 @@ fn is_unsigned_discount_line(description: &str) -> bool {
 /// recovered name and the category always agree about what the item is.
 ///
 /// When `vocab` is `None` — no merchant table, or a merchant that never
-/// resolved — every expansion is a no-op and this is exactly the old behavior.
+/// resolved — expansion is a no-op. Prefix recovery runs last, only if neither
+/// the printed text nor the vocabulary expansion produced an account.
 fn build_item(
     description: String,
     price: Money,
@@ -128,15 +129,11 @@ fn build_item(
     //
     // Fallback ordering sidesteps both: a line the rules already understand is
     // untouched, and expansion can only ever fill a gap.
-    let mut classification =
-        categories::classify_item(category_source, &rule_layers.category_rules);
-    if classification.account.is_none() {
-        if let Some(expanded) =
-            vocab.and_then(|v| crate::merchant_vocab::expand_for_classification(category_source, v))
-        {
-            classification = categories::classify_item(&expanded, &rule_layers.category_rules);
-        }
-    }
+    let (classification, _) = categories::classify_receipt_description(
+        category_source,
+        &rule_layers.category_rules,
+        vocab,
+    );
 
     // The printed text stays the leading part of the description: it is what the
     // receipt actually says, so it must survive for ledger review and for
@@ -171,7 +168,7 @@ fn build_item(
 ///
 /// No merchant-vocabulary expansion, unlike [`build_item`]: expansion recovers a
 /// chain's fixed-width shorthand, and a description the user typed is not
-/// shorthand.
+/// shorthand. Prefix recovery is likewise reserved for scanned descriptions.
 pub fn classified_item(
     description: String,
     price: Money,
@@ -664,6 +661,46 @@ mod tests {
     use crate::common::ReceiptWarningKind;
     use crate::money::Money;
     use crate::rules::default_parser_rule_layers;
+
+    #[test]
+    fn prefix_scan_explanation_and_typed_rename_have_distinct_contracts() {
+        let book = crate::rules::RuleBook::bundled();
+        let description = "Example - Wild Hazel Mush";
+        let parsed = parse_text(&format!("EXAMPLE MARKET\n{description} 12.99\nTOTAL 12.99"));
+        let scanned = parsed
+            .items
+            .iter()
+            .find(|i| i.description == description)
+            .unwrap();
+        assert_eq!(
+            scanned.account.as_deref(),
+            Some("Expenses:Food:Grocery:Vegetable")
+        );
+        assert!(!parsed
+            .warnings
+            .iter()
+            .any(|w| w.kind == ReceiptWarningKind::UncategorizedItem));
+        let explained = book.explain(description);
+        assert_eq!(explained.account, scanned.account);
+        assert_eq!(explained.category_key, scanned.tag_path);
+        assert_eq!(explained.tags, scanned.tags);
+        assert!(explained.matches.iter().all(|m| !m.is_exact));
+        assert_eq!(
+            explained
+                .matches
+                .iter()
+                .filter(|m| m.is_category_winner)
+                .count(),
+            1
+        );
+        let renamed = super::classified_item(
+            description.into(),
+            Money::from_cents(1299),
+            1,
+            book.layers(),
+        );
+        assert!(renamed.account.is_none());
+    }
 
     #[test]
     fn parsed_and_edited_items_keep_winning_path_separate_from_account() {

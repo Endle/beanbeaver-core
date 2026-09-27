@@ -273,6 +273,16 @@ tags = ["grocery/frozen"]
 priority = 0
 exact_only = false
 
+# Full Fortune's shepherd's-purse product is frozen wonton filling. Keep this
+# exact brand/product rule ahead of the prefix fallback's ingredient inference.
+# FORTURE is the observed OCR spelling of FORTUNE; do not fuzzy-match the brand.
+[[rules]]
+id = "full_fortune_shepherd_filling"
+keywords = ["FULL FORTUNE SHEPHERD", "FULL FORTURE SHEPHERD"]
+tags = ["grocery/frozen"]
+priority = 10
+exact_only = true
+
 [[rules]]
 id = "legacy_0013"
 keywords = ["ROTISSERIE CHICKEN", "PREPARED MEAL", "DELI MEAL", "READY TO EAT", "HEAT AND SERVE", "MEAL KIT"]

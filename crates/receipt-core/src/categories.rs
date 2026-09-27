@@ -16,6 +16,32 @@ const FUZZY_THRESHOLD_SHORT: f64 = 0.75;
 const FUZZY_THRESHOLD_MEDIUM: f64 = 0.80;
 const FUZZY_THRESHOLD_LONG: f64 = 0.70;
 
+/// Minimum compact tail length for a truncated keyword. On the September 2026
+/// private corpus (plus one new scan), with line length >= 22 and account rivals:
+///
+/// | Tail | Newly categorized | Wrong | Pending category review |
+/// |------|-------------------|-------|-------------------------|
+/// | 3    | 25                | 1     | 11                      |
+/// | 4    | 24                | 0     | 11                      |
+/// | 5    | 20                | 0     | 11                      |
+const PREFIX_MIN_TAIL: usize = 4;
+
+/// Minimum printed description length, in Unicode characters, trimmed and
+/// measured BEFORE brand masking. Fixed-width columns are commonly 25 chars;
+/// OCR can drop spaces/hyphens. With tail >= 4 and account rivals:
+///
+/// | Line | Newly categorized | Wrong | Pending category review |
+/// |------|-------------------|-------|-------------------------|
+/// | 0    | 31                | 5     | 11                      |
+/// | 20   | 24                | 0     | 11                      |
+/// | 22   | 24                | 0     | 11                      |
+/// | 23   | 23                | 0     | 11                      |
+/// | 24   | 21                | 0     | 11                      |
+/// | 25   | 15                | 0     | 11                      |
+///
+/// These are calibration results, not an independent accuracy estimate.
+const PREFIX_MIN_LINE_LEN: usize = 22;
+
 /// One node in the item tag vocabulary.
 ///
 /// A tag is a **path** (`grocery/dairy`), so the same leaf word can sit under two
@@ -134,6 +160,9 @@ pub struct RuleMatch {
     pub priority: i32,
     pub keyword_length: usize,
     pub is_exact: bool,
+    /// A last-resort match against the truncated end of a printed description.
+    /// Kept internal to core; consumers display it as a non-exact (fuzzy) hit.
+    pub is_prefix: bool,
     pub rule_index: usize,
 }
 
@@ -499,12 +528,88 @@ pub fn find_all_matches(description: &str, rule_layers: &CategoryRuleLayers) -> 
                 priority: rule.priority,
                 keyword_length: best_keyword_length,
                 is_exact: best_is_exact,
+                is_prefix: false,
                 rule_index,
             });
         }
     }
 
     matches
+}
+
+/// Candidate matches for a fixed-width description's truncated suffix.
+/// Call only after printed-text and merchant-vocabulary matching found no account.
+/// ASCII letter/digit tokens are joined on both sides, allowing OCR splits and
+/// punctuation. Tails start at a word boundary and consume every remaining
+/// token: a trailing package size is never silently stripped to invent a cut.
+/// Exact-only keywords participate in account ambiguity but never emit a match.
+pub(crate) fn prefix_fallback_matches(
+    description: &str,
+    layers: &CategoryRuleLayers,
+) -> Vec<RuleMatch> {
+    if description.trim().chars().count() < PREFIX_MIN_LINE_LEN {
+        return Vec::new();
+    }
+    let masked = mask_brands(description, &layers.brands).to_ascii_uppercase();
+    let words: Vec<&str> = re_word_token()
+        .find_iter(&masked)
+        .map(|m| m.as_str())
+        .collect();
+    let tails: Vec<String> = (0..words.len())
+        .map(|start| words[start..].concat())
+        .filter(|tail| tail.len() >= PREFIX_MIN_TAIL)
+        .collect();
+    let mut account = None;
+    let mut matches = Vec::new();
+    for (rule_index, rule) in layers.rules.iter().enumerate() {
+        let mut best: Option<(&String, usize)> = None;
+        for keyword in &rule.keywords {
+            let upper = keyword.to_ascii_uppercase();
+            let compact: String = re_word_token()
+                .find_iter(&upper)
+                .map(|m| m.as_str())
+                .collect();
+            if !tails
+                .iter()
+                .any(|tail| tail.len() < compact.len() && compact.starts_with(tail))
+            {
+                continue;
+            }
+            if let Some(rival) =
+                resolve_account_target(rule.category.as_deref(), &layers.account_mapping, None)
+            {
+                if account.as_ref().is_some_and(|previous| previous != &rival) {
+                    return Vec::new();
+                }
+                account = Some(rival);
+            }
+            if !layers.exact_only_keywords.contains(keyword)
+                && best.map_or(true, |(_, length)| compact.len() > length)
+            {
+                best = Some((keyword, compact.len()));
+            }
+        }
+        if let Some((keyword, keyword_length)) = best {
+            matches.push(RuleMatch {
+                rule_id: rule.id.clone(),
+                category: rule.category.clone(),
+                tag_paths: rule.tag_paths.clone(),
+                tags: rule.tags.clone(),
+                matched_keyword: keyword.clone(),
+                priority: rule.priority,
+                keyword_length,
+                is_exact: false,
+                is_prefix: true,
+                rule_index,
+            });
+        }
+    }
+    // A tag-only candidate cannot rescue an otherwise uncategorized item.
+    if matches.iter().any(|m| m.category.is_some()) {
+        matches
+    } else {
+        Vec::new()
+    }
 }
 
 fn compare_match_rank(left: &RuleMatch, right: &RuleMatch) -> Ordering {
@@ -645,8 +750,10 @@ pub fn build_rule_layers(
 /// filing an item under Snacks while refusing to tag it `snacks` would be
 /// incoherent.
 pub fn resolve_matches(description: &str, rule_layers: &CategoryRuleLayers) -> Vec<RuleMatch> {
-    let matches = find_all_matches(description, rule_layers);
+    resolve_match_set(find_all_matches(description, rule_layers), rule_layers)
+}
 
+fn resolve_match_set(matches: Vec<RuleMatch>, rule_layers: &CategoryRuleLayers) -> Vec<RuleMatch> {
     let disabled: HashSet<&str> = matches
         .iter()
         .flat_map(|matched| {
@@ -782,9 +889,41 @@ pub(crate) fn explain_classification(
     description: &str,
     layers: &CategoryRuleLayers,
 ) -> (ItemClassification, Vec<RuleMatch>) {
-    let mut matches = resolve_matches(description, layers);
-    let classification = classification_from_matches(&matches, layers);
+    let (classification, mut matches) = classify_receipt_description(description, layers, None);
     matches.sort_by(|a, b| compare_match_rank(b, a));
+    (classification, matches)
+}
+
+/// Shared scan/explanation path. User-typed renames use `classify_item` instead.
+pub(crate) fn classify_receipt_description(
+    description: &str,
+    layers: &CategoryRuleLayers,
+    vocab: Option<&crate::merchant_vocab::MerchantVocab>,
+) -> (ItemClassification, Vec<RuleMatch>) {
+    let mut raw = find_all_matches(description, layers);
+    let mut matches = resolve_match_set(raw.clone(), layers);
+    let mut classification = classification_from_matches(&matches, layers);
+    if classification.account.is_none() {
+        if let Some(expanded) =
+            vocab.and_then(|v| crate::merchant_vocab::expand_for_classification(description, v))
+        {
+            raw = find_all_matches(&expanded, layers);
+            matches = resolve_match_set(raw.clone(), layers);
+            classification = classification_from_matches(&matches, layers);
+        }
+    }
+    if classification.account.is_none() {
+        for candidate in prefix_fallback_matches(description, layers) {
+            if !raw.iter().any(|m| m.rule_index == candidate.rule_index) {
+                raw.push(candidate);
+            }
+        }
+        // Preserve rule order for tag/display ordering, and honor subtraction
+        // from literal matches even when those matches claim no account.
+        raw.sort_by_key(|m| m.rule_index);
+        matches = resolve_match_set(raw, layers);
+        classification = classification_from_matches(&matches, layers);
+    }
     (classification, matches)
 }
 
@@ -1366,3 +1505,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "categories_prefix_tests.rs"]
+mod prefix_tests;
