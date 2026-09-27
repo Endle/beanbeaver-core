@@ -716,6 +716,59 @@ fn subtext_price_stays_with_unclaimed_item_above() {
 }
 
 #[test]
+fn deal_subtext_that_lost_its_dollar_sign_is_not_priced() {
+    // Foody Mart prints each deal under its item as
+    // "(<name> <size>)@<unit>(<N>/$<price>)". The deal tail sits at the right
+    // edge and fades first. OCR has returned it as "(15)@5.99(1/82.98" (the `$`
+    // read as `8`, the closing paren lost) and with the `$` dropped outright.
+    // Without `/$` the row stopped reading as a deal, so its tail priced a
+    // phantom item: an 82.98 line on a 210.64 receipt. The `@`→`0` form of
+    // the bridge must be covered too.
+    for deal_row in ["(15)@5.99(1/82.98", "(15)@5.99(1/2.98", "(15)05.99(1/82.98"] {
+        let lines: Vec<String> = [
+            "BBY - Frozen Snakehead Fi 2.98",
+            deal_row,
+            "1 @ $2.98",
+            "BBY - Frozen Snakehead Fi 2.98",
+            "(1)@5.99(1/$2.98)",
+            "1 @ $2.98",
+            "Sub Total 210.64",
+            "Total after Tax 210.64",
+        ]
+        .iter()
+        .map(|line| line.to_string())
+        .collect();
+        let summary_amounts = HashSet::from([Money::from_cents(21064)]);
+
+        let outcome = extract_text_items(&lines, &summary_amounts);
+        let observed: Vec<(String, Money)> = outcome
+            .items
+            .into_iter()
+            .map(|item| (item.description, item.price))
+            .collect();
+        assert_eq!(
+            observed,
+            vec![
+                (
+                    "BBY - Frozen Snakehead Fi".to_string(),
+                    Money::from_cents(298)
+                ),
+                (
+                    "BBY - Frozen Snakehead Fi".to_string(),
+                    Money::from_cents(298)
+                ),
+            ],
+            "{deal_row}"
+        );
+        assert!(
+            outcome.warnings.is_empty(),
+            "{deal_row}: {:?}",
+            outcome.warnings
+        );
+    }
+}
+
+#[test]
 fn multiline_name_continuation_does_not_block_orphan_pairing() {
     // Foody Mart 2026-04-24_foody_mart_70_68: Natrel's name wraps onto a
     // second, unclaimed row. The consumed-above walk must read through
