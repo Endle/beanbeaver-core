@@ -220,6 +220,22 @@ The FFI `ReceiptItem` carries `tag_path` explicitly so a scan/reformat round-tri
 preserves the winning path even when another rule adds an unrelated semantic tag.
 Consumer migration details are in [receipt-contract-migration.md](receipt-contract-migration.md).
 
+Scanned descriptions use printed-text matching, then merchant-vocabulary
+expansion, then a truncated-prefix fallback, stopping as soon as an account is
+found. Prefix candidates must consume the end of the original description,
+start at a word boundary, contain at least four ASCII letters/digits, and be
+proper prefixes of keywords. The trimmed original line must contain at least
+22 characters before brand masking. All candidate accounts must agree;
+exact-only keywords count as rivals but cannot emit prefix matches. Surviving
+matches retain normal rule order, subtraction, account ranking and tag union.
+The calibration sweeps are documented beside the constants in `categories.rs`.
+
+`RuleBook::explain` includes prefix recovery and exposes it as non-exact through
+the existing FFI. Its description-only API cannot replay merchant-vocabulary
+lookup. User-typed renames use ordinary matching without either recovery stage.
+Successful recovery clears the usual uncategorized warning; there is no new
+warning kind or FFI field.
+
 Gift-card metadata and correction/serialization contracts are described in
 [gift-card-metadata.md](gift-card-metadata.md).
 

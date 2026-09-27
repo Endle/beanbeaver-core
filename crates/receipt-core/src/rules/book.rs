@@ -68,8 +68,8 @@ pub struct RuleMatchInfo {
     pub rule_index: usize,
     /// The keyword that actually hit — the specific reason this rule matched.
     pub matched_keyword: String,
-    /// False when the hit came from the fuzzy/bigram stage rather than a literal
-    /// or OCR-confusable substring match.
+    /// False for fuzzy/bigram and truncated-prefix hits; true for literal or
+    /// OCR-confusable substring matches.
     pub is_exact: bool,
     pub priority: i32,
     pub keyword_length: usize,
@@ -202,7 +202,10 @@ impl RuleBook {
     /// tags, plus every rule that fired, strongest first.
     ///
     /// The classification and explanation share one resolved match set, using
-    /// the same ranking and tag accumulation as the parser.
+    /// the same ranking and tag accumulation as the parser. Includes the
+    /// truncated-prefix fallback. This description-only query has no merchant
+    /// context, so it cannot replay merchant-vocabulary lookup; callers pass
+    /// the stored description, including any recovered display suffix.
     pub fn explain(&self, description: &str) -> ItemExplanation {
         let layers = &self.layers.category_rules;
         let (classification, resolved_matches) =
@@ -232,7 +235,7 @@ impl RuleBook {
                         .and_then(|rule| rule.id.clone()),
                     rule_index: matched.rule_index,
                     matched_keyword: matched.matched_keyword,
-                    is_exact: matched.is_exact,
+                    is_exact: matched.is_exact && !matched.is_prefix,
                     priority: matched.priority,
                     keyword_length: matched.keyword_length,
                     tags: matched.tags,
