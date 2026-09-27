@@ -14,6 +14,7 @@ pub fn extract_text_items(lines: &[String], summary_amounts: &HashSet<Money>) ->
         .iter()
         .map(|line| normalize_decimal_spacing(line))
         .map(|line| normalize_tax_code_ocr(&line))
+        .map(|line| strip_trailing_sale_marker(&line))
         .collect();
     // Track description lines already consumed by an earlier price so a later
     // price's forward/backward search can't grab the same description. Without

@@ -55,3 +55,11 @@ aliases = ["SHOPPERS DRUG MART"]
 [[families]]
 canonical = "PHARMASAVE"
 aliases = ["PHARMASAVE"]
+
+# Longo's prints its name both ways on one receipt: without the apostrophe in
+# the header ("Longos <branch> <phone>"), with it in the footer and the rewards
+# block. Folding the bare spelling onto the brand's own keeps one display name
+# whichever of the two the OCR happens to deliver.
+[[families]]
+canonical = "LONGO'S"
+aliases = ["LONGOS"]

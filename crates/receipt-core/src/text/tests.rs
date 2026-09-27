@@ -1212,3 +1212,46 @@ fn at_sign_read_as_a_zero_is_still_a_quantity_row() {
     assert!(!looks_like_quantity_expression("1 0 1.51"));
     assert!(!looks_like_quantity_expression("10 1.51"));
 }
+
+#[test]
+fn a_sale_marker_after_the_price_does_not_unprice_the_row() {
+    // Longo's prints `SALE` in a column of its own after the tax code. The
+    // price stopped being the row's tail, so the row read as unpriced and a
+    // one-item receipt parsed to no items at all.
+    let lines: Vec<String> = [
+        "GROCERY",
+        "MONSTER ABSOLUTE ZER $3.49 H SALE",
+        "Items Subtotal $3.49",
+        "Subtotal",
+        "H=HST 13% [$3.49] $0.45",
+        "Total $3.94",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let summary_amounts = HashSet::from([
+        Money::from_cents(349),
+        Money::from_cents(45),
+        Money::from_cents(394),
+    ]);
+    let crate::extraction::ExtractionOutcome { items, .. } =
+        extract_text_items(&lines, &summary_amounts);
+
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert!(items[0].description.starts_with("MONSTER ABSOLUTE ZER"));
+    assert_eq!(items[0].price, Money::from_cents(349));
+}
+
+#[test]
+fn only_a_sale_marker_behind_a_price_is_stripped() {
+    use super::rows::strip_trailing_sale_marker;
+    assert_eq!(
+        strip_trailing_sale_marker("MONSTER ABSOLUTE ZER $3.49 H SALE"),
+        "MONSTER ABSOLUTE ZER $3.49 H"
+    );
+    assert_eq!(strip_trailing_sale_marker("BREAD 2.99 SALE"), "BREAD 2.99");
+    // The word itself, anywhere but behind a price, is description text.
+    for line in ["GARAGE SALE", "SALE", "SALE BREAD 2.99", "BREAD 2.99 SALES"] {
+        assert_eq!(strip_trailing_sale_marker(line), line);
+    }
+}

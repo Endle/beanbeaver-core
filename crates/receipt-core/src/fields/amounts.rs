@@ -161,6 +161,25 @@ pub(super) fn re_total_savings_label() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"(?i)TOTAL\b.{0,15}?\bSAV(?:E|ED|ING|INGS)\b").unwrap())
 }
+/// A loyalty-programme statistic is never the grand total either.
+///
+/// Longo's prints its Thank You Rewards block under the payment lines —
+/// `Total spent $3.49` (the pre-tax spend the programme counts) and
+/// `Total points available 550`. Both are TOTAL-bearing lines *below* the real
+/// total, and [`extract_total_raw`] scans upward, so they are reached first:
+/// `Total spent` reported the $3.94 receipt as $3.49, and would have even with
+/// its amount on its own row — here the leaning amount column had lifted it
+/// onto `Bonus points earned` above, and the bare label took that instead.
+///
+/// Same shape as [`re_total_savings_label`], and checked the same way against
+/// every TOTAL-bearing line in the corpus: besides Longo's it matches only
+/// points lines (`Total Points Earned`, `TOTAL POINTS EARNED TODAY:`,
+/// `Total points in this transaction: 20`, `Total Eligible for Points: 19.28`,
+/// `Total Points/Points Totaux:13`) — none of them a grand total.
+pub(super) fn re_loyalty_total_label() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)TOTAL\b.{0,20}?\b(?:SPENT|POINTS?)\b").unwrap())
+}
 pub(super) fn extract_total_raw(lines: &[String]) -> i64 {
     const EXCLUDED_PHRASES: [&str; 4] = [
         "TOTAL DISCOUNT",
@@ -176,6 +195,9 @@ pub(super) fn extract_total_raw(lines: &[String]) -> i64 {
             continue;
         }
         if re_total_savings_label().is_match(&line_upper) {
+            continue;
+        }
+        if re_loyalty_total_label().is_match(&line_upper) {
             continue;
         }
         if EXCLUDED_PHRASES
