@@ -28,6 +28,36 @@ pub(super) fn normalize_tax_code_ocr(text: &str) -> String {
     }
 }
 
+/// Drop a `SALE` marker printed in its own column after an item's price.
+///
+/// Longo's flags a discounted line by printing `SALE` to the right of the tax
+/// code (`MONSTER ABSOLUTE ZER  $3.49 H  SALE`). The amount is then no longer
+/// the row's tail, so [`re_trailing_price`] — which anchors the price at the end
+/// of the line — reads the row as unpriced and the item vanishes. The marker
+/// carries nothing the price doesn't: the chain totals the discount separately
+/// (`Total Savings Today`).
+///
+/// Anchored on the price and tax code in front of it, so a description that
+/// merely contains the word (`GARAGE SALE`, a bare `SALE` banner row) is left
+/// alone.
+pub(super) fn strip_trailing_sale_marker(text: &str) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(&format!(
+            r"(\d+\.\d{{2}}-?\s*{TAX_FLAG_CLASS})\s+(?i:SALE)\s*$"
+        ))
+        .unwrap()
+    });
+    match re.captures(text) {
+        Some(caps) => {
+            let whole = caps.get(0).unwrap();
+            let kept = caps.get(1).unwrap();
+            format!("{}{}", &text[..whole.start()], kept.as_str().trim_end())
+        }
+        None => text.to_string(),
+    }
+}
+
 pub(super) fn alpha_ratio(value: &str) -> f64 {
     if value.is_empty() {
         return 0.0;

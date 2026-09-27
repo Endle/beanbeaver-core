@@ -474,6 +474,44 @@ fn the_savings_guard_does_not_swallow_a_real_total() {
 }
 
 #[test]
+fn a_loyalty_statistic_is_not_the_grand_total() {
+    // Longo's 2026-09-22: the rewards block sits under the payment lines and
+    // the scan runs upward, so `Total spent` was reached before `Total $3.94`.
+    // Its $3.49 had leaned up onto `Bonus points earned`, and the bare label
+    // took that row's amount: a $3.94 receipt reported $3.49.
+    let lines = vec![
+        "Items Subtotal $3.49".to_string(),
+        "Subtotal".to_string(),
+        "H=HST 13% [$3.49] $0.45".to_string(),
+        "Total $3.94".to_string(),
+        "TOTAL [Item count 1]".to_string(),
+        "MasterCard".to_string(),
+        "Total Savings Today 22.27% $1.00".to_string(),
+        "Longo's Thank You Rewards".to_string(),
+        "Base points earned".to_string(),
+        "Bonus points earned $3.49".to_string(),
+        "Total spent".to_string(),
+        "Points Redeemed today 550".to_string(),
+        "Total points available".to_string(),
+    ];
+
+    assert_eq!(extract_total(&lines), 394);
+}
+
+#[test]
+fn the_loyalty_guard_does_not_swallow_a_real_total() {
+    // Same boundary as the savings guard: a points line is skipped, the grand
+    // total beside it is not.
+    let lines = vec![
+        "TOTAL 95.00".to_string(),
+        "Total Eligible for Points: 90.00".to_string(),
+        "Total Points Earned".to_string(),
+    ];
+
+    assert_eq!(extract_total(&lines), 9_500);
+}
+
+#[test]
 fn discount_row_carrying_its_own_amount_still_allows_a_real_total() {
     // The guard above must stay narrow: a discount line that has its own
     // number is an ordinary row, and the total after it is genuine.

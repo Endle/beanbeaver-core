@@ -29,6 +29,12 @@ keywords = ["FOODY MART"]
 category = "Expenses:Food:Grocery"
 
 [[rules]]
+# The header prints the store without its apostrophe ("Longos <branch> <phone>"); the
+# banner and the rewards block print "LONGO'S".
+keywords = ["LONGO'S", "LONGOS"]
+category = "Expenses:Food:Grocery"
+
+[[rules]]
 keywords = ["TREDISH GROCERIES"]
 category = "Expenses:Food:Grocery"
 
