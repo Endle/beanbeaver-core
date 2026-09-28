@@ -175,7 +175,13 @@ id = "legacy_0003"
 # Pacific White S" (C&C, sized A91/110) and "Black Tie Raw P & D Whi" (Bestco).
 # Both used to reach Coffee through a fuzzy BLACK TEA. Corpus: bestco_fresh
 # 2026-09-26 $108.89 and 2026-03-21 $140.89, c_c_supermarket 2026-01-30.
-keywords = ["SHRIMP", "PRAWN", "LOBSTER", "CRAB", "MUSSEL", "CLAM", "OYSTER", "SQUID", "OCTOPUS", "CALAMARI", "VANNAMEI", "BLACK TIGER", "BLACK TIE"]
+#
+# "PACIFIC WHITE" is VANNAMEI's common name (Pacific white shrimp), and the same
+# column cut leaves it as the whole product word: Bestco's "*Blue Ocean Pacific
+# White" (去头白虾) and Jin Lian's two-row "Pacific white" / "shrimp71/90". The
+# brand in front varies, so the variety is the keyword. Corpus: bestco_fresh
+# 2026-09-23 $84.02.
+keywords = ["SHRIMP", "PRAWN", "LOBSTER", "CRAB", "MUSSEL", "CLAM", "OYSTER", "SQUID", "OCTOPUS", "CALAMARI", "VANNAMEI", "BLACK TIGER", "BLACK TIE", "PACIFIC WHITE"]
 tags = ["grocery/seafood/shrimp"]
 priority = 0
 exact_only = false
@@ -703,6 +709,24 @@ id = "dim_sum"
 # is plausible — it would pick up `grocery/frozen` from the rule above and still
 # land here for the account, which reads correctly either way.)
 keywords = ["DIM SUM"]
+tags = ["grocery/prepared_meal"]
+priority = 0
+exact_only = false
+
+[[rules]]
+id = "dough_stick"
+# 油条 (youtiao), the fried breakfast cruller, rung at Bestco's dim sum counter:
+# "&& Dim Sum" / "Deep Fried Dough Stick" / "2 @ $1.79 3.58h". The `dim_sum`
+# evidence above holds for it line for line — the only taxed line on the
+# receipt, and the receipt's only tax is `hst5% 0.18`, which is 5% of 3.58 —
+# so it is ready-to-eat, not a bakery loaf. Both receipts that carry it ring it
+# under the Dim Sum department (bestco_fresh 2026-06-25 $183.77 at 1.79h, and
+# 2026-09-23 $84.02), but the banner is a separate row the classifier never
+# sees, so the item needs its own keyword.
+#
+# "DOUGH STICK" rather than "FRIED DOUGH": 麻花 prints as "Fried Dough Twist",
+# a packaged snack, and SACHIMA's comment above describes itself the same way.
+keywords = ["DOUGH STICK"]
 tags = ["grocery/prepared_meal"]
 priority = 0
 exact_only = false
