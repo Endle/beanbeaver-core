@@ -273,12 +273,20 @@ fn is_code_stub_label(text: &str) -> bool {
 /// must not steal the first item's price when the right column leans up
 /// (Jin Lian unknown-date_jin_lian_food_39_99: the header overlapped
 /// FESHRIMP PASTE's $11.92 at ~0.32 and claimed it, dropping the item).
+///
+/// `.get(..11)`, never `[..11]`: this runs on raw recognized text, and a
+/// multi-byte glyph straddling byte 11 made the slice panic and failed the
+/// whole scan. The recognizer's dictionary has `×` and emitted `‡` on a Foody
+/// Mart capture.
 fn is_transaction_id_label(text: &str) -> bool {
     let trimmed = text.trim();
-    if trimmed.len() < 11 || !trimmed[..11].eq_ignore_ascii_case("TRANSACTION") {
+    let Some(rest) = trimmed
+        .get(..11)
+        .filter(|head| head.eq_ignore_ascii_case("TRANSACTION"))
+        .map(|_| trimmed[11..].trim_start_matches([' ', '#', ':']).trim())
+    else {
         return false;
-    }
-    let rest = trimmed[11..].trim_start_matches([' ', '#', ':']).trim();
+    };
     rest.len() >= 4 && rest.chars().all(|ch| ch.is_ascii_digit())
 }
 
@@ -1751,6 +1759,24 @@ mod tests {
             rendered.contains(&"FESHRIMP PASTE150g $11.92".to_string()),
             "{rendered:?}"
         );
+    }
+
+    #[test]
+    fn transaction_label_check_survives_a_multibyte_glyph_at_byte_11() {
+        // Raw recognized text, so any glyph can sit across the 11-byte check.
+        // The first is the Foody Mart deal row OCR returned on a real capture:
+        // `‡` spans bytes 9..12, and the old `trimmed[..11]` panicked and
+        // failed the whole scan. The others put CJK and `×` in the same spot.
+        for text in [
+            "(E#-E3X##\u{2021}# 12PCS)@9.99(2/$12.98)",
+            "(\u{4F55}\u{6C0F}\u{8E66}\u{8E66}\u{9B5A})@5.99(1/$2.98)",
+            "Transactio\u{D7} 123456",
+        ] {
+            assert!(!is_transaction_id_label(text), "{text}");
+        }
+        assert!(is_transaction_id_label("Transaction 037972"));
+        assert!(is_transaction_id_label("TRANSACTION #1234"));
+        assert!(!is_transaction_id_label("Transaction"));
     }
 
     #[test]
