@@ -165,6 +165,12 @@ Models expected in `model_dir`:
 
 Scans on one session are serialized (`Mutex` around the engine).
 
+Encoded image bytes are decoded through `receipt_image::decode_oriented_rgb`,
+which applies EXIF orientation before resize, padding and OCR. The receipt's
+SHA-256 identity still hashes the original received bytes. The model-backed
+boundary regression compares an EXIF-rotated JPEG with identical upright pixels:
+`cargo test --release -p bb-receipt-ffi --test orientation -- --ignored`.
+
 ## Data contracts
 
 ### OCR detection (into `receipt-core`)

@@ -55,7 +55,7 @@ pub fn preprocess_image_bytes(
 
 /// Decode + apply EXIF orientation, returning a canonical RGB frame — mirrors
 /// `ImageOps.exif_transpose` followed by `convert("RGB")`.
-fn decode_oriented_rgb(bytes: &[u8]) -> Result<RgbImage, PreprocessError> {
+pub fn decode_oriented_rgb(bytes: &[u8]) -> Result<RgbImage, PreprocessError> {
     let reader = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|e| PreprocessError::Decode(e.to_string()))?;
@@ -134,6 +134,101 @@ mod tests {
     fn dims(jpeg: &[u8]) -> (u32, u32) {
         let img = image::load_from_memory(jpeg).unwrap().to_rgb8();
         (img.width(), img.height())
+    }
+
+    #[test]
+    fn decodes_all_exif_orientations_before_returning_pixels() {
+        let src = RgbImage::from_fn(3, 2, |x, y| {
+            Rgb([(x * 70) as u8, (y * 100) as u8, ((x + y) * 40) as u8])
+        });
+        let plain = image::load_from_memory(&jpeg_of(&src)).unwrap().to_rgb8();
+        // Pixel indices in the decoded 3x2 raster, in display order. The
+        // transposed orientations must swap dimensions as well as pixels.
+        let cases = [
+            (1, (3, 2), [0, 1, 2, 3, 4, 5]),
+            (2, (3, 2), [2, 1, 0, 5, 4, 3]),
+            (3, (3, 2), [5, 4, 3, 2, 1, 0]),
+            (4, (3, 2), [3, 4, 5, 0, 1, 2]),
+            (5, (2, 3), [0, 3, 1, 4, 2, 5]),
+            (6, (2, 3), [3, 0, 4, 1, 5, 2]),
+            (7, (2, 3), [5, 2, 4, 1, 3, 0]),
+            (8, (2, 3), [2, 5, 1, 4, 0, 3]),
+        ];
+        for (orientation, dimensions, indices) in cases {
+            // Little-endian TIFF with one SHORT Orientation entry.
+            let exif = vec![
+                b'I',
+                b'I',
+                42,
+                0,
+                8,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0x12,
+                1,
+                3,
+                0,
+                1,
+                0,
+                0,
+                0,
+                orientation,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ];
+            let mut bytes = Vec::new();
+            let mut encoder = JpegEncoder::new_with_quality(&mut bytes, 95);
+            encoder.set_exif_metadata(exif).unwrap();
+            encoder.encode_image(&src).unwrap();
+            let actual = decode_oriented_rgb(&bytes).unwrap();
+            assert_eq!(actual.dimensions(), dimensions, "EXIF {orientation}");
+            let expected: Vec<_> = indices
+                .iter()
+                .map(|i| plain.get_pixel(i % 3, i / 3))
+                .collect();
+            assert_eq!(
+                actual.pixels().collect::<Vec<_>>(),
+                expected,
+                "EXIF {orientation}"
+            );
+        }
+    }
+
+    #[test]
+    fn untagged_images_keep_their_decoded_pixels() {
+        let src = DynamicImage::ImageRgb8(RgbImage::from_fn(3, 2, |x, y| {
+            Rgb([(x * 70) as u8, (y * 100) as u8, 40])
+        }));
+        for format in [
+            image::ImageFormat::Jpeg,
+            image::ImageFormat::Png,
+            image::ImageFormat::WebP,
+        ] {
+            let mut bytes = Cursor::new(Vec::new());
+            src.write_to(&mut bytes, format).unwrap();
+            let bytes = bytes.into_inner();
+            assert_eq!(
+                decode_oriented_rgb(&bytes).unwrap(),
+                image::load_from_memory(&bytes).unwrap().to_rgb8(),
+                "{format:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_image_bytes_return_decode_error() {
+        assert!(matches!(
+            decode_oriented_rgb(b"not an image"),
+            Err(PreprocessError::Decode(_))
+        ));
     }
 
     #[test]
