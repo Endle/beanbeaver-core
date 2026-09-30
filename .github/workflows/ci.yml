@@ -187,3 +187,8 @@ jobs:
       # a fixed allowlist that must match merchant/total within tolerant matchers.
       - name: Public live E2E (on-device OCR)
         run: cargo test -p scan --test public_live_e2e -- --nocapture
+
+      # Pixel-based scan tests cannot catch an encoded-image boundary bypass.
+      # Explicitly run this model-backed FFI test (ignored in model-free runs).
+      - name: FFI image orientation
+        run: cargo test --release -p bb-receipt-ffi --test orientation -- --ignored --nocapture

@@ -714,9 +714,8 @@ impl OcrSession {
         use std::time::Instant;
 
         let t_decode = Instant::now();
-        let img = image::load_from_memory(&image_bytes)
-            .map_err(|e| ScanError::ImageDecode { msg: e.to_string() })?
-            .to_rgb8();
+        let img = receipt_image::decode_oriented_rgb(&image_bytes)
+            .map_err(|e| ScanError::ImageDecode { msg: e.to_string() })?;
         let decode_ms = t_decode.elapsed().as_secs_f64() * 1e3;
 
         let image_sha256 = sha256_hex(&image_bytes);
