@@ -15,7 +15,7 @@ pub struct MerchantDetails {
     pub region: Option<String>,
     /// Postal code as a separate value, normalized for lookup when recognized.
     pub postal_code: Option<String>,
-    /// Phone number as printed, apart from surrounding whitespace.
+    /// Merchant contact number as printed, excluding customer-survey hotlines.
     pub phone_number: Option<String>,
     /// Branch/store identifier. A string because leading zeroes and letters are meaningful.
     pub store_number: Option<String>,
@@ -26,9 +26,56 @@ pub struct MerchantDetails {
 fn canadian_postal_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?i)\b([ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z])[ -]?(\d[ABCEGHJ-NPRSTV-Z]\d)\b")
+        Regex::new(r"(?i)(?:\b|\b(?:ALBERTA|BRITISH COLUMBIA|MANITOBA|NEW BRUNSWICK|NEWFOUNDLAND(?: AND LABRADOR)?|NOVA SCOTIA|ONTARIO|PRINCE EDWARD ISLAND|QUEBEC|SASKATCHEWAN|YUKON|NORTHWEST TERRITORIES|NUNAVUT))([ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z])[ _-]?(\d[ABCEGHJ-NPRSTV-Z]\d)\b")
             .expect("valid Canadian postal-code regex")
     })
+}
+
+/// A single OCR-confused digit is recoverable only inside a Canadian postal
+/// pattern, after an explicit Canadian province. Letter positions are never
+/// repaired: turning their damaged digits into letters can invent valid but
+/// wrong codes. Multiple substitutions can turn ordinary words into codes.
+fn postal_with_confused_digit(line: &str) -> Option<(String, std::ops::Range<usize>)> {
+    static CODE: OnceLock<Regex> = OnceLock::new();
+    static PROVINCE: OnceLock<Regex> = OnceLock::new();
+    let code = CODE.get_or_init(|| {
+        Regex::new(r"(?i)\b([ABCEGHJ-NPRSTVXY][0-9OIL][ABCEGHJ-NPRSTV-Z])[ _-]?([0-9OIL][ABCEGHJ-NPRSTV-Z][0-9OIL])\b").unwrap()
+    });
+    let province = PROVINCE.get_or_init(|| {
+        Regex::new(r"(?i)\b(?:AB|BC|MB|NB|NL|NS|NT|NU|ON|PE|QC|SK|YT|ALBERTA|BRITISH COLUMBIA|MANITOBA|NEW BRUNSWICK|NEWFOUNDLAND(?: AND LABRADOR)?|NOVA SCOTIA|ONTARIO|PRINCE EDWARD ISLAND|QUEBEC|SASKATCHEWAN|YUKON|NORTHWEST TERRITORIES|NUNAVUT)[ ,]*$").unwrap()
+    });
+    for captures in code.captures_iter(line) {
+        let first = captures.get(1)?;
+        let last = captures.get(2)?;
+        if !province.is_match(&line[..first.start()]) {
+            continue;
+        }
+        let raw = format!("{}{}", first.as_str(), last.as_str()).to_ascii_uppercase();
+        let mut replacements = 0;
+        let corrected: String = raw
+            .chars()
+            .enumerate()
+            .map(|(index, ch)| {
+                if index % 2 == 1 && !ch.is_ascii_digit() {
+                    replacements += 1;
+                    if ch == 'O' {
+                        '0'
+                    } else {
+                        '1'
+                    }
+                } else {
+                    ch
+                }
+            })
+            .collect();
+        if replacements == 1 {
+            return Some((
+                format!("{} {}", &corrected[..3], &corrected[3..]),
+                first.start()..last.end(),
+            ));
+        }
+    }
+    None
 }
 
 fn us_zip_re() -> &'static Regex {
@@ -67,7 +114,17 @@ fn phone_in(value: &str) -> Option<regex::Match<'_>> {
     let looks_like_compact_date = digits_only
         && printed.len() == 10
         && (printed.starts_with("19") || printed.starts_with("20"));
-    (formatted || labelled || !looks_like_compact_date).then_some(found)
+    // A product barcode can have exactly the same digits as a NANP number.
+    // Bare numbers need their own line; embedded numbers need formatting or
+    // a phone label. Keep compact, unlabelled header phone lines working.
+    let standalone = value.trim() == printed && !looks_like_compact_date;
+    (formatted || labelled || standalone).then_some(found)
+}
+
+fn survey_invitation(value: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)\b(?:SURVEY|FEEDBACK)\b|\bTELL\s+US\s+HOW\b").unwrap())
+        .is_match(value)
 }
 
 fn store_re() -> &'static Regex {
@@ -137,7 +194,21 @@ fn street_in(line: &str) -> Option<(String, std::ops::Range<usize>)> {
         return None;
     }
     let found = street_re().find(line)?;
-    Some((found.as_str().trim().to_string(), found.range()))
+    // A labelled unit belongs to the street, not to the following city.
+    // Match it only immediately after a recognized street so ordinary product
+    // text or a bare city cannot supply an apartment identifier.
+    static UNIT: OnceLock<Regex> = OnceLock::new();
+    let unit_re = UNIT.get_or_init(|| {
+        Regex::new(r"(?i)^\s*,?\s*(?:UNIT|SUITE|STE\.?)\s+#?[A-Z0-9]+(?:-[A-Z0-9]+)?\b")
+            .expect("valid address-unit regex")
+    });
+    let end = unit_re
+        .find(&line[found.end()..])
+        .map_or(found.end(), |unit| found.end() + unit.end());
+    Some((
+        line[found.start()..end].trim().to_string(),
+        found.start()..end,
+    ))
 }
 
 fn street_like(line: &str) -> bool {
@@ -159,13 +230,19 @@ fn add_raw(raw_lines: &mut Vec<String>, line: &str) {
 
 fn postal_in(line: &str) -> Option<(String, std::ops::Range<usize>)> {
     if let Some(captures) = canadian_postal_re().captures(line) {
-        let whole = captures.get(0)?;
+        let first = captures.get(1)?;
+        let last = captures.get(2)?;
         let postal = format!(
             "{} {}",
-            captures.get(1)?.as_str().to_ascii_uppercase(),
-            captures.get(2)?.as_str().to_ascii_uppercase()
+            first.as_str().to_ascii_uppercase(),
+            last.as_str().to_ascii_uppercase()
         );
-        return Some((postal, whole.range()));
+        // Keep a fused province in the address context. Only the code is
+        // removed when extracting the city and region from the same line.
+        return Some((postal, first.start()..last.end()));
+    }
+    if let Some(postal) = postal_with_confused_digit(line) {
+        return Some(postal);
     }
     let found = us_zip_re().find(line)?;
     let prefix = line[..found.start()].trim_end();
@@ -183,15 +260,26 @@ fn city_region_re() -> &'static Regex {
     })
 }
 
-fn remove_phone(value: &str) -> String {
-    let Some(found) = phone_in(value) else {
-        return value.to_string();
-    };
-    format!("{} {}", &value[..found.start()], &value[found.end()..])
+fn remove_contact_metadata(value: &str) -> String {
+    let without_phone = phone_in(value).map_or_else(
+        || value.to_string(),
+        |found| format!("{} {}", &value[..found.start()], &value[found.end()..]),
+    );
+    // Grouping may join the contact/registration row to the address row.
+    // Only a labelled registration identifier is removable; arbitrary digits
+    // remain evidence against treating the rest of a line as a city.
+    static TAX_ID: OnceLock<Regex> = OnceLock::new();
+    TAX_ID
+        .get_or_init(|| {
+            Regex::new(r"(?i)\b(?:HST|GST)\s*#\s*\d{9}(?:RT\d{4})?\b")
+                .expect("valid tax-registration regex")
+        })
+        .replace_all(&without_phone, " ")
+        .into_owned()
 }
 
 fn city_region_in(value: &str) -> (Option<String>, Option<String>) {
-    let without_phone = remove_phone(value);
+    let without_phone = remove_contact_metadata(value);
     let cleaned = without_phone
         .trim_matches(|c: char| c.is_ascii_whitespace() || c == ',' || c == '-')
         .trim();
@@ -226,7 +314,7 @@ fn city_region_in(value: &str) -> (Option<String>, Option<String>) {
 }
 
 fn address_in(value: &str) -> (Option<String>, Option<String>, Option<String>) {
-    let without_phone = remove_phone(value);
+    let without_phone = remove_contact_metadata(value);
     let Some((street, range)) = street_in(&without_phone) else {
         let (city, region) = city_region_in(&without_phone);
         return (None, city, region);
@@ -249,8 +337,19 @@ pub fn extract_merchant_details(lines: &[String]) -> MerchantDetails {
     let mut out = MerchantDetails::default();
 
     // Phone semantics are intentionally deterministic when a receipt prints
-    // several numbers: keep the first valid NANP number in receipt order.
+    // several numbers: keep the first contact number in receipt order. A
+    // customer-survey invitation often wraps onto the following line; that
+    // hotline belongs to the survey, not the store.
+    let mut previous = None;
     for line in lines.iter().map(|line| line.trim()) {
+        if line.is_empty() {
+            continue;
+        }
+        let survey = survey_invitation(line) || previous.is_some_and(survey_invitation);
+        previous = Some(line);
+        if survey {
+            continue;
+        }
         if let Some(found) = phone_in(line) {
             out.phone_number = Some(found.as_str().trim().to_string());
             add_raw(&mut out.raw_lines, line);
@@ -493,6 +592,97 @@ mod tests {
     }
 
     #[test]
+    fn postal_digit_recovery_requires_province_and_one_numeric_slot() {
+        for code in ["AIA 1A1", "A1A IA1", "A1A 1AI", "A1A lA1"] {
+            let found = extract_merchant_details(&lines(&format!("Exampleville, Ontario, {code}")));
+            assert_eq!(found.postal_code.as_deref(), Some("A1A 1A1"));
+            assert_eq!(found.city.as_deref(), Some("Exampleville"));
+            assert_eq!(found.region.as_deref(), Some("Ontario"));
+        }
+        assert_eq!(
+            postal_in("Exampleville ON A1A OA1").map(|p| p.0),
+            Some("A1A 0A1".to_string())
+        );
+        for text in [
+            "SKU AIA 1A1",
+            "Exampleville ON AIA IA1",
+            "Exampleville ON A1A 111",
+            "NOW HIRING",
+            "Exampleville ON LAC 6Z1",
+            "Exampleville CN AIA 1A1",
+        ] {
+            assert_eq!(postal_in(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn labelled_registration_does_not_hide_a_city_on_a_joined_line() {
+        let found = extract_merchant_details(&lines(
+            "456 Maple Ave\n(416)555-0123 HST#123456789RT0001 Exampleville, Ontario, A1A 1A1",
+        ));
+        assert_eq!(found.city.as_deref(), Some("Exampleville"));
+        assert_eq!(found.region.as_deref(), Some("Ontario"));
+        assert_eq!(found.phone_number.as_deref(), Some("(416)555-0123"));
+        assert_eq!(
+            city_region_in("123456789RT0001 Exampleville, Ontario"),
+            (None, None)
+        );
+        assert_eq!(
+            city_region_in("HST#123 Exampleville, Ontario"),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn postal_codes_accept_separator_noise_and_fused_province_names() {
+        for address in [
+            "Exampleville, OntarioA1A 1A1",
+            "Exampleville, Ontario, A1A_1A1",
+        ] {
+            let found = extract_merchant_details(&lines(address));
+            assert_eq!(found.postal_code.as_deref(), Some("A1A 1A1"));
+            assert_eq!(found.city.as_deref(), Some("Exampleville"));
+            assert_eq!(found.region.as_deref(), Some("Ontario"));
+        }
+        assert_eq!(postal_in("PRODUCTA1A 1A1"), None);
+        assert_eq!(postal_in("OntarioA1A 1A10"), None);
+        assert_eq!(postal_in("Exampleville, Ontario, AAA 1A1"), None);
+    }
+
+    #[test]
+    fn labelled_unit_stays_with_the_street() {
+        for unit in ["Unit A", "Suite 204", "Ste. #B-12"] {
+            let street = format!("456 Maple Ave {unit}");
+            let found = extract_merchant_details(&lines(&format!(
+                "EXAMPLE MART\n{street}\nExampleville ON A1A 1A1"
+            )));
+            assert_eq!(found.street_address.as_deref(), Some(street.as_str()));
+            assert_eq!(found.city.as_deref(), Some("Exampleville"));
+            assert_eq!(found.region.as_deref(), Some("ON"));
+        }
+        let found = extract_merchant_details(&lines(
+            "EXAMPLE MART\n456 Maple Ave Unit A\nExamplevi11e ON A1A 1A1",
+        ));
+        assert_eq!(
+            found.street_address.as_deref(),
+            Some("456 Maple Ave Unit A")
+        );
+        assert_eq!(found.city, None);
+    }
+
+    #[test]
+    fn unit_suffix_stops_before_same_line_city() {
+        let found =
+            extract_merchant_details(&lines("456 Maple Ave, Unit A, Exampleville ON A1A 1A1"));
+        assert_eq!(
+            found.street_address.as_deref(),
+            Some("456 Maple Ave, Unit A")
+        );
+        assert_eq!(found.city.as_deref(), Some("Exampleville"));
+        assert_eq!(street_in("UNIT A 2.99"), None);
+    }
+
+    #[test]
     fn extracts_combined_canadian_address_and_branch_details() {
         let found = extract_merchant_details(&lines(
             "T&T SUPERMARKET\n7070 Warden Ave., Markham, ON L3R 5Y2\nStore: 10011\nTel (905) 513-8818",
@@ -617,5 +807,49 @@ mod tests {
         assert_eq!(found.city.as_deref(), Some("Markham"));
         assert_eq!(found.phone_number.as_deref(), Some("(905) 887-4366"));
         assert_eq!(found.store_number.as_deref(), Some("3875"));
+    }
+
+    #[test]
+    fn product_barcodes_are_not_phone_numbers() {
+        let found = extract_merchant_details(&lines(
+            "GROCERY STORE\n19055550123 CANNED CORN 5.00\nTOTAL 5.00",
+        ));
+        assert_eq!(found.phone_number, None);
+    }
+
+    #[test]
+    fn compact_phone_numbers_need_a_label_or_their_own_line() {
+        for printed in ["9055550123", "19055550123"] {
+            for line in [printed.to_string(), format!("Tel: {printed}")] {
+                let found = extract_merchant_details(&lines(&line));
+                assert_eq!(found.phone_number.as_deref(), Some(printed));
+            }
+        }
+        assert_eq!(phone_in("2026093012"), None);
+    }
+
+    #[test]
+    fn survey_hotlines_are_not_merchant_contact_numbers() {
+        for text in [
+            "GROCERY STORE\nTell us how we did today! Visit\nexample.test or call 1-800-555-0123",
+            "GROCERY STORE\nTell us how we did today! Visit\n\nexample.test or ca11 1-800-555-0123",
+            "GROCERY STORE\nSurvey: call 1-800-555-0123",
+            "GROCERY STORE\nGive feedback\nCall 1-800-555-0123",
+        ] {
+            let found = extract_merchant_details(&lines(text));
+            assert_eq!(found.phone_number, None, "{text}");
+        }
+    }
+
+    #[test]
+    fn survey_filter_keeps_store_contacts_and_continues_after_the_invitation() {
+        let found = extract_merchant_details(&lines(
+            "Store phone: (905) 555-0123\nSurvey: 1-800-555-0124",
+        ));
+        assert_eq!(found.phone_number.as_deref(), Some("(905) 555-0123"));
+        let found = extract_merchant_details(&lines(
+            "Survey: 1-800-555-0124\nThank you\nStore phone: 1-800-555-0123",
+        ));
+        assert_eq!(found.phone_number.as_deref(), Some("1-800-555-0123"));
     }
 }
