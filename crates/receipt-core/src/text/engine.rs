@@ -1,7 +1,9 @@
 //! Ordered text extraction stages. Row claims remain owned by this loop.
 use super::pairing::*;
 use super::patterns::*;
-use super::quantity::{looks_like_quantity_expression, qty_row_owns_trailing_total};
+use super::quantity::{
+    looks_like_quantity_expression, qty_row_owns_trailing_total, recover_repeated_multi_buy_total,
+};
 use super::reconcile::*;
 use super::rows::*;
 use super::tokens::*;
@@ -16,6 +18,14 @@ pub fn extract_text_items(lines: &[String], summary_amounts: &HashSet<Money>) ->
         .map(|line| normalize_tax_code_ocr(&line))
         .map(|line| strip_trailing_sale_marker(&line))
         .collect();
+    let (normalized_lines, price_corrections): (Vec<String>, Vec<Option<String>>) =
+        normalized_lines
+            .into_iter()
+            .map(|line| match recover_repeated_multi_buy_total(&line) {
+                Some((corrected, evidence)) => (corrected, Some(evidence)),
+                None => (line, None),
+            })
+            .unzip();
     // Track description lines already consumed by an earlier price so a later
     // price's forward/backward search can't grab the same description. Without
     // this, a "weak inline desc" line like "(1kg) 16.99" forces a backward walk
@@ -48,6 +58,7 @@ pub fn extract_text_items(lines: &[String], summary_amounts: &HashSet<Money>) ->
             continue;
         }
 
+        let deferred_start = deferred.len();
         let is_qty_line = looks_like_quantity_expression(line);
         let has_trailing_total =
             re_trailing_total_presence().is_match(line) || qty_row_owns_trailing_total(line);
@@ -141,6 +152,17 @@ pub fn extract_text_items(lines: &[String], summary_amounts: &HashSet<Money>) ->
             }
         } else if let Some(outcome) = unpriced_line_outcome(line) {
             deferred.push(outcome);
+        }
+        if deferred[deferred_start..]
+            .iter()
+            .any(|outcome| matches!(outcome, DeferredTextOutcome::Item(_)))
+        {
+            if let Some(evidence) = &price_corrections[i] {
+                deferred.push(DeferredTextOutcome::Warning(
+                    crate::common::ReceiptWarningKind::PriceAutoCorrected,
+                    evidence.clone(),
+                ));
+            }
         }
     }
 

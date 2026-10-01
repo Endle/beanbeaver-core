@@ -364,9 +364,9 @@ pub(super) fn drop_prices_above_cap(
 }
 
 /// A `N/for` multi-buy row whose total OCR mangled into a token carrying
-/// letters ("3/for 5.0O"). The amount is unrecoverable — there is no second
-/// reading of it anywhere on the receipt — so the only honest output is to say
-/// an item may have been missed here.
+/// letters ("3/for 5.0O"), without an independently corroborating offer.
+/// Repeated offers are handled before the loop; for the remaining rows there
+/// is no supported recovery, so report that an item may have been missed.
 ///
 /// Two arms of the loop reach this, and they used to carry a copy each: a
 /// `/for` row is a quantity expression whether or not its mangled tail happened

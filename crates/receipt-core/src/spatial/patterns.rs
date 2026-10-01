@@ -226,9 +226,11 @@ pub(crate) fn re_leading_short_code() -> &'static Regex {
 // single produce label, once per weighing. Never descriptions; a contiguous
 // run of them means the label above is shared by several priced weighings.
 // Prefix match: OCR mangles the tail freely ("Grosks", "Gros ed ...").
+// A damaged kg unit is accepted only before the explicit scale labels,
+// not as a general product-size or quantity abbreviation.
 pub(crate) fn re_weight_info_line() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)^-?\d+(?:[.,]\d+)?\s*kg\s+(?:gro|tare|net)").unwrap())
+    RE.get_or_init(|| Regex::new(r"(?i)^-?\d+(?:[.,]\d+)?\s*k[g9y]\s+(?:gro|tare|net)").unwrap())
 }
 
 // "<weight> kg @ $<unit>/kg" with both numbers capturable, to check whether a

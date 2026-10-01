@@ -72,6 +72,56 @@ fn word(text: &str, left: f64, top: f64, right: f64, bottom: f64) -> OcrWord {
 }
 
 #[test]
+fn retains_repeated_signed_adjustments_with_damaged_numeric_references() {
+    let rows = [
+        ("1234567 YOGURT", "8.99"),
+        ("2345678 T D/1234567", "2.00-"),
+        ("1234567 YOGURT", "8.99"),
+        ("2345678 D/1234567", "2.00-"),
+    ];
+    let lines = rows
+        .iter()
+        .enumerate()
+        .map(|(i, (description, price))| {
+            let y = 0.2 + i as f64 * 0.04;
+            line(
+                &format!("{description} {price}"),
+                vec![
+                    word(description, 0.1, y, 0.5, y + 0.02),
+                    word(price, 0.8, y, 0.9, y + 0.02),
+                ],
+            )
+        })
+        .collect();
+    let outcome = extract_spatial_items(&OcrDocument { lines });
+    let prices: Vec<_> = outcome.items.iter().map(|item| item.price).collect();
+    assert_eq!(prices, [899, -200, 899, -200].map(Money::from_cents));
+    assert!(outcome.items[1].description.ends_with("T D/1234567"));
+    assert!(outcome.items[3].description.ends_with("D/1234567"));
+}
+
+#[test]
+fn signed_adjustment_waiver_keeps_metadata_and_unsigned_codes_filtered() {
+    use super::rows::is_valid_item_line;
+    use super::types::ParsedLine;
+
+    for (description, price) in [
+        ("2345678 D/1234567", "2.00"),
+        ("REFERENCE 2345678", "2.00-"),
+        ("TOTAL SAVINGS", "2.00-"),
+        ("2345678", "2.00-"),
+    ] {
+        let row = ParsedLine {
+            line_y: 0.5,
+            full_text: format!("{description} {price}"),
+            left_text: description.to_string(),
+            is_annotation: false,
+        };
+        assert!(!is_valid_item_line(&row, None), "{}", row.full_text);
+    }
+}
+
+#[test]
 fn keeps_short_produce_name_alignment() {
     let page = OcrDocument {
         lines: vec![
@@ -774,4 +824,30 @@ fn at_sign_read_as_a_zero_is_still_a_quantity_row() {
     use super::rows::looks_like_quantity_expression;
     assert!(looks_like_quantity_expression("1 0 $1.51"));
     assert!(!looks_like_quantity_expression("1 0 1.51"));
+}
+
+#[test]
+fn damaged_scale_unit_does_not_steal_the_produce_price() {
+    fn row(text: &str, y: f64, price: Option<&str>) -> OcrLine {
+        let mut words = vec![word(text, 0.06, y, 0.45, y + 0.012)];
+        let mut full = text.to_string();
+        if let Some(p) = price {
+            words.push(word(p, 0.80, y, 0.90, y + 0.012));
+            full = format!("{text} {p}");
+        }
+        OcrLine::new(full, words)
+    }
+    let doc = OcrDocument {
+        lines: vec![
+            row("PURPLE PLUMS", 0.30, None),
+            row("1.250 ky Gross", 0.32, None),
+            row("-0.050 kg Tare =", 0.34, None),
+            row("1.200 kg Net @ $3.00/kg", 0.36, Some("3.60")),
+        ],
+    };
+    let outcome = extract_spatial_items(&doc);
+    assert_eq!(outcome.items.len(), 1, "{:?}", outcome.items);
+    assert_eq!(outcome.items[0].description, "PURPLE PLUMS");
+    assert_eq!(outcome.items[0].price, Money::from_cents(360));
+    assert!(!super::patterns::re_weight_info_line().is_match("1.250 ky PLUMS"));
 }
