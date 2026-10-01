@@ -1,7 +1,7 @@
 use regex::Regex;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use crate::ocr_confusion;
 
@@ -182,6 +182,31 @@ fn re_whitespace() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"[^A-Z0-9]+").unwrap())
 }
 
+/// A keyword-derived pattern, compiled once per process and then reused.
+///
+/// `find_all_matches` calls `fuzzy_contains` once per keyword per rule per
+/// item, and two of its stages build a pattern from the keyword alone. They used
+/// to compile it on every call. A pattern is a pure function of its text, so a
+/// memo keyed by that text cannot go stale however the rule layers are edited or
+/// overlaid; it grows only with the distinct keywords a process has seen.
+///
+/// Handed out as an `Arc` rather than a `Regex` clone on purpose: cloning a
+/// `Regex` gives the clone a fresh match cache, so every lookup would rebuild
+/// the lazy DFA it had just built for the previous one.
+fn keyword_regex(pattern: &str) -> Option<Arc<Regex>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<Arc<Regex>>>>> = OnceLock::new();
+    let mut cache = CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if let Some(compiled) = cache.get(pattern) {
+        return compiled.clone();
+    }
+    let compiled = Regex::new(pattern).ok().map(Arc::new);
+    cache.insert(pattern.to_string(), compiled.clone());
+    compiled
+}
+
 fn bigram_similarity(s1: &str, s2: &str) -> f64 {
     if s1.len() < 2 {
         return if s2.contains(s1) { 1.0 } else { 0.0 };
@@ -254,8 +279,7 @@ fn contains_with_single_char_noise(keyword: &str, description: &str) -> Option<u
         pattern.push_str(r"\b");
     }
 
-    Regex::new(&pattern)
-        .ok()
+    keyword_regex(&pattern)
         .and_then(|regex| regex.find(&normalized_desc).map(|matched| matched.start()))
 }
 
@@ -330,7 +354,7 @@ fn fuzzy_contains(keyword: &str, description: &str, threshold: Option<f64>) -> (
     let kw_len_raw = kw_raw.chars().filter(|ch| !ch.is_whitespace()).count();
     if kw_len_raw <= 3 {
         let pattern = format!(r"\b{}\b", regex::escape(&kw_raw));
-        if let Ok(regex) = Regex::new(&pattern) {
+        if let Some(regex) = keyword_regex(&pattern) {
             if let Some(found) = regex.find(&desc_raw) {
                 return (true, found.start() as isize, true);
             }
