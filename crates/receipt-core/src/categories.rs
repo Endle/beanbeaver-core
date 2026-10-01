@@ -1051,6 +1051,12 @@ mod tests {
             // alcoholic
             ("COORS LIGHT 6 PK HQ", "Expenses:Food:AlcoholicBeverage"),
             ("MEAGHERS TRIPLE SEC", "Expenses:Food:AlcoholicBeverage"),
+            ("BABY DUCK", "Expenses:Food:AlcoholicBeverage"),
+            ("FROZEN DUCK", "Expenses:Food:Grocery:Frozen"),
+            (
+                "BBY - Frozen Snakehead Fi",
+                "Expenses:Food:Grocery:Seafood:Fish",
+            ),
             // pet
             ("2130150 HUGG WIPE", "Expenses:Pet:Supply"),
             // tooth care
@@ -1161,6 +1167,48 @@ mod tests {
             "categorization drift:\n{}",
             failures.join("\n")
         );
+    }
+
+    #[test]
+    fn truncated_wonton_alias_requires_brand_and_product_prefix() {
+        let layers = default_parser_rule_layers();
+        let key = |description: &str| classify_item_key(description, &layers.category_rules, None);
+        assert_eq!(
+            key("100% Deluxe - Jumbo Shrim").as_deref(),
+            Some("grocery/frozen/dumpling")
+        );
+        assert_eq!(
+            key("RAW JUMBO SHRIMP").as_deref(),
+            Some("grocery/seafood/shrimp")
+        );
+        for description in [
+            "100% Deluxe",
+            "DELUXE JUMBO SHRIMP",
+            "ANOTHER BRAND - JUMBO SHRIM",
+            "100% Deluxe - Steamed Pork Bun",
+        ] {
+            assert_ne!(
+                key(description).as_deref(),
+                Some("grocery/frozen/dumpling"),
+                "{description}"
+            );
+        }
+    }
+
+    #[test]
+    fn roar_drink_requires_its_printed_product_code() {
+        let layers = default_parser_rule_layers();
+        assert_eq!(
+            classify_item_key("4704960 ROAR", &layers.category_rules, None).as_deref(),
+            Some("grocery/drink")
+        );
+        for description in ["ROAR", "4704961 ROAR", "HEAR ME ROAR"] {
+            assert_ne!(
+                classify_item_key(description, &layers.category_rules, None).as_deref(),
+                Some("grocery/drink"),
+                "{description}"
+            );
+        }
     }
 
     /// Semantic classification (key + tags) from the bundled rules. Ported from
