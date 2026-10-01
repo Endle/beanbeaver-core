@@ -197,7 +197,14 @@ pub fn boxes_overlap_y(a: &Detection, b: &Detection, min_overlap_ratio: f64) -> 
 /// True for Costco Bottom-Of-Basket marker rows.
 fn is_bob_marker_text(text: &str) -> bool {
     let upper = text.to_uppercase();
-    let has_bottom_banner = upper.contains("BOTTOM OF BAS");
+    // A stray underline before the banner word must not turn a non-item
+    // marker into a product description that can claim a neighbouring price.
+    let banner_words = upper
+        .split(|ch: char| ch.is_whitespace() || ch == '_')
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let has_bottom_banner = banner_words.contains("BOTTOM OF BAS");
     let has_bob_count_marker = upper.contains("BOB COUNT") && has_xstar_run(&upper, 4);
     has_bottom_banner || has_bob_count_marker
 }
@@ -1441,6 +1448,9 @@ mod tests {
     #[test]
     fn bob_marker_detection() {
         assert!(is_bob_marker_text("***Bottom of Basket"));
+        assert!(is_bob_marker_text("xxxxBottom of _Basketxxxx"));
+        assert!(is_bob_marker_text("xxxxBottom of_Basketxxxx"));
+        assert!(!is_bob_marker_text("WIRE_BASKET"));
         assert!(is_bob_marker_text("*xBOB Count XXXX"));
         assert!(!is_bob_marker_text("BOB Count 3"));
         assert!(!is_bob_marker_text("MILK"));

@@ -1308,3 +1308,42 @@ fn only_a_sale_marker_behind_a_price_is_stripped() {
         assert_eq!(strip_trailing_sale_marker(line), line);
     }
 }
+
+#[test]
+fn repeated_multibuy_offer_corroborates_a_damaged_total() {
+    let lines = vec![
+        "FRUIT DRINK".to_string(),
+        "(3 /for $6.00) 3 /for 6.OOH".to_string(),
+    ];
+    let result = extract_text_items(&lines, &HashSet::new());
+    assert_eq!(result.items.len(), 1, "{:?}", result.items);
+    assert_eq!(result.items[0].description, "FRUIT DRINK");
+    assert_eq!(result.items[0].price, Money::from_cents(600));
+    assert_eq!(result.warnings.len(), 1);
+    assert_eq!(
+        result.warnings[0].kind,
+        crate::common::ReceiptWarningKind::PriceAutoCorrected
+    );
+    assert_eq!(result.warnings[0].after_item_index, Some(0));
+    assert!(result.warnings[0]
+        .message
+        .contains("repeated multi-buy offer"));
+}
+
+#[test]
+fn damaged_multibuy_total_needs_a_matching_independent_offer() {
+    for line in [
+        "3 /for 6.OOH",
+        "(3 /for $6.00) 2 /for 6.OOH",
+        "(3 /for $6.00) 3 /for 8.OOH",
+        "(0 /for $6.00) 0 /for 6.OOH",
+        "(3 /for $6.00) 3 /for 6.0IH",
+        "(3 /for $6.00) 3 /for .OOH",
+        "(3 /for $6.00) 3 /for 6.00H",
+    ] {
+        assert!(
+            super::quantity::recover_repeated_multi_buy_total(line).is_none(),
+            "{line}"
+        );
+    }
+}

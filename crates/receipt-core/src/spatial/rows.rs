@@ -511,7 +511,17 @@ pub(super) fn is_valid_item_line(line: &ParsedLine, total_line_y: Option<f64>) -
         return false;
     }
     let is_costco_discount = re_costco_discount_line().is_match(&left_text_for_ratio);
-    if !is_costco_discount && alpha_ratio(&left_text_for_ratio) < 0.5 {
+    // A signed adjustment may be mostly a numeric product reference. OCR can
+    // lose letters from its discount prefix, but the explicit minus still
+    // establishes a priced row. Preserve that amount and the surviving text;
+    // do not invent a replacement prefix or a category.
+    let signed_adjustment = re_trailing_price()
+        .captures(&line.full_text)
+        .is_some_and(|c| c.get(2).is_some_and(|sign| sign.as_str() == "-"))
+        && left_text_for_ratio
+            .chars()
+            .any(|ch| ch.is_ascii_alphabetic());
+    if !is_costco_discount && !signed_adjustment && alpha_ratio(&left_text_for_ratio) < 0.5 {
         return false;
     }
     if re_malformed_ocr_prefix().is_match(&line.left_text) {

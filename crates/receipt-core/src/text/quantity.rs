@@ -5,6 +5,42 @@ use super::types::*;
 use crate::money::Money;
 use regex::Regex;
 use std::sync::OnceLock;
+/// Recover a damaged total only when an independently readable offer repeats
+/// the same quantity and amount on this row. No arithmetic or missing digits
+/// are inferred: every character must agree through the same-glyph mapping.
+pub(super) fn recover_repeated_multi_buy_total(line: &str) -> Option<(String, String)> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let captures = RE.get_or_init(|| {
+        Regex::new(r"(?i)^\((\d+)\s*/\s*for\s+\$(\d+\.\d{2})\)\s+(\d+)\s*/\s*for\s+([0-9OILSBZG]+\.[0-9OILSBZG]{2})([HTJGP]*)\s*$").unwrap()
+    }).captures(line)?;
+    let offer_quantity = captures.get(1)?.as_str().parse::<u32>().ok()?;
+    let sold_quantity = captures.get(3)?.as_str().parse::<u32>().ok()?;
+    let amount = captures.get(2)?.as_str();
+    let observed = captures.get(4)?;
+    if offer_quantity == 0
+        || offer_quantity != sold_quantity
+        || !observed.as_str().chars().any(|ch| ch.is_ascii_alphabetic())
+        || crate::ocr_confusion::canonicalize_same_glyph(&observed.as_str().to_ascii_uppercase())
+            != crate::ocr_confusion::canonicalize_same_glyph(amount)
+        || parse_cents(amount).is_none()
+    {
+        return None;
+    }
+    Some((
+        format!(
+            "{}{}{}",
+            &line[..observed.start()],
+            amount,
+            &line[observed.end()..]
+        ),
+        format!(
+            "auto-corrected malformed OCR total \"{}\" -> \"{}\" using repeated multi-buy offer",
+            observed.as_str(),
+            amount
+        ),
+    ))
+}
+
 pub(super) fn parse_quantity_modifier(line: &str) -> Option<QuantityModifier> {
     let normalized = normalize_decimal_spacing(line.trim());
 
