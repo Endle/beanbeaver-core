@@ -145,6 +145,54 @@ pub struct EnrichedMatchInput {
     pub match_details: String,
 }
 
+/// Text for between the quotes of a Beancount string: the payee and the
+/// metadata values.
+///
+/// Measured against beancount 2.3.6: `\` escapes the next character, so a
+/// trailing one swallows the closing quote and the entry fails to parse, and
+/// one mid-string is silently dropped (`A\B` loads as `AB`). Doubling it
+/// round-trips. `"` keeps its historical substitution with `'` rather than
+/// becoming `\"`, so every export that was already valid stays byte-identical.
+/// Line breaks become spaces: one is legal inside a Beancount string, but it
+/// splits a one-line transaction header in two.
+fn beancount_string_text(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push('\''),
+            '\\' => out.push_str("\\\\"),
+            ch if breaks_line(ch) => out.push(' '),
+            ch => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Text for after a `;`. A comment ends at the line break, so a newline in a
+/// merchant name or an item description starts a new directive: beancount
+/// 2.3.6 loads a complete second transaction from one.
+fn beancount_comment_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if breaks_line(ch) { ' ' } else { ch })
+        .collect()
+}
+
+/// Unicode's mandatory line breaks. Only `\n` ends a line for beancount 2.3.6,
+/// but editors, diffs and Python's `str.splitlines` break on the rest, and a
+/// ledger is read with all of them.
+///
+/// Deliberately not `char::is_control`: real OCR output carries other control
+/// characters, such as the C1 `U+0097` left after `Ã` when `×` is decoded with
+/// the wrong encoding. They are harmless in a comment, and rewriting them would
+/// change exports that were already valid.
+fn breaks_line(ch: char) -> bool {
+    matches!(
+        ch,
+        '\n' | '\r' | '\u{0B}' | '\u{0C}' | '\u{85}' | '\u{2028}' | '\u{2029}'
+    )
+}
+
 /// Shared with `parser`'s balance check on purpose: that warning exists
 /// to predict whether the postings this module emits will balance, so the two
 /// must read a price string exactly the same way.
@@ -176,7 +224,9 @@ fn format_postings_aligned(
                 amount_width = max_amount_len,
             );
             match comment {
-                Some(comment) if !comment.is_empty() => format!("{base}  ; {comment}"),
+                Some(comment) if !comment.is_empty() => {
+                    format!("{base}  ; {}", beancount_comment_text(comment))
+                }
                 _ => base,
             }
         })
@@ -270,7 +320,7 @@ fn inject_posting_warnings(
             .filter(|(warning_idx, _)| *warning_idx == idx)
         {
             let _ = warning_idx;
-            output.push(format!("; WARN:PARSER {message}"));
+            output.push(format!("; WARN:PARSER {}", beancount_comment_text(message)));
         }
     }
     output
@@ -287,15 +337,21 @@ pub fn format_parsed_receipt(
     let mut lines = Vec::new();
 
     lines.push("; === PARSED RECEIPT - AWAITING CC MATCH ===".to_string());
-    lines.push(format!("; @merchant: {}", receipt.merchant));
+    lines.push(format!(
+        "; @merchant: {}",
+        beancount_comment_text(&receipt.merchant)
+    ));
     if receipt.date_is_placeholder {
         lines.push("; @date: UNKNOWN".to_string());
         lines.push(format!(
             "; FIXME: unknown date (placeholder used: {})",
-            receipt.date_iso
+            beancount_comment_text(&receipt.date_iso)
         ));
     } else {
-        lines.push(format!("; @date: {}", receipt.date_iso));
+        lines.push(format!(
+            "; @date: {}",
+            beancount_comment_text(&receipt.date_iso)
+        ));
     }
     lines.push(format!("; @total: {}", Money::from_cents(total_cents)));
     lines.push(format!("; @items: {}", receipt.items.len()));
@@ -306,10 +362,10 @@ pub fn format_parsed_receipt(
     }
     lines.push(String::new());
 
-    let merchant_clean = receipt.merchant.replace('"', "'");
     lines.push(format!(
         r#"{} * "{}" "Receipt scan""#,
-        receipt.date_iso, merchant_clean
+        receipt.date_iso,
+        beancount_string_text(&receipt.merchant)
     ));
 
     // Real beancount metadata (not `;` comments) so a consumer can find every
@@ -318,10 +374,16 @@ pub fn format_parsed_receipt(
     // native link and is resolved by each user against their own
     // `option "documents"` root, so it stays correct across arbitrary layouts.
     if let Some(id) = beanbeaver_id(&receipt.date_iso, receipt.date_is_placeholder, image_sha256) {
-        lines.push(format!("  beanbeaver-id: \"{id}\""));
+        lines.push(format!(
+            "  beanbeaver-id: \"{}\"",
+            beancount_string_text(&id)
+        ));
     }
     if let Some(sha) = image_sha256.filter(|value| !value.is_empty()) {
-        lines.push(format!("  beanbeaver-image-sha256: \"{sha}\""));
+        lines.push(format!(
+            "  beanbeaver-image-sha256: \"{}\"",
+            beancount_string_text(sha)
+        ));
     }
     if let Some(doc) = beanbeaver_document_relpath(
         &receipt.date_iso,
@@ -329,7 +391,7 @@ pub fn format_parsed_receipt(
         &receipt.merchant,
         image_sha256,
     ) {
-        lines.push(format!("  document: \"{doc}\""));
+        lines.push(format!("  document: \"{}\"", beancount_string_text(&doc)));
     }
 
     let mut postings = build_payment_postings(receipt, credit_card_account, total_cents);
@@ -388,7 +450,7 @@ pub fn format_parsed_receipt(
         lines.push("; --- Raw OCR Text (for reference) ---".to_string());
         for ocr_line in receipt.raw_text.lines() {
             if !ocr_line.trim().is_empty() {
-                lines.push(format!("; {ocr_line}"));
+                lines.push(format!("; {}", beancount_comment_text(ocr_line)));
             }
         }
     }
@@ -1151,5 +1213,65 @@ mod tests {
             !out.contains("no classifier rule matched"),
             "an uncategorized line should not comment the ledger:\n{out}"
         );
+    }
+
+    /// A backslash escapes the next character in a Beancount string, so a
+    /// trailing one used to swallow the payee's closing quote and the entry
+    /// failed to parse. The quote keeps its historical `'` substitution.
+    #[test]
+    fn payee_backslash_is_escaped_and_quote_still_substituted() {
+        let mut receipt = base();
+        receipt.merchant = r#"C:\ "BEST" MART\"#.to_string();
+        let out = format_parsed_receipt(&receipt, CC, None);
+        assert!(
+            out.contains(r#"2026-02-18 * "C:\\ 'BEST' MART\\" "Receipt scan""#),
+            "payee must survive a backslash:\n{out}"
+        );
+    }
+
+    /// A line break in user- or OCR-supplied text would end the `;` comment it
+    /// sits in and start a directive of its own. Exactly one line of the output
+    /// may open a transaction: the header.
+    #[test]
+    fn line_breaks_in_text_cannot_start_a_new_directive() {
+        let injected = "\n2026-02-19 * \"INJECTED\"\n  Expenses:Food  5.00 CAD";
+        let mut receipt = base();
+        receipt.merchant = format!("CORNER{injected}");
+        receipt.raw_text = "CORNER\u{2028}2026-02-19 * \"X\"\nMILK\r2026-02-20 *".to_string();
+        receipt.items = vec![item(
+            &format!("MILK{injected}"),
+            "20.00",
+            1,
+            "Expenses:Food:Grocery:Dairy",
+        )];
+        receipt.warnings = vec![FormatterWarningInput {
+            kind: ReceiptWarningKind::TotalMismatch,
+            message: format!("totals disagree{injected}"),
+            after_item_index: Some(0),
+        }];
+        let out = format_parsed_receipt(&receipt, CC, None);
+
+        let directives: Vec<&str> = out
+            .split(|ch: char| breaks_line(ch))
+            .filter(|line| line.starts_with(|ch: char| ch.is_ascii_digit()))
+            .collect();
+        assert_eq!(
+            directives,
+            vec![
+                r#"2026-02-18 * "CORNER 2026-02-19 * 'INJECTED'   Expenses:Food  5.00 CAD" "Receipt scan""#
+            ],
+            "only the header may open a directive:\n{out}"
+        );
+        assert!(out.contains("; @merchant: CORNER 2026-02-19 * \"INJECTED\""));
+    }
+
+    #[test]
+    fn harmless_control_characters_are_left_alone() {
+        // OCR mojibake from a corpus receipt: `×` decoded as `Ã` + C1 `U+0097`.
+        assert_eq!(
+            beancount_comment_text("Dr \u{c3}\u{97}1"),
+            "Dr \u{c3}\u{97}1"
+        );
+        assert_eq!(beancount_string_text("A\tB"), "A\tB");
     }
 }
