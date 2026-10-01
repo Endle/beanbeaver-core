@@ -49,7 +49,7 @@ pub(crate) mod text;
 //
 // The three below are the whole set — `unnameable_types` fails the build's
 // warning list if that stops being true. It used to be nine, seven of them the
-// OCR input structs; Phase 2 of `beanbeaver_core_refactor_plan.md` collapsed
-// those into `ocr_document`, which is a `pub mod` and needs no re-export.
+// OCR input structs; #82 collapsed those into `ocr_document`, which is a
+// `pub mod` and needs no re-export.
 pub use detection_normalization::NormalizationOptions;
 pub use merchant_vocab::{Expansion, MerchantVocab};
