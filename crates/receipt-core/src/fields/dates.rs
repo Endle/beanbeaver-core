@@ -234,6 +234,21 @@ pub fn extract_date(lines: &[String], full_text: &str, current_year: i32) -> Opt
     } else {
         lines.to_vec()
     };
+    // OCR can omit the space between a year-first date and its clock time.
+    // Require a complete, valid-shaped clock suffix rather than truncating
+    // arbitrary trailing digits into a day. Normalize before deadline checks
+    // so return/contest dates still consume their own context.
+    static JOINED_TIMESTAMP: OnceLock<Regex> = OnceLock::new();
+    let joined_timestamp = JOINED_TIMESTAMP.get_or_init(|| {
+        Regex::new(
+            r"(^|[^0-9])(\d{4}[/-]\d{2}[/-]\d{2})((?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d)([^0-9]|$)",
+        )
+        .expect("valid joined timestamp regex")
+    });
+    let source_lines: Vec<String> = source_lines
+        .iter()
+        .map(|line| joined_timestamp.replace_all(line, "$1$2 $3$4").into_owned())
+        .collect();
     let current_yy = current_year.rem_euclid(100);
     let mut ranked_candidates = Vec::new();
 

@@ -1077,3 +1077,36 @@ fn change_larger_than_the_tenders_is_dropped() {
     assert_eq!(tendered_net_cents(&lines, &tenders), 2_500);
     assert!(!tenders_reconcile(&lines, &tenders, 46_668));
 }
+
+#[test]
+fn joined_year_first_timestamp_keeps_the_two_digit_day() {
+    for text in ["AUTH 2026/04/1713:45:06", "2026-04-1700:00:00"] {
+        assert_eq!(
+            extract_date(&[], text, 2026).map(|d| d.to_string()),
+            Some("2026-04-17".to_string())
+        );
+    }
+    for text in [
+        "2026/04/1713",
+        "2026/04/1725:00:00",
+        "2026/04/1713:60:00",
+        "2026/04/1713:45:060",
+    ] {
+        assert_eq!(extract_date(&[], text, 2026), None, "{text}");
+    }
+}
+
+#[test]
+fn joined_deadline_timestamp_does_not_hide_the_later_purchase() {
+    for label in ["RETURN BY DATE", "CONTEST ENDS"] {
+        assert_eq!(
+            extract_date(&[], &format!("{label} 2026/04/1713:45:06"), 2026),
+            None
+        );
+        let text = format!("{label}\n2026/04/1713:45:06\n2026/04/1612:30:00");
+        assert_eq!(
+            extract_date(&[], &text, 2026).map(|d| d.to_string()),
+            Some("2026-04-16".to_string())
+        );
+    }
+}
