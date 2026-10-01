@@ -151,7 +151,9 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0002"
-keywords = ["SALMON", "TUNA", "COD", "TILAPIA", "HALIBUT", "TROUT", "MACKEREL", "SARDINE", "ANCHOVY", "FILLET", "FISH"]
+# Species names still identify fish when a narrow receipt column truncates
+# the following word (for example, "Frozen Snakehead Fi").
+keywords = ["SALMON", "TUNA", "COD", "TILAPIA", "HALIBUT", "TROUT", "MACKEREL", "SARDINE", "ANCHOVY", "SNAKEHEAD", "FILLET", "FISH"]
 tags = ["grocery/seafood/fish"]
 priority = 0
 exact_only = false
@@ -541,11 +543,27 @@ priority = 0
 exact_only = false
 
 [[rules]]
+id = "roar_sku_drink"
+# The bare four-letter brand also occurs in ordinary product wording. Require
+# its printed product code; this is a product alias, not a global ROAR keyword.
+keywords = ["4704960 ROAR"]
+tags = ["grocery/drink"]
+priority = 0
+exact_only = true
+
+[[rules]]
 id = "legacy_0028"
 keywords = ["COORS", "SMIRNOFF", "SLEEMAN", "BEER", "WINE", "VODKA", "WHISKEY", "WHISKY", "RUM", "GIN", "TEQUILA", "COGNAC", "CHAMPAGNE", "PROSECCO", "SPUMANTE", "CIDER", "SAKE", "SOJU", "LIQUOR", "LIQUEUR", "TRIPLE SEC", "LAGER", "STOUT", "PORTER"]
 tags = ["alcohol/beverage"]
 priority = 1
 exact_only = false
+
+[[rules]]
+id = "baby_duck_wine"
+keywords = ["BABY DUCK"]
+tags = ["alcohol/beverage"]
+priority = 1
+exact_only = true
 
 [[rules]]
 id = "legacy_0029"
@@ -1293,4 +1311,15 @@ id = "hot_pepper_paste_seasoning"
 keywords = ["HOT PEPPER PASTE", "CHORIPDONG - HOT PEPPER P"]
 tags = ["grocery/seasoning"]
 priority = 10
+exact_only = true
+
+# The complete brand + product prefix identifies the wonton line even when
+# the receipt column truncates before WONTON. Do not classify DELUXE, the
+# bare brand, or generic JUMBO SHRIMP this way.
+# Product corroboration: https://www.tntsupermarket.com/chs/66047701-100-jumbo-shrimp-wonton.html
+[[rules]]
+id = "deluxe_jumbo_shrimp_wonton"
+keywords = ["100% DELUXE - JUMBO SHRIM"]
+tags = ["grocery/frozen/dumpling"]
+priority = 0
 exact_only = true
