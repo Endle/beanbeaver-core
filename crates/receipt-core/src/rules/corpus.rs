@@ -53,13 +53,25 @@ struct DocumentToml {
     rules: Vec<RuleToml>,
 }
 
-/// One brand entry. A bare `name` today; the field exists as a table rather
-/// than a bare string so a brand can later declare its own tags — several
-/// bundled keywords (`NATREL`, `SHODOSHIMA`) are brands that *carry* a
-/// category, and they cannot move here until it can be expressed.
+/// One brand entry: a `name` to mask, and optionally the `tags` that the name
+/// itself carries.
+///
+/// Masking alone serves a brand whose name merely collides with a product word
+/// (`Fish Well`). Tags serve one whose name *is* the signal but would be misread
+/// by a keyword — `APPLE GC` is an Apple gift card, and without the mask the
+/// fruit rule's `APPLE` files it under Fruit. Bundled rules may not subtract a
+/// tag (see `bundled_corpus_uses_no_subtraction`), so taking the span away from
+/// the keywords is the only way a bundled rule can express that.
+///
+/// A brand with tags is lowered into an ordinary rule (see
+/// [`crate::categories::CategoryRule::brand`]) appended after the document's
+/// own rules, at priority 0 of its layer. It has no id, so it cannot be named
+/// by `disables`; an override that disagrees uses `remove_tags`.
 #[derive(Debug, Deserialize)]
 struct BrandToml {
     name: String,
+    #[serde(default)]
+    tags: StringOrList,
 }
 
 /// The bundled tag vocabulary plus its default tag-path -> account mapping.
@@ -239,7 +251,19 @@ fn to_build_config(parsed: &DocumentToml) -> BuildClassifierConfig {
                 exact_only: rule.exact_only,
                 remove_tags: normalize_tags(rule.remove_tags.clone().into_trimmed()),
                 disables: rule.disables.clone().into_trimmed(),
+                brand: false,
             })
+            .chain(parsed.brands.iter().filter_map(|brand| {
+                let name = brand.name.trim();
+                let tag_paths = normalize_tags(brand.tags.clone().into_trimmed());
+                (!name.is_empty() && !tag_paths.is_empty()).then(|| BuildRuleEntry {
+                    keywords: vec![name.to_string()],
+                    tag_paths,
+                    exact_only: true,
+                    brand: true,
+                    ..Default::default()
+                })
+            }))
             .collect(),
     }
 }

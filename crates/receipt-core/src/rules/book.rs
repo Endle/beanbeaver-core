@@ -604,6 +604,87 @@ disables = ["legacy_9999"]
         );
     }
 
+    /// A brand that declares tags takes its span away from every keyword and
+    /// tags the line itself. Dollarama's Apple gift card filed as Fruit before.
+    #[test]
+    fn a_brand_with_tags_masks_its_name_and_tags_the_line() {
+        let book = RuleBook::bundled();
+        let card = book.explain("APPLE GC VAR 00000000000");
+        assert_eq!(card.account, None, "a gift card claims no account");
+        assert_eq!(card.tags, vec!["gift_card".to_string()]);
+        // Whitespace-insensitive, like masking itself.
+        assert_eq!(book.explain("APPLEGC VAR.").tags, card.tags);
+        // The fruit is untouched.
+        assert_eq!(
+            book.explain("GALA APPLE").account.as_deref(),
+            Some("Expenses:Food:Grocery:Fruit")
+        );
+        // Word-bounded: a longer word is not the brand.
+        assert!(!book
+            .explain("APPLE GCX")
+            .tags
+            .iter()
+            .any(|t| t == "gift_card"));
+    }
+
+    #[test]
+    fn brand_tags_are_validated_and_layered_like_rules() {
+        assert!(RuleBook::with_overrides(&[r#"
+[[brands]]
+name = "ZZZ BRAND"
+tags = ["no/such/tag"]
+"#])
+        .is_err());
+        let book = RuleBook::with_overrides(&[r#"
+[[brands]]
+name = "ZZZ BRAND"
+tags = ["grocery/dairy"]
+"#])
+        .expect("override loads");
+        let rule = book
+            .item_rules()
+            .into_iter()
+            .find(|r| r.keywords == ["ZZZ BRAND"])
+            .expect("brand lowered into a rule");
+        assert_eq!(rule.layer, 1);
+        assert!(rule.exact_only);
+        assert_eq!(
+            book.explain("ZZZ BRAND WIDGET").account.as_deref(),
+            Some("Expenses:Food:Grocery:Dairy")
+        );
+        // A brand without tags still only masks.
+        let masked_only = RuleBook::with_overrides(&["[[brands]]\nname = \"ZZZ BRAND\"\n"])
+            .expect("override loads");
+        assert_eq!(masked_only.explain("ZZZ BRAND WIDGET").account, None);
+    }
+
+    #[test]
+    fn lottery_tickets_file_to_entertainment() {
+        let book = RuleBook::bundled();
+        for line in [
+            "LOT0 6/49 $3 00000000000",
+            "LOTTO MAX",
+            "OLG LOTTERY TICKET",
+        ] {
+            assert_eq!(
+                book.explain(line).account.as_deref(),
+                Some("Expenses:Entertainment:Lottery"),
+                "{line}"
+            );
+        }
+        // Neighbours the keywords must not reach.
+        for line in ["HALO TOP VANILLA", "LOTTE CHOCO PIE", "PILOTO COFFEE"] {
+            assert!(
+                !book
+                    .explain(line)
+                    .tags
+                    .iter()
+                    .any(|t| t.starts_with("entertainment")),
+                "{line}"
+            );
+        }
+    }
+
     /// The bundled corpus uses neither operator, so nothing it classifies changes.
     #[test]
     fn bundled_corpus_uses_no_subtraction() {

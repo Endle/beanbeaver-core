@@ -86,7 +86,7 @@ mod corrections;
 mod extraction;
 #[cfg(test)]
 mod tests;
-pub(crate) use extraction::{attach_purchases, extract_redemptions};
+pub(crate) use extraction::{activation_slip_ranges, attach_purchases, extract_redemptions};
 
 fn unresolved(out: &mut Vec<String>, field: &str) {
     if !out.iter().any(|s| s == field) {

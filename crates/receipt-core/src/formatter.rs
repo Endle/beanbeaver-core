@@ -183,9 +183,16 @@ fn format_postings_aligned(
         .collect()
 }
 
+/// The last four digits of the first masked card number in `raw_text`.
+///
+/// A gift-card activation slip is skipped: it prints the masked number of the
+/// card being *activated*, and Dollarama prints it above the payment slip, so
+/// it used to win and the ledger named a gift card as the card that paid.
 fn extract_card_last4(raw_text: &str) -> Option<String> {
-    for line in raw_text.lines() {
-        if !line.contains('*') {
+    let lines: Vec<&str> = raw_text.lines().map(str::trim).collect();
+    let slips = crate::gift_cards::activation_slip_ranges(&lines);
+    for (index, line) in lines.iter().enumerate() {
+        if !line.contains('*') || slips.iter().any(|slip| slip.contains(&index)) {
             continue;
         }
         let mut star_run = 0usize;
@@ -946,6 +953,29 @@ mod tests {
         assert!(out.contains("Assets:GiftCards:Costco"));
         assert!(out.contains("-5.00 CAD"));
         assert!(out.contains("; gift card"));
+    }
+
+    /// A gift-card activation slip names the card being sold, not the card
+    /// that paid. Dollarama prints it above the payment slip, so it used to win.
+    #[test]
+    fn card_last4_skips_a_gift_card_activation_slip() {
+        let raw = "APPLE GC VAR 00000000000 0.00\n\
+                   Variable 10-500 28.00\n\
+                   TRANSACTION RECORD\n\
+                   Account GIFT CARD\n\
+                   Card Number ****x**********1111\n\
+                   Trans Type ACTIVATE\n\
+                   Amount $28.00\n\
+                   Approved\n\
+                   IMPORTANT\n\
+                   TOTAL $28.00\n\
+                   MASTERCARD $28.00\n\
+                   CARD NUMBER: xxx*********2222";
+        assert_eq!(extract_card_last4(raw).as_deref(), Some("2222"));
+        // A PURCHASE record is the payment itself, and still counts.
+        let paid =
+            "TRANSACTION RECORD\nTrans Type PURCHASE\nCard Number ************3333\nApproved";
+        assert_eq!(extract_card_last4(paid).as_deref(), Some("3333"));
     }
 
     /// Tenders that don't account for the total are not posted as a split.
