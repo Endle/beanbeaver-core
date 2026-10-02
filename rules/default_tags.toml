@@ -220,6 +220,15 @@ display = "Restaurant"
 path = "restaurant/gift_card"
 display = "Gift Card"
 
+[[tags]]
+path = "entertainment"
+display = "Entertainment"
+
+# Dollarama sells OLG tickets at the till ("LOTO 6/49 $3" + "OLG $3").
+[[tags]]
+path = "entertainment/lottery"
+display = "Lottery"
+
 # ------------------------------------------------------------------ accounts
 #
 # Tag path -> beancount account. Overridable: an override document supplying its
@@ -265,6 +274,7 @@ display = "Gift Card"
 "pet/supply" = "Expenses:Pet:Supply"
 "health/pharmacy" = "Expenses:Health:Pharmacy"
 "shopping/clothing" = "Expenses:Shopping:Clothing"
+"entertainment/lottery" = "Expenses:Entertainment:Lottery"
 # No rule references this one today. Kept rather than dropped: now that
 # [accounts] is a user-facing table, an unused default is a starting point, not
 # dead code — and LCBO CARD declares plain `gift_card`, not this path, so keeping

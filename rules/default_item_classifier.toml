@@ -81,6 +81,15 @@ name = "Fish Well"
 [[brands]]
 name = "Meat Corner"
 
+# A brand may also declare the tags its name carries. Dollarama prints an Apple
+# gift card as "APPLE GC VAR.", and as plain text the fruit rule's APPLE filed
+# a $28 card under Fruit. Masking the span keeps APPLE away from every keyword;
+# the tag says what the name means. Bare `gift_card`, account-less, like
+# AMAZON and PNGO below.
+[[brands]]
+name = "APPLE GC"
+tags = ["gift_card"]
+
 # RULE IDS ARE A COMPATIBILITY SURFACE — FROZEN AND ADDITIVE.
 #
 # An override document may write `disables = ["legacy_0000"]` to void a bundled
@@ -1071,6 +1080,18 @@ id = "pngo_gift_card"
 # entering.
 keywords = ["PNGO"]
 tags = ["gift_card"]
+priority = 0
+exact_only = true
+
+[[rules]]
+id = "lottery_ticket"
+# Dollarama rings an OLG ticket up as "LOTO 6/49 $3" at 0.00 above an
+# "OLG $3" charge row, which the parser folds into one line. LOTO itself is not
+# a keyword: exact matching ignores spaces, so it would claim "HALO TOP" ice
+# cream, and OCR reads this receipt's LOTO as LOT0 anyway. 6/49 is the game.
+# Exact only — LOTTO is one letter from LOTTE, a snack brand.
+keywords = ["LOTTO", "LOTTERY", "6/49"]
+tags = ["entertainment/lottery"]
 priority = 0
 exact_only = true
 

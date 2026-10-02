@@ -110,6 +110,10 @@ pub struct CategoryRule {
     /// Index of the classifier config this rule came from: 0 is the bundled
     /// defaults, 1+ are override layers in the order they were supplied.
     pub layer: usize,
+    /// A `[[brands]]` entry that declares tags. Its one keyword is the brand
+    /// name, matched exactly against the description *before* brands are
+    /// masked — the masked text no longer contains it. See [`mask_brands`].
+    pub brand: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -141,6 +145,8 @@ pub struct BuildRuleEntry {
     pub remove_tags: Vec<String>,
     /// See [`CategoryRule::disables`].
     pub disables: Vec<String>,
+    /// See [`CategoryRule::brand`].
+    pub brand: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -483,11 +489,39 @@ pub fn mask_brands(description: &str, brands: &[String]) -> String {
 }
 
 pub fn find_all_matches(description: &str, rule_layers: &CategoryRuleLayers) -> Vec<RuleMatch> {
+    let original: Vec<char> = description.chars().collect();
     let masked = mask_brands(description, &rule_layers.brands);
     let description = masked.as_str();
     let mut matches = Vec::new();
 
     for (rule_index, rule) in rule_layers.rules.iter().enumerate() {
+        if rule.brand {
+            // Exactly the spans `mask_brands` blanked, so a brand's tags apply
+            // precisely when its name was taken away from every other rule.
+            for keyword in &rule.keywords {
+                let needle: Vec<char> = keyword
+                    .chars()
+                    .filter(|ch| !ch.is_whitespace())
+                    .map(|ch| ch.to_ascii_uppercase())
+                    .collect();
+                if brand_span(&original, &needle).is_some() {
+                    matches.push(RuleMatch {
+                        rule_id: rule.id.clone(),
+                        category: rule.category.clone(),
+                        tag_paths: rule.tag_paths.clone(),
+                        tags: rule.tags.clone(),
+                        matched_keyword: keyword.clone(),
+                        priority: rule.priority,
+                        keyword_length: needle.len(),
+                        is_exact: true,
+                        is_prefix: false,
+                        rule_index,
+                    });
+                    break;
+                }
+            }
+            continue;
+        }
         // Scan all keywords in this rule and keep the strongest match: an
         // exact (substring) hit beats a fuzzy hit, and among equally strong
         // hits the longer keyword wins. Without this preference, a fuzzy
@@ -568,6 +602,10 @@ pub(crate) fn prefix_fallback_matches(
     let mut account = None;
     let mut matches = Vec::new();
     for (rule_index, rule) in layers.rules.iter().enumerate() {
+        // A brand names the maker in full; a truncated tail is not its name.
+        if rule.brand {
+            continue;
+        }
         let mut best: Option<(&String, usize)> = None;
         for keyword in &rule.keywords {
             let upper = keyword.to_ascii_uppercase();
@@ -724,6 +762,7 @@ pub fn build_rule_layers(
                 priority: rule.priority + layer_priority,
                 exact_only: rule.exact_only,
                 layer: idx,
+                brand: rule.brand,
             });
         }
     }

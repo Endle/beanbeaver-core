@@ -37,17 +37,25 @@ pub(crate) fn leading_item_number(row: &str) -> Option<String> {
     .then(|| number.to_string())
 }
 
-/// A load row: a short code and an integer, nothing else — `BH 25`.
+/// A load row: a short code and an integer, nothing else — `BH 25`, or the
+/// lottery's `OLG $3`.
 fn re_load_row() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[A-Z]{1,3}\s+(\d{1,4})$").unwrap())
+    RE.get_or_init(|| Regex::new(r"^[A-Z]{1,3}\s+\$?(\d{1,4})$").unwrap())
 }
 
 /// A variable-denomination load row: a word and the range the card accepts —
 /// `Variable 25-500`.
 fn re_variable_load_row() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[A-Za-z]+\s+(\d{1,4})\s*-\s*(\d{1,4})$").unwrap())
+    RE.get_or_init(|| Regex::new(r"^([A-Za-z]+)\s+(\d{1,4})\s*-\s*(\d{1,4})$").unwrap())
+}
+
+/// Whether `text` says, as a whole word, that a card is variable — the `VAR.`
+/// of `APPLE GC VAR.`, or `Variable` itself.
+fn says_variable(text: &str) -> bool {
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|word| word.eq_ignore_ascii_case("VAR") || word.eq_ignore_ascii_case("VARIABLE"))
 }
 
 /// A `low-high` dollar range anywhere in a description — the `25-500` of
@@ -67,8 +75,10 @@ fn whole_dollars(digits: &str) -> Option<Money> {
 ///
 /// A fixed card's row names its own amount — `BH 25` is 25.00. A variable
 /// card's row can only name the range it accepts, so `Variable 25-500` vouches
-/// for its price only when the card above it prints the same range
-/// (`PNGO 25-500CAD`) and the price falls inside it.
+/// for its price only when the card above it agrees that it is variable and
+/// the price falls inside the range. The card agrees by printing the same
+/// range (`PNGO 25-500CAD`), or by saying so itself (`APPLE GC VAR.`) when
+/// the load row's own word is `Variable` too.
 fn load_row_amount(card: &ExtractedItem, load: &ExtractedItem) -> Option<Money> {
     let row = load.description.trim();
     if let Some(caps) = re_load_row().captures(row) {
@@ -76,12 +86,16 @@ fn load_row_amount(card: &ExtractedItem, load: &ExtractedItem) -> Option<Money> 
         return (named > Money::ZERO && named == load.price).then_some(named);
     }
     let caps = re_variable_load_row().captures(row)?;
-    let (low, high) = (whole_dollars(&caps[1])?, whole_dollars(&caps[2])?);
+    let (low, high) = (whole_dollars(&caps[2])?, whole_dollars(&caps[3])?);
     let card_prints_range = re_dollar_range()
         .captures_iter(&card.description)
         .any(|c| whole_dollars(&c[1]) == Some(low) && whole_dollars(&c[2]) == Some(high));
-    (card_prints_range && Money::ZERO < low && low < high && (low..=high).contains(&load.price))
-        .then_some(load.price)
+    let both_say_variable = says_variable(&caps[1]) && says_variable(&card.description);
+    ((card_prints_range || both_say_variable)
+        && Money::ZERO < low
+        && low < high
+        && (low..=high).contains(&load.price))
+    .then_some(load.price)
 }
 
 /// Give a product printed at 0.00 the charge printed on the row below it.
@@ -103,6 +117,14 @@ fn load_row_amount(card: &ExtractedItem, load: &ExtractedItem) -> Option<Money> 
 /// price disagree — a misread digit on either — is left alone, which is the
 /// visible failure ("prefer missing items over wrong pairings").
 ///
+/// The same till sells a lottery ticket the same way, and its charge row
+/// names its amount with a dollar sign:
+///
+/// ```text
+/// LOTO 6/49 $3         00000000000    0.00
+/// OLG $3                              3.00
+/// ```
+///
 /// A variable-denomination card cannot name its amount, only its range —
 ///
 /// ```text
@@ -112,13 +134,21 @@ fn load_row_amount(card: &ExtractedItem, load: &ExtractedItem) -> Option<Money> 
 /// ```
 ///
 /// — so there the agreement is between the two rows instead: the load row is
-/// absorbed only when the card prints the same range and the charge lies
-/// inside it. See [`load_row_amount`].
+/// absorbed only when the card agrees that it is variable and the charge lies
+/// inside the range. A card agrees by printing the same range, as above, or by
+/// saying `VAR.` where the load row says `Variable`:
+///
+/// ```text
+/// APPLE GC VAR.        00000000000    0.00
+/// Variable 10-500                     28.00
+/// ```
+///
+/// See [`load_row_amount`].
 ///
 /// Runs at the parser's merge point so both paths see it, though only the text
-/// path has met the shape. Measured over the 157-receipt private corpus this
-/// touches the two Dollarama gift-card receipts, one of each shape: no other
-/// parse emits a zero-priced item at all.
+/// path has met the shape. Measured over the 165-receipt private corpus, cached
+/// and live, it fires on the three Dollarama receipts (four folds) and nothing
+/// else: no other parse emits a zero-priced item at all.
 pub(crate) fn fold_zero_priced_loads(outcome: &mut ExtractionOutcome) {
     let mut i = 0;
     while i + 1 < outcome.items.len() {
@@ -241,6 +271,60 @@ mod tests {
             ("PNGO 25-500CAD", "Variable 25-500", 60_000),
             // A reversed range is not a range.
             ("PNGO 500-25CAD", "Variable 500-25", 10_000),
+        ] {
+            let outcome = fold(vec![item(card, 0), item(load, cents)]);
+            assert_eq!(outcome.items.len(), 2, "{card} / {load} at {cents}");
+            assert!(outcome.warnings.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_load_row_may_print_its_amount_with_a_dollar_sign() {
+        // Dollarama's lottery ticket: the SKU at 0.00, then the OLG charge.
+        let outcome = fold(vec![
+            item("LOT0 6/49 $3 00000000000", 0),
+            item("OLG $3", 3_00),
+        ]);
+        let items: Vec<_> = outcome
+            .items
+            .iter()
+            .map(|i| (i.description.as_str(), i.price.cents()))
+            .collect();
+        assert_eq!(items, vec![("LOT0 6/49 $3 00000000000", 3_00)]);
+        // The self-naming guard still applies with the sign.
+        let outcome = fold(vec![item("LOTO 6/49 $3", 0), item("OLG $5", 3_00)]);
+        assert_eq!(outcome.items.len(), 2);
+    }
+
+    #[test]
+    fn a_card_that_says_var_takes_a_variable_load_rows_price() {
+        // Dollarama's Apple card prints VAR. where PNGO prints its range.
+        let outcome = fold(vec![
+            item("APPLE GC VAR 00000000000", 0),
+            item("Variable 10-500", 28_00),
+        ]);
+        let items: Vec<_> = outcome
+            .items
+            .iter()
+            .map(|i| (i.description.as_str(), i.price.cents()))
+            .collect();
+        assert_eq!(items, vec![("APPLE GC VAR 00000000000", 28_00)]);
+        assert_eq!(
+            outcome.warnings[0].kind,
+            ReceiptWarningKind::PriceAutoCorrected
+        );
+    }
+
+    #[test]
+    fn saying_var_does_not_relax_the_range_or_the_load_rows_word() {
+        for (card, load, cents) in [
+            // The charge falls outside the range the load row prints.
+            ("APPLE GC VAR.", "Variable 10-500", 5_00),
+            ("APPLE GC VAR.", "Variable 10-500", 50_100),
+            // The load row's own word does not say variable.
+            ("APPLE GC VAR.", "Reload 10-500", 28_00),
+            // VAR inside a longer word is not the word.
+            ("APPLE GC VARIETY", "Variable 10-500", 28_00),
         ] {
             let outcome = fold(vec![item(card, 0), item(load, cents)]);
             assert_eq!(outcome.items.len(), 2, "{card} / {load} at {cents}");

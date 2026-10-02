@@ -555,20 +555,28 @@ fn is_gift_card_item(item: &ParsedReceiptItem) -> bool {
 }
 
 /// The payment terminal's `TRANSACTION RECORD` blocks that record an
-/// `ACTIVATE`, each bounded by the next record or the first footer line.
-fn activation_slips<'r, 'a>(rows: &'r [Row<'a>]) -> Vec<&'r [Row<'a>]> {
-    let is_record = |r: &Row<'_>| compact(r.text) == "TRANSACTIONRECORD";
+/// `ACTIVATE`, each bounded by the next record or the first footer line, as
+/// ranges of `lines`.
+pub(crate) fn activation_slip_ranges(lines: &[&str]) -> Vec<std::ops::Range<usize>> {
+    let is_record = |line: &str| compact(line) == "TRANSACTIONRECORD";
     let mut slips = Vec::new();
-    for (start, _) in rows.iter().enumerate().filter(|(_, r)| is_record(r)) {
-        let end = (start + 1..rows.len())
-            .find(|p| is_record(&rows[*p]) || block_end(rows[*p].text))
-            .unwrap_or(rows.len());
-        let slip = &rows[start..end];
-        if slip.iter().any(|r| has_word(r.text, "ACTIVATE")) {
-            slips.push(slip);
+    for start in (0..lines.len()).filter(|&i| is_record(lines[i])) {
+        let end = (start + 1..lines.len())
+            .find(|&p| is_record(lines[p]) || block_end(lines[p]))
+            .unwrap_or(lines.len());
+        if lines[start..end].iter().any(|l| has_word(l, "ACTIVATE")) {
+            slips.push(start..end);
         }
     }
     slips
+}
+
+fn activation_slips<'r, 'a>(rows: &'r [Row<'a>]) -> Vec<&'r [Row<'a>]> {
+    let lines: Vec<&str> = rows.iter().map(|r| r.text).collect();
+    activation_slip_ranges(&lines)
+        .into_iter()
+        .map(|range| &rows[range])
+        .collect()
 }
 
 /// Purchase metadata from terminal activation slips, for merchants that sell
