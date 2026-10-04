@@ -150,7 +150,27 @@ pub const DESKEW_SWEEP_MIN_CORROBORATING_ROWS: usize = 3;
 /// minimum and a single row's slope — so demanding they agree to the same
 /// tolerance a cluster of pairs agrees among themselves would be spurious
 /// precision.
-pub const DESKEW_SWEEP_CORROBORATION_TOL_DEG: f64 = 0.5;
+///
+/// A curled receipt needs the full degree. Its tilt varies down the page, and
+/// the sweep settles on a compromise between the parts: a Dollarama scan
+/// leaning 3.2 deg at its item rows and 1.6 deg at its tender block swept to
+/// 2.33 deg, more than 0.5 from every row. The sweep had cleared tightening,
+/// margin and misalignment, and the shear fixed the parse, but at 0.5 deg
+/// no row corroborated it, so it was declined. Four rows agree at 1.0.
+///
+/// Swept over the private corpus (167 receipts), cached and live:
+///
+/// | tol  | that receipt | cached corpus                  | live corpus |
+/// |------|--------------|--------------------------------|-------------|
+/// | 0.50 | broken       | baseline                       | baseline    |
+/// | 0.75 | broken       | 1 receipt regroups, no score Δ | no change   |
+/// | 1.00 | fixed        | 1 receipt regroups, no score Δ | no change   |
+/// | 1.25 | fixed        | 1 receipt regroups, no score Δ | no change   |
+///
+/// The receipt that regroups is a Loblaws footer where a points balance moves
+/// to the row the photo prints it on. The FreshCo case behind
+/// [`DESKEW_SWEEP_MIN_MISALIGNMENT`] still declines: that gate holds it.
+pub const DESKEW_SWEEP_CORROBORATION_TOL_DEG: f64 = 1.0;
 
 /// How far prices must already be from their labels, in median text heights,
 /// before the sweep is allowed to shear anything.
@@ -1320,6 +1340,50 @@ mod tests {
         assert!(
             !outcome.applied,
             "sheared an aligned receipt by {:.3}",
+            outcome.angle_deg
+        );
+    }
+
+    #[test]
+    fn sweep_accepts_a_curled_page_whose_rows_bracket_its_angle() {
+        // A curled receipt has no single tilt: the top leans more than the
+        // bottom (Dollarama 2026-09-20: about 3.2 deg at its item rows, 1.6 deg
+        // at its tender rows, with a terminal slip in between). The sweep
+        // settles on a compromise, so no priced row agrees with it within a
+        // tight band, even though every one sits on its side of the angle and
+        // the shear re-seats them all.
+        let pitch = 40.0;
+        let mut rows = Vec::new();
+        let mut cy = 200.0;
+        for i in 0..2 {
+            rows.push(det(&format!("GIFT CARD {i}"), 150.0, cy, 200.0));
+            rows.push(det(&format!("{}.00", 10 * (i + 1)), 850.0, cy, 80.0));
+            cy += pitch;
+        }
+        for i in 0..14 {
+            rows.push(det(&format!("Slip label {i}"), 120.0, cy, 180.0));
+            rows.push(det(&format!(": VALUE {i}"), 420.0, cy, 220.0));
+            cy += pitch;
+        }
+        for i in 0..3 {
+            rows.push(det(&format!("TENDER {i}"), 150.0, cy, 200.0));
+            rows.push(det("30.00", 850.0, cy, 80.0));
+            cy += pitch;
+        }
+        let (top, bottom) = (200.0, cy - pitch);
+        let curled: Vec<Detection> = rows
+            .iter()
+            .map(|d| {
+                let lean = 3.2 - 1.6 * (d.center_y - top) / (bottom - top);
+                tilt(d, lean, 1000.0)
+            })
+            .collect();
+        let outcome = deskew(&curled, 1000.0);
+        assert_eq!(outcome.estimator, DeskewEstimator::RowSweep);
+        assert!(outcome.applied, "gate said {:?}", outcome.gate_reason);
+        assert!(
+            outcome.angle_deg > 1.6 && outcome.angle_deg < 3.2,
+            "swept {:.3}, outside the curl",
             outcome.angle_deg
         );
     }
