@@ -21,6 +21,18 @@ pub(crate) struct ExtractionOutcome {
     pub warnings: Vec<ReceiptWarning>,
 }
 
+/// Costco's manufacturer-coupon line: `<coupon number> / <item number>`, printed
+/// under the item it reduces with a trailing-minus amount (`4.00- H`). Unlike
+/// `TPD/<item>` it carries no letters, so no keyword rule can tag it and every
+/// "is this row descriptive" filter rejects it — the shape is the only evidence
+/// there is. Callers that admit or tag a row on it also require a negative
+/// amount.
+pub(crate) fn is_coupon_reference_line(text: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^\d{6,}\s*/\s*\d{4,}$").unwrap())
+        .is_match(text.trim())
+}
+
 /// Costco prints a numeric item code before the description. Capture the row's
 /// own code, never the product reference after `TPD/`. The caller must gate this
 /// candidate on the resolved merchant; other chains use leading quantities.

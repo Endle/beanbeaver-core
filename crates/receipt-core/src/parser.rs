@@ -543,6 +543,21 @@ pub fn parse_receipt(
             if !item.price.is_negative() && is_unsigned_discount_line(&item.description) {
                 item.price = -item.price;
             }
+            // A coupon names no product, so it nets against nothing: give it
+            // exactly what the `TPD/<item>` keyword rule gives a code-only
+            // discount, through the same tag-to-account mapping.
+            if item.price.is_negative()
+                && item.tags.is_empty()
+                && crate::extraction::is_coupon_reference_line(&item.description)
+            {
+                item.tag_path = Some("discount".to_string());
+                item.account = categories::resolve_account_target(
+                    Some("discount"),
+                    &rule_layers.category_rules.account_mapping,
+                    None,
+                );
+                item.tags = vec!["discount".to_string()];
+            }
             item
         })
         .collect();
@@ -659,6 +674,7 @@ pub fn parse_receipt(
 mod tests {
     use super::is_unsigned_discount_line;
     use crate::common::ReceiptWarningKind;
+    use crate::extraction::is_coupon_reference_line;
     use crate::money::Money;
     use crate::rules::default_parser_rule_layers;
 
@@ -833,6 +849,98 @@ mod tests {
         let unknown = parse_text("SOME SHOP\n232952 COKE ZERO 17.19\nTOTAL 17.19");
         assert_eq!(unknown.items.len(), 1);
         assert_eq!(unknown.items[0].item_number, None);
+    }
+
+    /// Costco prints a manufacturer coupon as `<coupon number> / <item number>`
+    /// under the item it reduces: no `TPD/`, and no letters at all. Both
+    /// extraction paths used to drop it as non-descriptive, leaving the items
+    /// over the subtotal by exactly the coupon.
+    #[test]
+    fn costco_coupon_reference_line_is_a_discount_on_both_paths() {
+        use crate::ocr_document::{Bbox, OcrDocument, OcrLine, OcrWord};
+        let rows = [
+            ("COSTCO", ""),
+            ("1234567 SENSODYNE", "19.99 H"),
+            ("0000123456 / 1234567", "4.00- H"),
+            ("430 XL EGGS", "9.69"),
+            ("SUBTOTAL", "25.68"),
+            ("TAX", "2.08"),
+            ("TOTAL", "27.76"),
+        ];
+        let spatial = OcrDocument {
+            lines: rows
+                .iter()
+                .enumerate()
+                .map(|(i, (name, price))| {
+                    let top = 0.05 + i as f64 * 0.07;
+                    let word = |text: &str, left, right| OcrWord {
+                        text: text.into(),
+                        bbox: Bbox {
+                            left,
+                            right,
+                            top,
+                            bottom: top + 0.02,
+                        },
+                        confidence: 0.99,
+                    };
+                    let mut words = vec![word(name, 0.1, 0.6)];
+                    if !price.is_empty() {
+                        words.push(word(price, 0.8, 0.9));
+                    }
+                    OcrLine::new(format!("{name} {price}"), words)
+                })
+                .collect(),
+        };
+        assert!(!crate::spatial::extract_spatial_items(&spatial)
+            .items
+            .is_empty());
+        let text = OcrDocument::from_text(&spatial.full_text());
+        let layers = default_parser_rule_layers();
+        for doc in [&text, &spatial] {
+            let path = if doc.has_useful_bbox_data() {
+                "spatial"
+            } else {
+                "text"
+            };
+            let parsed = super::parse_receipt(
+                doc,
+                &layers,
+                "receipt.jpg",
+                &[],
+                &crate::rules::default_merchant_families(),
+                2026,
+            );
+            assert_eq!(parsed.items.len(), 3, "{path}: {:#?}", parsed.items);
+            let coupon = &parsed.items[1];
+            assert!(
+                coupon.description.contains("0000123456 / 1234567"),
+                "{path}: {coupon:?}"
+            );
+            assert_eq!(coupon.price, Money::from_decimal_str("-4.00"), "{path}");
+            assert_eq!(coupon.tags, vec!["discount"], "{path}");
+            assert_eq!(
+                coupon.account.as_deref(),
+                Some("Expenses:Discount"),
+                "{path}"
+            );
+            assert!(
+                parsed.warnings.is_empty(),
+                "{path}: a reconciling coupon receipt should report nothing: {:?}",
+                parsed.warnings
+            );
+        }
+    }
+
+    #[test]
+    fn coupon_reference_shape_is_narrow() {
+        assert!(is_coupon_reference_line("0000123456 / 1234567"));
+        assert!(is_coupon_reference_line("0000123456/1234567"));
+        // A date, a time, a lone code, or anything with words is not a coupon.
+        assert!(!is_coupon_reference_line("2026/10/04"));
+        assert!(!is_coupon_reference_line("1234567"));
+        assert!(!is_coupon_reference_line("123 / 45"));
+        assert!(!is_coupon_reference_line("2087683 TPD/969786"));
+        assert!(!is_coupon_reference_line("1234567 SENSODYNE"));
     }
 
     /// Every finding of the kind, so a test can't pass on the wrong shape.
