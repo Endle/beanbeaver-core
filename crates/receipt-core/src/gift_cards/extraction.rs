@@ -372,11 +372,17 @@ fn product_key(description: &str) -> String {
     compact(&re.replace(description, ""))
 }
 fn program(description: &str) -> Option<&'static str> {
+    // `UBER` is matched as a word, not on the compacted text: as a substring
+    // it would claim TUBER, and Costco prints the card as `373 UBER CARDS`.
+    static UBER: OnceLock<Regex> = OnceLock::new();
+    let uber = UBER.get_or_init(|| Regex::new(r"(?i)\bUBER\b").unwrap());
     let d = compact(description);
     if d.contains("DOORDASH") {
         Some("DoorDash")
     } else if d.contains("LCBOCARD") {
         Some("LCBO")
+    } else if uber.is_match(description) {
+        Some("Uber")
     } else {
         None
     }

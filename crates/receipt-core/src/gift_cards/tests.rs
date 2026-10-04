@@ -162,6 +162,33 @@ fn packs_and_identical_products_keep_independent_activation_references() {
     assert_eq!(g.reference, None);
     assert!(g.unresolved_fields.contains(&"association".into()));
 }
+/// Costco 2026-10-04: two `373 UBER CARDS` under an `LCBO CARD`, each with
+/// its own `PC` row. Uber is matched as a word, so a TUBER line is no card.
+#[test]
+fn uber_cards_are_a_purchase_program() {
+    let doc = OcrDocument::from_text("810 LCBO CARD 400.00\nPC 333333 ACTIVATED\n373 UBER CARDS 79.99\nPC 111111 ACTIVATED\n373 UBER CARDS 79.99\nPC 222222 ACTIVATED\n123 YAM TUBER 3.99\nSUBTOTAL 563.97");
+    let mut items = vec![
+        item("810 LCBO CARD"),
+        item("373 UBER CARDS"),
+        item("373 UBER CARDS"),
+        item("123 YAM TUBER"),
+    ];
+    attach_purchases(&doc, "COSTCO", &mut items);
+    let a = items[1].gift_card.as_ref().unwrap();
+    let b = items[2].gift_card.as_ref().unwrap();
+    assert_eq!(a.issuer.as_deref(), Some("Uber"));
+    assert_eq!(a.reference.as_deref(), Some("111111"));
+    assert_eq!(b.reference.as_deref(), Some("222222"));
+    assert_eq!(a.reference_label.as_deref(), Some("PC"));
+    assert_eq!(a.activation, GiftCardActivation::Activated);
+    assert_eq!(a.card_count, None);
+    assert!(a.unresolved_fields.is_empty());
+    assert_eq!(
+        items[0].gift_card.as_ref().unwrap().reference.as_deref(),
+        Some("333333")
+    );
+    assert!(items[3].gift_card.is_none());
+}
 /// What `parse_receipt` actually emits for two identical packs — the item
 /// number populated on both, and stripped from one description but not the
 /// other (`costco_biz_20260125`); or the same number on both with one OCR
