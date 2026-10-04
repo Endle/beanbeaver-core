@@ -85,6 +85,7 @@ pub(super) fn orphan_qty_pairing(
             description: desc,
             price: orphan_cents,
             quantity: 1,
+            department: None,
         },
         description_line: next_idx,
     })
@@ -142,6 +143,7 @@ pub(super) fn drifted_price_pairing(
                 description: desc,
                 price: price_cents,
                 quantity: 1,
+                department: None,
             },
             description_line: j,
         });
@@ -385,6 +387,7 @@ pub(super) fn inline_item(plan: &PricePlan, price_cents: Money) -> ParsedTextIte
         category_source: desc_clean,
         price: price_cents,
         quantity: 1,
+        department: None,
     }
 }
 
@@ -815,5 +818,6 @@ pub(super) fn searched_item(
         description: format!("{cleaned_desc}{description_suffix}"),
         price: price_cents,
         quantity,
+        department: None,
     }
 }

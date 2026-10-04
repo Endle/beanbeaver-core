@@ -297,6 +297,7 @@ pub(super) fn resolve_deferred(
                         category_source: candidate.category_source.clone(),
                         price: recovered_price_cents,
                         quantity: 1,
+                        department: None,
                     });
                     maybe_push_warning(
                         &mut warnings,
