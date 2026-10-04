@@ -15,8 +15,8 @@ permissions:
 jobs:
   # Formatting is a BLOCKING gate. It is deterministic, has no false positives,
   # and is clean at the commit that introduced this job — so it can only fail on
-  # a real regression. Split out of the advisory `lint` job below (#77 was "Fix
-  # lint", which is what an advisory formatting gate reliably produces).
+  # a real regression. Split out of the then-advisory `lint` job below (#77 was
+  # "Fix lint", which is what an advisory formatting gate reliably produces).
   fmt:
     name: fmt (blocking)
     runs-on: ubuntu-latest
@@ -35,15 +35,18 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all -- --check
 
-  # Independent style / safety gate (Linux only). Runs in parallel with `test`
-  # (no `needs:` edge — lint failure does not skip OCR work). Informational:
-  # `continue-on-error` means a lint failure never blocks merge. `fmt` is NOT
-  # here — it is its own blocking job above.
+  # Style / safety / license gate (Linux only), BLOCKING like `fmt`. Runs in
+  # parallel with `test` (no `needs:` edge — lint failure does not skip OCR
+  # work). It used to be advisory (`continue-on-error`), and an advisory gate
+  # can sit red without anyone noticing; it was made blocking once
+  # `-D warnings` was clean on the stable toolchain CI resolves (1.98.1,
+  # 2026-09-30). Like `fmt`, it floats on `stable`: a new release's lints can
+  # turn it red with no code change, and the fix is a lint PR, not a revert to
+  # advisory.
   lint:
     name: lint (clippy, deny)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    continue-on-error: true
     env:
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
@@ -65,17 +68,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: clippy
-        # Correctness and style are both hard gates. Style joined when the god
-        # modules were split (#84, #85) — the findings it had been holding back
-        # (items-after-test, needless-range-loop, field-reassign-with-default)
-        # were all consequences of functions too big to see the end of.
-        #
-        # Perf and complexity are still only warnings: what remains under them
-        # is regex-in-loop and the wide `process_receipt` / `parse_detections`
-        # signatures, and narrowing those means changing the FFI surface, which
-        # is a core-tag rollout rather than a lint fix. Tighten toward
-        # `-D warnings` when that rollout happens anyway.
-        run: cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::style
+        # Every warning is an error. Correctness and style were the first hard
+        # gates; style joined when the god modules were split (#84, #85). The
+        # rest followed once nothing was left under them: the wide
+        # `process_receipt` / `process_image` signatures carry explicit
+        # `#[allow(clippy::too_many_arguments)]` — narrowing them is a core-tag
+        # rollout, not a lint fix — and the per-call keyword regexes are now
+        # compiled once (`categories::keyword_regex`).
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: cargo-deny (licenses)
         uses: EmbarkStudios/cargo-deny-action@v2
