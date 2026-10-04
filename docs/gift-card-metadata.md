@@ -11,8 +11,9 @@ implemented here.
   expiry (`unknown`, `no_expiry`, or `printed_date`), and post-payment balance.
 - Costco Shop Card tenders: the preceding authorization block's masked
   identifier, `APP` reference, and remaining balance.
-- Costco DoorDash and LCBO purchases: the associated `PC` reference and
-  receipt-reported `ACTIVATED` annotation. Repeated product occurrences remain
+- Costco DoorDash, LCBO and Uber purchases: the associated `PC` reference and
+  receipt-reported `ACTIVATED` annotation. Uber is matched as the word `UBER`
+  (`373 UBER CARDS`), so it does not claim `TUBER`. Repeated product occurrences remain
   separate; missing/ambiguous occurrences leave their association unresolved.
   Occurrences are keyed on the description *without* its item number, because
   the parser keeps the number on one emitted line and strips it from the next
