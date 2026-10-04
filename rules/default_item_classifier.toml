@@ -590,7 +590,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0031"
-keywords = ["TOOTHPASTE", "TOOTHBRUSH", "MOUTHWASH", "DENTAL FLOSS", "FLOSS", "SONICARE", "COLGATE", "PRONAMEL"]
+keywords = ["TOOTHPASTE", "TOOTHBRUSH", "MOUTHWASH", "DENTAL FLOSS", "FLOSS", "SONICARE", "COLGATE", "PRONAMEL", "SENSODYNE"]
 tags = ["personal_care/tooth"]
 priority = 0
 exact_only = false

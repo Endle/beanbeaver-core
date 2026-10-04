@@ -515,13 +515,20 @@ pub(super) fn is_valid_item_line(line: &ParsedLine, total_line_y: Option<f64>) -
     // lose letters from its discount prefix, but the explicit minus still
     // establishes a priced row. Preserve that amount and the surviving text;
     // do not invent a replacement prefix or a category.
-    let signed_adjustment = re_trailing_price()
+    let trailing_minus = re_trailing_price()
         .captures(&line.full_text)
-        .is_some_and(|c| c.get(2).is_some_and(|sign| sign.as_str() == "-"))
+        .is_some_and(|c| c.get(2).is_some_and(|sign| sign.as_str() == "-"));
+    let signed_adjustment = trailing_minus
         && left_text_for_ratio
             .chars()
             .any(|ch| ch.is_ascii_alphabetic());
-    if !is_costco_discount && !signed_adjustment && alpha_ratio(&left_text_for_ratio) < 0.5 {
+    // A coupon line has no letters to lose: `<coupon> / <item>` and a minus.
+    let coupon = trailing_minus && crate::extraction::is_coupon_reference_line(&line.left_text);
+    if !is_costco_discount
+        && !signed_adjustment
+        && !coupon
+        && alpha_ratio(&left_text_for_ratio) < 0.5
+    {
         return false;
     }
     if re_malformed_ocr_prefix().is_match(&line.left_text) {
