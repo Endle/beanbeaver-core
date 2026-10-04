@@ -47,7 +47,18 @@ pub fn extract_text_items(lines: &[String], summary_amounts: &HashSet<Money>) ->
     // pair forward instead of backward.
     let price_drift = count_price_drift_evidence(&normalized_lines).establishes_drift();
 
+    // The department banner in force at each row. Items are stamped with the
+    // department of the row whose processing emitted them; the loop has many
+    // `continue`s, so that happens on entry to the next row rather than at the
+    // bottom of this one.
+    let departments = crate::department::in_effect(normalized_lines.iter().map(String::as_str));
+    let mut stamped = 0;
+
     for (i, line) in normalized_lines.iter().enumerate() {
+        if i > 0 {
+            stamp_department(&mut deferred[stamped..], departments[i - 1]);
+            stamped = deferred.len();
+        }
         if total_line_idx.is_some_and(|total_idx| i > total_idx) {
             break;
         }
@@ -166,6 +177,12 @@ pub fn extract_text_items(lines: &[String], summary_amounts: &HashSet<Money>) ->
         }
     }
 
+    // The rows after the last stamp were all emitted by the final row processed:
+    // the last row, or the one the loop broke on (which emits nothing).
+    if let Some(last) = departments.last() {
+        stamp_department(&mut deferred[stamped..], *last);
+    }
+
     let (mut items, mut warnings) = resolve_deferred(deferred, summary_amounts);
 
     if let Some(cap_base) = total_cap_cents {
@@ -173,4 +190,12 @@ pub fn extract_text_items(lines: &[String], summary_amounts: &HashSet<Money>) ->
     }
 
     ExtractionOutcome { items, warnings }
+}
+
+fn stamp_department(outcomes: &mut [DeferredTextOutcome], department: Option<&'static str>) {
+    for outcome in outcomes {
+        if let DeferredTextOutcome::Item(item) = outcome {
+            item.department = department;
+        }
+    }
 }

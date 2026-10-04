@@ -12,6 +12,10 @@ pub fn extract_spatial_items(doc: &OcrDocument) -> SpatialExtractionOutcome {
     let (all_lines, price_candidates) = classify_rows(doc);
     let total_line_y = total_line_y(&all_lines);
     let mut used_line_indices = vec![false; all_lines.len()];
+    // The department banner in force at each row; an item takes the one over the
+    // row it claims as its description. See `crate::department`.
+    let departments =
+        crate::department::in_effect(all_lines.iter().map(|line| line.full_text.as_str()));
 
     for price_candidate in price_candidates {
         let price_y = price_candidate.price_y;
@@ -95,6 +99,7 @@ pub fn extract_spatial_items(doc: &OcrDocument) -> SpatialExtractionOutcome {
                         ),
                         category_source: description.clone(),
                         quantity: 1,
+                        department: departments[index],
                         description,
                         price: Money::from_scaled_4(price_candidate.price_scaled),
                     });
@@ -116,6 +121,7 @@ pub fn extract_spatial_items(doc: &OcrDocument) -> SpatialExtractionOutcome {
                     item_number: crate::extraction::leading_item_number(&source_line.left_text),
                     category_source: description.clone(),
                     quantity: 1,
+                    department: departments[price_candidate.source_line_index],
                     description,
                     price: Money::from_scaled_4(price_candidate.price_scaled),
                 });
@@ -140,6 +146,7 @@ pub fn extract_spatial_items(doc: &OcrDocument) -> SpatialExtractionOutcome {
                     ),
                     category_source: description.clone(),
                     quantity: 1,
+                    department: departments[index],
                     description,
                     price: Money::from_scaled_4(price_candidate.price_scaled),
                 });

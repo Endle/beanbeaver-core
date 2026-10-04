@@ -13,6 +13,10 @@ pub(crate) struct ExtractedItem {
     pub category_source: String,
     pub price: Money,
     pub quantity: i32,
+    /// Tag path of the mapped department banner this item was printed under,
+    /// stamped by the extractor that claimed its row. A last-resort category
+    /// for a line no rule recognises; see [`crate::department`].
+    pub department: Option<&'static str>,
 }
 
 #[derive(Clone, Debug)]
@@ -203,6 +207,7 @@ mod tests {
             category_source: description.to_string(),
             price: Money::from_cents(cents),
             quantity: 1,
+            department: None,
         }
     }
 

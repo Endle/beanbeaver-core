@@ -159,6 +159,29 @@ fn build_item(
     }
 }
 
+/// Tag `item` with its department's path, as a rule declaring that path would.
+///
+/// Skipped when the rules in force do not declare the path: a user document may
+/// have disabled it, and an undeclared tag would reach the app with no display
+/// name.
+fn apply_department(item: &mut ParsedReceiptItem, tag_path: &str, rule_layers: &ParserRuleLayers) {
+    if !rule_layers
+        .category_rules
+        .tag_vocabulary
+        .iter()
+        .any(|node| node.path == tag_path)
+    {
+        return;
+    }
+    item.account = categories::resolve_account_target(
+        Some(tag_path),
+        &rule_layers.category_rules.account_mapping,
+        None,
+    );
+    item.tags = categories::expand_tag_paths(std::slice::from_ref(&tag_path.to_string()));
+    item.tag_path = Some(tag_path.to_string());
+}
+
 /// Build one item the way a scan does: classify `description` with the rules in
 /// force and take the account that classification resolves to.
 ///
@@ -531,7 +554,7 @@ pub fn parse_receipt(
             vocab,
         );
         parsed.item_number = item_number;
-        parsed
+        (parsed, item.department)
     });
 
     // Sign-correct unsigned line-item discounts (e.g. FreshCo "INSTANT
@@ -539,9 +562,17 @@ pub fn parse_receipt(
     // single merge point.
     let mut items: Vec<ParsedReceiptItem> = items
         .into_iter()
-        .map(|mut item| {
+        .map(|(mut item, department)| {
             if !item.price.is_negative() && is_unsigned_discount_line(&item.description) {
                 item.price = -item.price;
+            }
+            // Last resort: a line no rule recognised takes the department banner
+            // it was printed under (`23-FROZEN`). Never a discount — `Member
+            // Pricing` under a banner is a reduction, not a product.
+            if item.tags.is_empty() && item.price > Money::ZERO {
+                if let Some(tag_path) = department {
+                    apply_department(&mut item, tag_path, rule_layers);
+                }
             }
             // A coupon names no product, so it nets against nothing: give it
             // exactly what the `TPD/<item>` keyword rule gives a code-only
@@ -927,6 +958,112 @@ mod tests {
                 parsed.warnings.is_empty(),
                 "{path}: a reconciling coupon receipt should report nothing: {:?}",
                 parsed.warnings
+            );
+        }
+    }
+
+    /// No Frills files a private-label ice cream as `PCBL BLACK LABE` — nothing a
+    /// keyword can recognise — but prints it under `23-FROZEN`. The banner is the
+    /// last resort, and only that: a rule still wins, a discount never takes it,
+    /// and an unmapped banner ends the department above it.
+    #[test]
+    fn department_banner_categorises_only_what_the_rules_cannot_on_both_paths() {
+        use crate::ocr_document::{Bbox, OcrDocument, OcrLine, OcrWord};
+        let rows = [
+            ("NOFRILLS", ""),
+            ("23-FROZEN", ""),
+            ("06038306830 PCBL BLACK LABE", "4.50"),
+            ("06038399387 PC MANGO CHUNKS", "4.50"),
+            ("Member Pricing", "-1.00"),
+            ("22-DAIRY", ""),
+            ("06038360413 ZZQW EXT LRG", "4.71"),
+            ("27-PRODUCE", ""),
+            ("4011 BANANA", "1.19"),
+            ("SUBTOTAL", "13.90"),
+            ("TOTAL", "13.90"),
+        ];
+        let spatial = OcrDocument {
+            lines: rows
+                .iter()
+                .enumerate()
+                .map(|(i, (name, price))| {
+                    let top = 0.05 + i as f64 * 0.07;
+                    let word = |text: &str, left, right| OcrWord {
+                        text: text.into(),
+                        bbox: Bbox {
+                            left,
+                            right,
+                            top,
+                            bottom: top + 0.02,
+                        },
+                        confidence: 0.99,
+                    };
+                    let mut words = vec![word(name, 0.1, 0.6)];
+                    if !price.is_empty() {
+                        words.push(word(price, 0.8, 0.9));
+                    }
+                    OcrLine::new(format!("{name} {price}"), words)
+                })
+                .collect(),
+        };
+        assert!(!crate::spatial::extract_spatial_items(&spatial)
+            .items
+            .is_empty());
+        let text = OcrDocument::from_text(&spatial.full_text());
+        let layers = default_parser_rule_layers();
+        for doc in [&text, &spatial] {
+            let path = if doc.has_useful_bbox_data() {
+                "spatial"
+            } else {
+                "text"
+            };
+            let parsed = super::parse_receipt(
+                doc,
+                &layers,
+                "receipt.jpg",
+                &[],
+                &crate::rules::default_merchant_families(),
+                2026,
+            );
+            let item = |needle: &str| {
+                parsed
+                    .items
+                    .iter()
+                    .find(|item| item.description.contains(needle))
+                    .unwrap_or_else(|| panic!("{path}: no {needle} in {:#?}", parsed.items))
+            };
+            assert_eq!(parsed.items.len(), 5, "{path}: {:#?}", parsed.items);
+
+            let ice_cream = item("PCBL BLACK LABE");
+            assert_eq!(
+                ice_cream.tag_path.as_deref(),
+                Some("grocery/frozen"),
+                "{path}"
+            );
+            assert_eq!(
+                ice_cream.account.as_deref(),
+                Some("Expenses:Food:Grocery:Frozen"),
+                "{path}"
+            );
+            // A keyword match is never overridden by the banner above it.
+            assert_eq!(
+                item("PC MANGO CHUNKS").tag_path.as_deref(),
+                Some("grocery/fruit"),
+                "{path}"
+            );
+            assert!(
+                !item("Member Pricing")
+                    .tags
+                    .iter()
+                    .any(|t| t == "grocery/frozen"),
+                "{path}: a discount must not take the department"
+            );
+            // 22-DAIRY is unmapped, and it ends 23-FROZEN.
+            assert!(item("ZZQW EXT LRG").tags.is_empty(), "{path}");
+            assert_eq!(
+                item("BANANA").tag_path.as_deref(),
+                Some("grocery/fruit"),
+                "{path}"
             );
         }
     }
