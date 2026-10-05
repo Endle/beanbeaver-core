@@ -315,11 +315,21 @@ pub(super) fn plan_price_line(
         // Under drift with the description above already priced, the REG amount
         // lives inside the marker itself and the trailing price is the NEXT
         // item's ("(-EG4.99  2.99" above "LKS Dried Cod Fish Slice") — forward
-        // it. In every other shape it is suggested retail, so keep suppressing.
-        if !drift_paren_forward {
+        // it.
+        //
+        // Without drift, a marker carrying its own amount above a still-unpriced
+        // name prices that name: the REG amount is the one inside the marker, so
+        // the trailing one is the charge ("*Beef Shank Hind Muscle" /
+        // "REG$11.99  21.75", the Chinese sub-line and its "@" lost to OCR).
+        // In every other shape it is suggested retail, so keep suppressing.
+        if drift_paren_forward {
+            skip_if_no_forward_desc = true;
+        } else if !(re_find_prices().is_match(&desc_part)
+            && index > 0
+            && !nearest_desc_above_consumed(rows.all, rows.used, index))
+        {
             return None;
         }
-        skip_if_no_forward_desc = true;
     }
 
     Some(PricePlan {

@@ -642,6 +642,78 @@ fn mangled_reg_row_forwards_drifted_price_under_drift() {
 }
 
 #[test]
+fn bare_reg_row_with_charge_prices_unpriced_name_above() {
+    // Bestco 2026-09-23_bestco_fresh_84_02_recapture: OCR lost the Chinese
+    // sub-line and the "@" before REG, leaving "REG$11.99  21.75". The marker
+    // carries the suggested-retail amount itself, so the trailing price is the
+    // unpriced name's charge — suppressing the row dropped the item.
+    let lines = vec![
+        "&& Meat".to_string(),
+        "*Yongda Black Angus Beef B".to_string(),
+        "4#@REG$13.88 15.48".to_string(),
+        "1.55 1b @ $9.99/1b".to_string(),
+        "*Beef Shank Hind Muscle".to_string(),
+        "REG$11.99 21.75".to_string(),
+        "2.27 1b @ $9.58/1b".to_string(),
+        "Sub Total 37.23".to_string(),
+    ];
+    let summary_amounts = HashSet::from([Money::from_cents(3723)]);
+
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
+    let observed: Vec<(String, Money)> = items
+        .into_iter()
+        .map(|item| (item.description, item.price))
+        .collect();
+
+    assert_eq!(
+        observed,
+        vec![
+            (
+                "*Yongda Black Angus Beef B".to_string(),
+                Money::from_cents(1548)
+            ),
+            (
+                "*Beef Shank Hind Muscle".to_string(),
+                Money::from_cents(2175)
+            ),
+        ]
+    );
+}
+
+#[test]
+fn bare_reg_row_under_priced_name_stays_suppressed() {
+    // The guard on the case above: with the name already priced, a
+    // "REG$4.99  2.99" row has no unpriced name to charge, so it must not
+    // back-walk and emit a phantom.
+    let lines = vec![
+        "*Cui Hong Chili Oil 400g 2.99".to_string(),
+        "REG$4.99 2.99".to_string(),
+        "Sub Total 2.99".to_string(),
+    ];
+    let summary_amounts = HashSet::from([Money::from_cents(299)]);
+
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
+    let observed: Vec<(String, Money)> = items
+        .into_iter()
+        .map(|item| (item.description, item.price))
+        .collect();
+
+    assert_eq!(
+        observed,
+        vec![(
+            "*Cui Hong Chili Oil 400g".to_string(),
+            Money::from_cents(299)
+        )]
+    );
+}
+
+#[test]
 fn weight_rate_row_with_dropped_at_still_prices_item_above() {
     // Bestco 2026-06-25_fresh_183_77: OCR dropped the '@' from Fresh
     // Ginger's weight row ("1.86 lb  $2.49/lb  4.63"), so it wasn't a
