@@ -143,6 +143,14 @@ pub(crate) fn re_reg_price_marker() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"(?:^|[^A-Z0-9])[0-9OI]?REG\$?\d+\.\d{2}").unwrap())
 }
 
+/// A REG marker on a parenthesised sub-line whose Chinese text OCR collapsed
+/// into a few junk glyphs ahead of it — "(AREG11.99", where the glyph before
+/// REG is a letter, so [`re_reg_price_marker`]'s boundary cannot see it.
+pub(crate) fn re_paren_reg_marker() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^\s*\([^)\s]{0,3}REG\$?\d+\.\d{2}").unwrap())
+}
+
 pub(crate) fn re_find_prices() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"(\d+\.\d{2})").unwrap())

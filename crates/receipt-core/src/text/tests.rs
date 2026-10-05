@@ -684,6 +684,49 @@ fn bare_reg_row_with_charge_prices_unpriced_name_above() {
 }
 
 #[test]
+fn paren_reg_row_with_junk_glyph_is_not_an_item() {
+    // Bestco 2026-09-23_bestco_fresh_84_02_recapture2: the Chinese sub-line
+    // collapsed into one letter ahead of REG, "(AREG11.99". With a letter
+    // before REG the marker went unrecognised, so the row became a phantom
+    // "(AREG" item at the suggested-retail 11.99 and the weight row's 21.75
+    // never reached the name above it.
+    let lines = vec![
+        "&& Meat".to_string(),
+        "*Yongda Black Angus Beef B".to_string(),
+        "4REG13.88".to_string(),
+        "1.55 1b @ $9.99/1b 15.48".to_string(),
+        "*Beef Shank Hind Muscle".to_string(),
+        "(AREG11.99".to_string(),
+        "2.27 1b @ $9.58/1b 21.75".to_string(),
+        "Sub Total 37.23".to_string(),
+    ];
+    let summary_amounts = HashSet::from([Money::from_cents(3723)]);
+
+    let crate::extraction::ExtractionOutcome {
+        items,
+        warnings: _warnings,
+    } = extract_text_items(&lines, &summary_amounts);
+    let observed: Vec<(String, Money)> = items
+        .into_iter()
+        .map(|item| (item.description, item.price))
+        .collect();
+
+    assert_eq!(
+        observed,
+        vec![
+            (
+                "*Yongda Black Angus Beef B".to_string(),
+                Money::from_cents(1548)
+            ),
+            (
+                "*Beef Shank Hind Muscle".to_string(),
+                Money::from_cents(2175)
+            ),
+        ]
+    );
+}
+
+#[test]
 fn bare_reg_row_under_priced_name_stays_suppressed() {
     // The guard on the case above: with the name already priced, a
     // "REG$4.99  2.99" row has no unpriced name to charge, so it must not

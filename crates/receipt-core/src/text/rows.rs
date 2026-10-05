@@ -563,13 +563,16 @@ pub(super) fn malformed_marker_is_multi_buy(index: usize, rows: Lines<'_>) -> bo
 /// Whether a row quotes a REG (suggested retail) price anywhere in its text.
 ///
 /// The four literals are the ways OCR splices the marker into its neighbour —
-/// "0REG" and "OREG" are a leading `@` misread as a digit or a letter.
+/// "0REG" and "OREG" are a leading `@` misread as a digit or a letter. The
+/// parenthesised form covers a sub-line whose Chinese text collapsed into a
+/// letter right before REG ("(AREG11.99", Bestco 2026-09-23).
 pub(super) fn has_reg_price_marker(line_upper: &str) -> bool {
     line_upper.contains("REG$")
         || line_upper.contains("@REG")
         || line_upper.contains("0REG")
         || line_upper.contains("OREG")
         || re_reg_price_marker().is_match(line_upper)
+        || re_paren_reg_marker().is_match(line_upper)
 }
 
 /// Whether the text left of the price is nothing but a parenthesised amount —
