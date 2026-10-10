@@ -1374,6 +1374,32 @@ mod tests {
             "PNGO missing tag gift_card"
         );
 
+        // FreshCo's "Ice Cream Strawberry": the flavour's STRAWBERRY outranked
+        // ICE CREAM on length and filed it as Fruit, and FACE CREAM fuzzy-hit
+        // "ICE CREAM" to hang Personal Care -- the label the app shows -- on it.
+        assert_eq!(
+            key("Ice Cream Strawberry").as_deref(),
+            Some("grocery/frozen/icecream")
+        );
+        assert!(!tags("Ice Cream Strawberry")
+            .iter()
+            .any(|x| x.starts_with("personal_care")));
+        assert_eq!(
+            tags("Ice Cream Strawberry").last().map(String::as_str),
+            Some("grocery/frozen/icecream")
+        );
+        assert_eq!(key("Nivea Face Cream").as_deref(), Some("personal_care"));
+        // ...and the cooler whose flavour contains ICE CREAM stays alcohol.
+        assert_eq!(
+            key("SMIRNOFF ICE CREAMSICLE BLEST").as_deref(),
+            Some("alcohol/beverage")
+        );
+        // FreshCo prints diced tomatoes as "Tom Diced".
+        assert_eq!(
+            key("Tom Diced").as_deref(),
+            Some("grocery/vegetable/canned")
+        );
+
         // Foody Mart truncates Sunrise's "Fresh Smooth Tofu" before TOFU; the
         // fuzzy SMOOTHIE used to claim it for juice. A real smoothie still is.
         assert_eq!(
