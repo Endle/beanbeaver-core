@@ -50,7 +50,12 @@
 #   OKAR    (vegetable, legacy_0008) is Bestco's misspelling of OKRA. Four
 #           letters, so its fuzzy neighborhood is wide — and literal OKARA
 #           (soy pulp) still contains it, which is the one collision to watch.
-exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD", "ORANGE", "POCKY", "SMOOTHIE", "FRESH SMOOTH TO", "BLACK TEA", "BLACK TIGER", "BLACK TIE", "OKAR"]
+#   FACE CREAM, EYE CREAM, DAY CREAM (personal care, semantic_tag_0107) are
+#           ICE CREAM's English neighbours: FACE CREAM fuzzy-matched FreshCo's
+#           "Ice Cream Strawberry" and put a Personal Care tag -- the LAST tag,
+#           so the chip the app shows -- on a tub of ice cream. Skin cream is
+#           printed in full, so nothing is lost by requiring a literal match.
+exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD", "ORANGE", "POCKY", "SMOOTHIE", "FRESH SMOOTH TO", "BLACK TEA", "BLACK TIGER", "BLACK TIE", "OKAR", "FACE CREAM", "EYE CREAM", "DAY CREAM"]
 
 # BRANDS — text that names the maker, blanked out before any keyword is matched.
 #
@@ -284,7 +289,11 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0009"
-keywords = ["CANNED CORN", "CANNED BEAN", "CANNED TOMATO", "CANNED PEA", "DICED TOMATO", "TOMATO SAUCE", "TOMATO PASTE", "GREEN GIANT", "NIBLETS"]
+# "TOM DICED" is FreshCo's truncation of diced tomatoes (a can, zero-rated `C`),
+# which matched no rule at all: TOMATO is not in it and DICED TOMATO is the
+# other word order. Corpus: freshco 2026-10-07 $88.91 (four of them) and
+# 2026-05-20 $55.90.
+keywords = ["CANNED CORN", "CANNED BEAN", "CANNED TOMATO", "CANNED PEA", "DICED TOMATO", "TOM DICED", "TOMATO SAUCE", "TOMATO PASTE", "GREEN GIANT", "NIBLETS"]
 tags = ["grocery/vegetable/canned"]
 priority = 0
 exact_only = false
@@ -298,9 +307,16 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0011"
+# Priority 1 because an ice cream is named by its flavour, and the flavour is
+# somebody else's keyword: FreshCo's "Ice Cream Strawberry" filed as Fruit,
+# STRAWBERRY (10) beating ICE CREAM (8) on `keyword_length` at equal priority.
+# MANGO, CHOCOLATE, COOKIE, CARAMEL ... would each do the same. Whatever the
+# flavour, the product is the ice cream, so this rule must win the account
+# outright rather than by length. The flavour's tag still accumulates, as tags
+# do everywhere here; only the account is decided by priority.
 keywords = ["ICE CREAM", "ICECREAM", "GELATO", "FROZEN YOGURT", "SORBET", "POPSICLE"]
 tags = ["grocery/frozen/icecream"]
-priority = 0
+priority = 1
 exact_only = false
 
 [[rules]]
@@ -562,7 +578,11 @@ exact_only = true
 
 [[rules]]
 id = "legacy_0028"
-keywords = ["COORS", "SMIRNOFF", "SLEEMAN", "BEER", "WINE", "VODKA", "WHISKEY", "WHISKY", "RUM", "GIN", "TEQUILA", "COGNAC", "CHAMPAGNE", "PROSECCO", "SPUMANTE", "CIDER", "SAKE", "SOJU", "LIQUOR", "LIQUEUR", "TRIPLE SEC", "LAGER", "STOUT", "PORTER"]
+# "SMIRNOFF ICE" is the cooler's product name, and it has to be longer than
+# "SMIRNOFF": the flavour "ICE CREAMSICLE" contains "ICE CREAM", and the ice
+# cream rule (legacy_0011) shares this rule's priority 1 with a keyword the same
+# length as "SMIRNOFF" -- a tie it wins on rule order.
+keywords = ["COORS", "SMIRNOFF ICE", "SMIRNOFF", "SLEEMAN", "BEER", "WINE", "VODKA", "WHISKEY", "WHISKY", "RUM", "GIN", "TEQUILA", "COGNAC", "CHAMPAGNE", "PROSECCO", "SPUMANTE", "CIDER", "SAKE", "SOJU", "LIQUOR", "LIQUEUR", "TRIPLE SEC", "LAGER", "STOUT", "PORTER"]
 tags = ["alcohol/beverage"]
 priority = 1
 exact_only = false
@@ -1279,6 +1299,19 @@ keywords = [
 ]
 tags = ["personal_care"]
 priority = 0
+exact_only = false
+
+# The case the comment above anticipates. "FACE CREAM" literally contains
+# "ICE CREAM", and the ice cream rule (legacy_0011) sits at priority 1 so a
+# flavour word cannot outrank it -- which would also outrank FACE CREAM, the
+# longer keyword, and file a face cream as ice cream. Matching priority puts the
+# two back on `keyword_length`, which FACE CREAM wins. EYE CREAM and DAY CREAM
+# do not contain ICE CREAM and need nothing.
+[[rules]]
+id = "face_cream_not_ice_cream"
+keywords = ["FACE CREAM"]
+tags = ["personal_care"]
+priority = 1
 exact_only = false
 
 # Costco sells Schwartz's Montreal smoked meat under the bare brand name --
