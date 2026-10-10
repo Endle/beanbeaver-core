@@ -477,6 +477,61 @@ fn amount_cents(text: &str) -> Option<i64> {
     })
 }
 
+/// The extension a quantity breakdown would state if OCR read its `$` as an
+/// `8`: `2 @ 82.99` read back as `2 @ $2.99`, in cents.
+///
+/// Foody Mart / Asia Food Mart print `N @ $U` at the left of the row, and the
+/// `$` there is the glyph OCR most often turns into an `8` — the same
+/// confusion that made `(1/$2.98)` into `(1/82.98` on a Foody Mart deal row.
+/// The literal reading then multiplies out to a figure no receipt line carries
+/// (2 × 82.99 = 165.98), which [`breakdown_extension_cents`] rightly refuses
+/// to match against the row's real `5.98H`.
+///
+/// Only taken where nothing contradicts it: the row must print no `$` at all,
+/// the unit must be an `8` glued to a money figure, and the quantity must be at
+/// least two so the product is a real check rather than the unit restated.
+/// Callers use it only for an *exact* match against an amount on the row, so a
+/// row that genuinely charges $82.99 can never be argued into anything — 2 ×
+/// 2.99 would have to equal its printed total to the cent.
+fn breakdown_lost_dollar_extension_cents(text: &str) -> Option<i64> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    if text.contains('$') {
+        return None;
+    }
+    let caps = RE
+        .get_or_init(|| Regex::new(r"^\s*(\d+)\s*(?:ea)?\s*@\s*8(\d+\.\d{2})\s*$").unwrap())
+        .captures(text)?;
+    let quantity: i64 = caps.get(1)?.as_str().parse().ok()?;
+    let unit = Money::parse_strict(caps.get(2)?.as_str()).ok()?.cents();
+    (quantity >= 2)
+        .then(|| quantity.checked_mul(unit))
+        .flatten()
+}
+
+/// Whether a quantity breakdown's own arithmetic says `amount` is its extended
+/// price — the positive half of the evidence [`breakdown_extension_cents`]
+/// gives, read under either the literal digits or the lost-`$` reading.
+///
+/// An amount the row already prints proves nothing: `1 @ $3.99` "reconciles"
+/// with any 3.99 on the page, the next item's included, and so does the deal
+/// row `2 @2/$4.47` with 4.47. That is the same tautology
+/// `qty_row_owns_trailing_total` excludes. Only a product the row does *not*
+/// print — 5.98 from `2 @ $2.99` — says which row owns the amount.
+fn breakdown_reconciles(text: &str, amount: &str) -> bool {
+    static MONEY: OnceLock<Regex> = OnceLock::new();
+    let Some(got) = amount_cents(amount) else {
+        return false;
+    };
+    let restates_a_printed_figure = MONEY
+        .get_or_init(|| Regex::new(r"\d+\.\d{2}").unwrap())
+        .find_iter(text)
+        .filter_map(|m| Money::parse_strict(m.as_str()).ok())
+        .any(|printed| printed.cents() == got);
+    !restates_a_printed_figure
+        && (breakdown_extension_cents(text) == Some(got)
+            || breakdown_lost_dollar_extension_cents(text) == Some(got))
+}
+
 /// True for savings notices whose amount is *already reflected* in the item
 /// price above them and is printed inline in the label itself — FreshCo's
 /// `YOU SAVED $2.00`. These are informational: they are not part of the
@@ -922,6 +977,7 @@ fn pair_columns(
                 && breakdown_extension_cents(&dets[left_index].text).is_some_and(|extension| {
                     amount_cents(&dets[right_index].text).is_some_and(|got| got != extension)
                 })
+                && !breakdown_reconciles(&dets[left_index].text, &dets[right_index].text)
             {
                 continue;
             }
@@ -932,7 +988,15 @@ fn pair_columns(
             // that squarely lines up with it. Yield when the next row is the
             // better fit — items are the price carriers, breakdowns only
             // sometimes are.
-            if breakdown {
+            //
+            // Not when the breakdown's own arithmetic says the amount is its
+            // extension. Overlap is the weakest evidence here — under drift the
+            // two candidate rows sit ~20px apart and the item below can edge
+            // out the breakdown by a few pixels — and `2 @ $2.99` against a
+            // `5.98H` is not a tie at all. Yielding there handed Asia Food
+            // Mart's Pepsi 5.98 to the next item, whose own 3.99 then fell off
+            // as an orphan.
+            if breakdown && !breakdown_reconciles(&dets[left_index].text, &dets[right_index].text) {
                 let mine = line_overlap_ratio(dets, right_index, &[left_index]);
                 let next_is_better = left
                     .get(position + 1)
@@ -2086,6 +2150,103 @@ mod tests {
         assert_eq!(breakdown_extension_cents("1 @3/$1.00"), None);
         // Not a breakdown at all.
         assert_eq!(breakdown_extension_cents("LKK - Premium Soy Sauce"), None);
+    }
+
+    #[test]
+    fn lost_dollar_breakdown_reads_the_eight_as_the_sign() {
+        // `$` read as `8`: the literal digits multiply out to 165.98, the
+        // receipt's own figure is 2 x 2.99.
+        assert_eq!(
+            breakdown_lost_dollar_extension_cents("2 @ 82.99"),
+            Some(598)
+        );
+        assert_eq!(
+            breakdown_lost_dollar_extension_cents("3 ea @ 81.25"),
+            Some(375)
+        );
+        // A printed `$` means nothing was lost.
+        assert_eq!(breakdown_lost_dollar_extension_cents("2 @ $82.99"), None);
+        // One unit restates the unit price, so it checks nothing.
+        assert_eq!(breakdown_lost_dollar_extension_cents("1 @ 82.99"), None);
+        // No leading 8 to reinterpret, and not a breakdown at all.
+        assert_eq!(breakdown_lost_dollar_extension_cents("2 @ 2.99"), None);
+        assert_eq!(
+            breakdown_lost_dollar_extension_cents("KOrion Original Flavor Pot"),
+            None
+        );
+    }
+
+    #[test]
+    fn breakdown_reconciles_only_on_a_multi_unit_exact_match() {
+        assert!(breakdown_reconciles("2 @ $2.99", "5.98H"));
+        assert!(breakdown_reconciles("2 @ 82.99", "5.98H"));
+        // Off by a cent is not evidence.
+        assert!(!breakdown_reconciles("2 @ $2.99", "5.97"));
+        assert!(!breakdown_reconciles("2 @ 82.99", "4.50"));
+        // An amount the row already prints matches any equal price on the
+        // page, the next item's included, so it never counts.
+        assert!(!breakdown_reconciles("1 @ $3.99", "3.99"));
+        assert!(!breakdown_reconciles("2 @2/$4.47", "4.47"));
+        assert!(breakdown_reconciles("4 @2/$4.47", "8.94"));
+        // Weighed rows state a rounded quantity and are never judged.
+        assert!(!breakdown_reconciles("1.05 lb @ $1.88/lb", "1.97"));
+    }
+
+    /// Asia Food Mart, an XV capture (image width 700, post-normalization
+    /// coordinates): the price prints on the breakdown row, and the item below
+    /// edges it out on overlap — 19px against the breakdown's 16px.
+    #[test]
+    fn a_reconciling_breakdown_keeps_its_price_over_a_better_overlapping_item() {
+        let dets = vec![
+            det_span("Suntory Pepsi Cola Zero P.", 41.0, 369.0, 403.0),
+            det_span("2 @ $2.99", 43.0, 415.0, 445.0),
+            det_span("5.98H", 533.0, 429.0, 456.0),
+            det_span("*Chewy Shiso & Seafood Fla", 31.0, 437.0, 476.0),
+            det_span("3.99", 538.0, 457.0, 476.0),
+            det_span("*Huierkang Jelly Drink", 32.0, 488.0, 523.0),
+            det_span("4.99", 533.0, 497.0, 527.0),
+        ];
+        let lines = rendered(&dets, 700.0);
+        assert_eq!(
+            lines,
+            vec![
+                "Suntory Pepsi Cola Zero P.",
+                "2 @ $2.99 5.98H",
+                "*Chewy Shiso & Seafood Fla 3.99",
+                "*Huierkang Jelly Drink 4.99",
+            ],
+            "{lines:?}"
+        );
+    }
+
+    /// The same receipt two items later, where OCR read the breakdown's `$` as
+    /// an `8`: `2 @ 82.99` must not be refused its own 5.98 for contradicting
+    /// a 165.98 extension it never printed.
+    #[test]
+    fn a_breakdown_that_lost_its_dollar_keeps_its_price() {
+        let dets = vec![
+            det_span("Orion Original Flavor Pot", 29.0, 601.0, 648.0),
+            det_span("(<ON SALE>", 44.0, 626.0, 671.0),
+            det_span("2 @ 82.99", 41.0, 659.0, 690.0),
+            det_span("5.98H", 531.0, 662.0, 697.0),
+            det_span("*Liu Quan Rice Noodle", 30.0, 675.0, 718.0),
+            det_span("(<ON SALE>", 44.0, 700.0, 743.0),
+            det_span("2 @ $1.99", 43.0, 731.0, 766.0),
+            det_span("3.98", 533.0, 735.0, 765.0),
+        ];
+        let lines = rendered(&dets, 700.0);
+        assert_eq!(
+            lines,
+            vec![
+                "Orion Original Flavor Pot",
+                "(<ON SALE>",
+                "2 @ 82.99 5.98H",
+                "*Liu Quan Rice Noodle",
+                "(<ON SALE>",
+                "2 @ $1.99 3.98",
+            ],
+            "{lines:?}"
+        );
     }
 
     #[test]

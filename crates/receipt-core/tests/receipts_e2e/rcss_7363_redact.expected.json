@@ -30,8 +30,7 @@
     {
       "description": "DICED TOMATO",
       "price": "9.00",
-      "category": "Expenses:Food:Grocery:Vegetable:Canned",
-      "known_failure": true
+      "category": "Expenses:Food:Grocery:Vegetable:Canned"
     },
     {
       "description": "NN MED WHT OUWRP",
@@ -45,8 +44,7 @@
     {
       "description": "2% NATURAL YOGUR",
       "price": "2.49",
-      "category": "Expenses:Food:Grocery:Dairy",
-      "known_failure": true
+      "category": "Expenses:Food:Grocery:Dairy"
     },
     {
       "description": "COORS LIGHT",
