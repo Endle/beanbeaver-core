@@ -236,6 +236,20 @@ pub(super) fn plan_price_line(
     let weak_inline_desc = is_weak_inline_description(&desc_part);
     let mut force_backward =
         line_upper.contains("REG$") || line_upper.contains("@REG") || weak_inline_desc;
+    // A weight row directly below whose own weight × rate is this price says
+    // the price is that row's item's — the item above, whose block the weight
+    // row closes — whatever the name-claim test below concludes. That test
+    // misreads "Meat  11.68" / "*YongDa Angus Chuck Roll" /
+    // "(...)<ON SALE>  13.40" / "1.49 lb @ $8.99/lb": the unclaimed name passes
+    // for the priced row's continuation, and 13.40 was forwarded to an
+    // identical second "*YongDa" below, whose own 13.57 was then dropped.
+    // 1.49 × 8.99 is 13.40. Only consulted under drift, where both forward
+    // rules below live.
+    let next_weight_row_owns_price = rows.drift
+        && rows
+            .all
+            .get(index + 1)
+            .is_some_and(|next| weight_row_totals_to(next, price_cents));
     // Under receipt-level drift a paren-subtext row's trailing price belongs to
     // the item BELOW when the description above is already priced ("Pork Lard"
     // claimed from its qty row, so "(3 380g) 2.98" is Pak Fok's) — search
@@ -244,7 +258,8 @@ pub(super) fn plan_price_line(
     // ("Fresh Chicken Wings" / "(WRER)  10.04") and the backward walk is right.
     let drift_paren_forward = rows.drift
         && desc_part.trim_start().starts_with('(')
-        && nearest_desc_above_consumed(rows.all, rows.used, index);
+        && nearest_desc_above_consumed(rows.all, rows.used, index)
+        && !next_weight_row_owns_price;
     if drift_paren_forward {
         prefer_forward_desc = true;
     }
@@ -257,6 +272,13 @@ pub(super) fn plan_price_line(
     {
         prefer_forward_desc = true;
     }
+    // With the price proven to be the item above's, a parenthesised row is that
+    // item's subtext, not a name: Bestco's "*Yongda Black Angus Beef B" /
+    // "(N4#REG13.99  15.08" / "1.51 lb @ $9.99/lb" (1.51 × 9.99 = 15.08) must
+    // walk back to the beef rather than book 15.08 as "(N4#REG13.99".
+    if next_weight_row_owns_price && desc_part.trim_start().starts_with('(') {
+        force_backward = true;
+    }
 
     // A leading barcode is noise, except where it IS the description: a
     // coupon line is nothing but its coupon number and the item it reduces.
@@ -267,7 +289,16 @@ pub(super) fn plan_price_line(
             .to_string();
     }
     let is_onsale_marker_desc = looks_like_onsale_marker(&desc_part);
-    if is_onsale_marker_desc {
+    // An `<ON SALE>` subtext row normally donates its price to the item below.
+    // Under receipt-level drift that is only right once the item above is
+    // priced, by the same two tests as `drift_paren_forward`. Below an
+    // *unclaimed* name the price is that item's own: a weighed item prints
+    // "*Baby Yu Choy" / "(...)<ON SALE>  1.97" / "1.05 lb @ $1.88/lb", and the
+    // forward search skipped the weight row to give 1.97 to the next item.
+    let onsale_price_is_own = is_onsale_marker_desc
+        && rows.drift
+        && (!nearest_desc_above_consumed(rows.all, rows.used, index) || next_weight_row_owns_price);
+    if is_onsale_marker_desc && !onsale_price_is_own {
         prefer_forward_desc = true;
         if index > 0 && line_has_trailing_price(previous_line().trim()) {
             skip_if_no_forward_desc = true;

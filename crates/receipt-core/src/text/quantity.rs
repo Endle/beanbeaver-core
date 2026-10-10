@@ -120,6 +120,22 @@ pub(super) fn qty_row_owns_trailing_total(line: &str) -> bool {
         })
         .unwrap_or(false)
 }
+/// Whether `line` is a weight row whose own weight × rate comes to `price`.
+///
+/// Stricter than [`validate_quantity_price`]: both the weight and the rate must
+/// be readable, because this is used as *evidence* that a price printed on
+/// another row belongs to this row's item, and an unreadable row proves nothing.
+pub(super) fn weight_row_totals_to(line: &str, price: Money) -> bool {
+    parse_quantity_modifier(line).is_some_and(|modifier| {
+        matches!(modifier.pattern_type, QuantityPatternType::WeightAtPrice)
+            && modifier.unit_price.is_some()
+            && modifier
+                .weight_text
+                .as_deref()
+                .is_some_and(|weight| weight.parse::<f64>().is_ok())
+            && validate_quantity_price(price, &modifier)
+    })
+}
 pub(super) fn validate_quantity_price(total_price: Money, modifier: &QuantityModifier) -> bool {
     let tolerance = 2i64;
     match modifier.pattern_type {
