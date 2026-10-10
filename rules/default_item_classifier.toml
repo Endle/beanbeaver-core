@@ -55,7 +55,8 @@
 #           "Ice Cream Strawberry" and put a Personal Care tag -- the LAST tag,
 #           so the chip the app shows -- on a tub of ice cream. Skin cream is
 #           printed in full, so nothing is lost by requiring a literal match.
-exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD", "ORANGE", "POCKY", "SMOOTHIE", "FRESH SMOOTH TO", "BLACK TEA", "BLACK TIGER", "BLACK TIE", "OKAR", "FACE CREAM", "EYE CREAM", "DAY CREAM"]
+#   ORION   (snacks, legacy_0021) is a brand, five letters, one from ONION.
+exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD", "ORANGE", "POCKY", "SMOOTHIE", "FRESH SMOOTH TO", "BLACK TEA", "BLACK TIGER", "BLACK TIE", "OKAR", "FACE CREAM", "EYE CREAM", "DAY CREAM", "ORION"]
 
 # BRANDS — text that names the maker, blanked out before any keyword is matched.
 #
@@ -148,7 +149,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0001"
-keywords = ["CHICKEN", "CHICKN", "FREE RANGE CHIC", "BEEF", "BEAF", "PORK", "BACON", "SAUSAGE", "HAM", "TURKEY", "LAMB", "STEAK", "GROUND MEAT", "MEATBALL", "SALAMI", "PEPPERONI", "PROSCIUTTO", "ROTISSERIE", "DRUMSTICK", "MEAT", "BEEF BELLY", "BEEF BELLY ROLL", "ANGUS", "DUCK FEET", "DUCK LEG", "DUCK WING", "DUCK BREAST", "BRISKET"]
+keywords = ["CHICKEN", "CHICKN", "FREE RANGE CHIC", "BEEF", "BEAF", "PORK", "BACON", "SAUSAGE", "HAM", "TURKEY", "LAMB", "STEAK", "GROUND MEAT", "MEATBALL", "SALAMI", "PEPPERONI", "PROSCIUTTO", "ROTISSERIE", "DRUMSTICK", "MEAT", "BEEF BELLY", "BEEF BELLY ROLL", "ANGUS", "DUCK FEET", "DUCK LEG", "DUCK WING", "DUCK BREAST", "DUCK NECK", "BRISKET"]
 tags = ["grocery/meat"]
 priority = 0
 exact_only = false
@@ -282,7 +283,7 @@ id = "legacy_0008"
 # "Oasis Smoothie" and this prefix cannot fuzzy-match a smoothie back. Not the
 # shorter "SMOOTH TO", which "Smooth Toffee" would contain. Corpus: foody_mart
 # 2026-09-20 $41.51, 2026-07-22 $56.07 and 2026-07-29 $110.05.
-keywords = ["LETTUCE", "SPINACH", "KALE", "CABBAGE", "BROCCOLI", "CAULIFLOWER", "CARROT", "CELERY", "CUCUMBER", "CUKES", "TOMATO", "TOMATOES", "PEPPER", "PEPPERS", "ONION", "POTATO", "POTATOES", "SWEET POTATO", "MUSHROOM", "ZUCCHINI", "SQUASH", "EGGPLANT", "ASPARAGUS", "CORN", "GREEN BEAN", "SOYA BEAN", "PEA", "PEAS", "EDAMAME", "BOK CHOY", "SHEPHERDS PURSE", "NAPA", "RADISH", "TURNIP", "BEET", "ARTICHOKE", "LEEK", "SCALLION", "SHALLOT", "CHIVE", "WATERCRESS", "OKRA", "OKAR", "PARSLEY", "BASIL", "DILL", "TOFU", "FRESH SMOOTH TO", "BEAN SPROUT", "SPROUTS", "SALAD", "COLESLAW", "GREENS", "VEGETABLES", "VEGETABLE"]
+keywords = ["LETTUCE", "SPINACH", "KALE", "CABBAGE", "BROCCOLI", "CAULIFLOWER", "CARROT", "CELERY", "CUCUMBER", "CUKES", "TOMATO", "TOMATOES", "PEPPER", "PEPPERS", "ONION", "POTATO", "POTATOES", "SWEET POTATO", "MUSHROOM", "ZUCCHINI", "SQUASH", "EGGPLANT", "ASPARAGUS", "CORN", "GREEN BEAN", "SOYA BEAN", "PEA", "PEAS", "EDAMAME", "BOK CHOY", "YU CHOY", "SHEPHERDS PURSE", "NAPA", "RADISH", "TURNIP", "BEET", "ARTICHOKE", "LEEK", "SCALLION", "SHALLOT", "CHIVE", "WATERCRESS", "OKRA", "OKAR", "PARSLEY", "BASIL", "DILL", "TOFU", "FRESH SMOOTH TO", "BEAN SPROUT", "SPROUTS", "SALAD", "COLESLAW", "GREENS", "VEGETABLES", "VEGETABLE"]
 tags = ["grocery/vegetable"]
 priority = 0
 exact_only = false
@@ -300,7 +301,12 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0010"
-keywords = ["DUMPLING", "GYOZA", "POTSTICKER", "WONTON", "BAO", "XIAOLONGBAO"]
+# "SHRIMP WONTON" is the filling-versus-product collision again: SHRIMP (6,
+# legacy_0003) ties WONTON (6) on `keyword_length` at equal priority, and the
+# lower rule index files Asia Food Mart's "100% Jumbo Shrimp Wonton x2" (百分百
+# 大蝦雲吞, under `&& 06-Frozen`) as shrimp. The 12-char compound wins outright.
+# Corpus: asia_food_mart 2026-10-07 $189.88.
+keywords = ["DUMPLING", "GYOZA", "POTSTICKER", "WONTON", "BAO", "XIAOLONGBAO", "SHRIMP WONTON"]
 tags = ["grocery/frozen/dumpling"]
 priority = 0
 exact_only = false
@@ -458,7 +464,17 @@ id = "legacy_0021"
 # BAMBOO" is 卤叮当碳烤笋, a packaged bamboo-shoot snack that matched nothing;
 # the phrase rather than bare BAMBOO, so canned bamboo shoots and "Pork &
 # Bamboo Bun" stay unclaimed. Corpus: bestco_fresh 2026-09-26 $108.89.
-keywords = ["BUTTER FLAVORED", "BUTTER FLAVOURED", "POTATO CHIPS", "CHIP", "CHIPS", "POPCORN", "PRETZEL", "NUTS", "ALMONDS", "CASHEWS", "PEANUTS", "WALNUTS", "PISTACHIOS", "TRAIL MIX", "GRANOLA BAR", "PROTEIN BAR", "ENERGY BAR", "CANDY", "CHOCOLATE", "GUMMY", "GUMMIES", "SKITTLES", "M&M", "SNICKERS", "TWIX", "KITKAT", "REESE", "OREO", "GOLDFISH", "CHEETOS", "DORITOS", "PRINGLES", "LAYS", "RUFFLES", "TOSTITOS", "CHEEZ-IT", "RITZ", "SENBEI", "RICE CRACKER", "SACHIMA", "EGG FLAVOR", "EGG FLAVOU", "GRILLING BAMBOO"]
+#
+# "BISCUIT", "ORION" and "WEI LONG"/"WEILONG" are Asia Food Mart's packaged
+# snacks: "Biscuit Original Flavor" (旺仔小馒头), "*Orion Original Flavor Pot"
+# (好丽友 potato chips, cut off before CHIPS) and Wei Long's "Fengchi Kelp"
+# (卫龙 spicy kelp). The first two had been filed as Drink by a *fuzzy* hit on
+# legacy_0070b's "LZY - ORIGINAL FLAVOR", the third matched nothing. Orion and
+# Wei Long make nothing but snacks. ORION is exact-only: it is one letter from
+# ONION. The corpus's other BISCUIT lines (Sandwich Biscuits, Pocky Biscuit
+# Stick, Jiashili Wafer Biscuits) were already snacks. Corpus: asia_food_mart
+# 2026-10-07 $189.88.
+keywords = ["BUTTER FLAVORED", "BUTTER FLAVOURED", "POTATO CHIPS", "CHIP", "CHIPS", "POPCORN", "PRETZEL", "NUTS", "ALMONDS", "CASHEWS", "PEANUTS", "WALNUTS", "PISTACHIOS", "TRAIL MIX", "GRANOLA BAR", "PROTEIN BAR", "ENERGY BAR", "CANDY", "CHOCOLATE", "GUMMY", "GUMMIES", "SKITTLES", "M&M", "SNICKERS", "TWIX", "KITKAT", "REESE", "OREO", "GOLDFISH", "CHEETOS", "DORITOS", "PRINGLES", "LAYS", "RUFFLES", "TOSTITOS", "CHEEZ-IT", "RITZ", "SENBEI", "RICE CRACKER", "SACHIMA", "EGG FLAVOR", "EGG FLAVOU", "GRILLING BAMBOO", "BISCUIT", "ORION", "WEI LONG", "WEILONG"]
 tags = ["grocery/snacks"]
 priority = 0
 exact_only = false
@@ -560,11 +576,30 @@ id = "legacy_0027"
 # somebody else's keyword: Bestco's "Tomato Honey Water Flavor" booked as
 # Vegetable (TOMATO, 6, beat WATER, 5) and "Dong Won Apple Iced Tea 5" as Fruit
 # (APPLE, 5, beat TEA, 3). Both phrases win on `keyword_length` at equal
-# priority. ICED TEA belongs here with PEACE TEA and MILK TEA, not with
-# legacy_0026's loose-leaf teas. Corpus: bestco_fresh 2026-09-26 $108.89.
-keywords = ["WATER", "SPARKLING WATER", "MINERAL WATER", "SPRING WATER", "COCONUT WATER", "COCONUT WTR", "SPORTS DRINK", "SOFT DRINK", "GATORADE", "POWERADE", "ENERGY DRINK", "RED BULL", "MONSTER", "MNSTR", "CRUSH", "FANTA STRAUBERRY", "FANTA STRAWBERRY", "FANTA", "PEACE TEA", "DRINK", "BEVERAGE", "ZOA", "BIOSTEEL", "MILK TEA", "BUBBLE TEA", "HONEY WATER", "ICED TEA"]
+# priority. ICED TEA belongs here with PEACE TEA, not with legacy_0026's
+# loose-leaf teas. Corpus: bestco_fresh 2026-09-26 $108.89.
+#
+# "CHI FOREST" (元气森林) is a brand that makes only drinks, and names its
+# sparkling waters by flavour: "*Chi Forest Apple Flavor S" booked as Fruit on
+# APPLE (5); the brand (9) wins on `keyword_length`. Corpus: asia_food_mart
+# 2026-10-07 $189.88.
+keywords = ["WATER", "SPARKLING WATER", "MINERAL WATER", "SPRING WATER", "COCONUT WATER", "COCONUT WTR", "SPORTS DRINK", "SOFT DRINK", "GATORADE", "POWERADE", "ENERGY DRINK", "RED BULL", "MONSTER", "MNSTR", "CRUSH", "FANTA STRAUBERRY", "FANTA STRAWBERRY", "FANTA", "PEACE TEA", "DRINK", "BEVERAGE", "ZOA", "BIOSTEEL", "HONEY WATER", "ICED TEA", "CHI FOREST"]
 tags = ["grocery/drink"]
 priority = 0
+exact_only = false
+
+[[rules]]
+id = "milk_tea"
+# Priority 1 for the reason legacy_0011 gives ice cream: a milk tea is named by
+# its flavour, and the flavour is somebody else's keyword. Asia Food Mart's
+# "*XPP Coconut Taro Milk Tea" (香飘飘) booked as Fruit, COCONUT (7) tying
+# MILK TEA (7 without the space) on `keyword_length` and winning on rule index;
+# a STRAWBERRY or PINEAPPLE milk tea would win outright. Whatever the flavour,
+# the product is the drink. Moved here from legacy_0027 with BUBBLE TEA, the
+# same product. Corpus: asia_food_mart 2026-10-07 $189.88.
+keywords = ["MILK TEA", "BUBBLE TEA"]
+tags = ["grocery/drink"]
+priority = 1
 exact_only = false
 
 [[rules]]
@@ -982,10 +1017,17 @@ exact_only = false
 # indicator after OCR truncation, so we anchor on the brand prefix.
 [[rules]]
 id = "legacy_0070b"
-keywords = ["LZY - ORIGINAL FLAVOR", "LZY - "]
+# Exact-only because priority 80 makes a fuzzy hit decisive: "LZY - ORIGINAL
+# FLAVOR" fuzzy-matched any "... Original Flavor" and filed Asia Food Mart's
+# "Biscuit Original Flavor" and "*Orion Original Flavor Pot" (potato chips) as
+# Drink. Foody Mart sometimes prints the soy drink without its "LZY - " prefix,
+# as "Original Flavor Dri", which only the fuzzy stage had been catching; that
+# truncation is now a keyword of its own. Corpus: asia_food_mart 2026-10-07
+# $189.88; foody_mart 2026-05-18 $43.95 and 2026-07-16 $86.59.
+keywords = ["LZY - ORIGINAL FLAVOR", "LZY - ", "ORIGINAL FLAVOR DRI"]
 tags = ["grocery/drink"]
 priority = 80
-exact_only = false
+exact_only = true
 
 [[rules]]
 id = "legacy_0071"
