@@ -751,3 +751,62 @@ pub fn extract_subtotal(lines: &[String]) -> Option<i64> {
     }
     None
 }
+
+/// Which summary figure a row labels, for [`printed_negative`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SummaryRow {
+    Total,
+    Subtotal,
+    Tax,
+}
+
+/// Whether the receipt prints `cents` with a leading minus on a row labelled
+/// as `row` — how a refund receipt states its summary block.
+///
+/// Every summary reader here works on magnitudes: `extract_price_from_line`
+/// is unsigned, and the repairs built on it (`reconcile_tax`,
+/// `reconcile_summary_shift`, the leading-digit repair) all assume a sale. A
+/// refund prints the same block with every figure negative — Asia Food Mart's
+/// `Sub Total -2.98` / `HST -0.39` / `Total after Tax -3.37` — so the sign is
+/// read back afterwards, per row, from what the row itself prints. Nothing is
+/// inferred: a figure keeps its sign only where the minus is printed beside
+/// that exact amount on a row with that label.
+///
+/// The total's labels exclude the rows that print a negative figure on a
+/// *sale* — `TOTAL DISCOUNT -9.00`, `TOTAL SAVINGS` — and the amount must equal
+/// the total already read, so a discount row can only count when it states the
+/// total itself.
+pub(crate) fn printed_negative(lines: &[String], row: SummaryRow, cents: i64) -> bool {
+    static NEG: OnceLock<Regex> = OnceLock::new();
+    if cents <= 0 {
+        return false;
+    }
+    let neg =
+        NEG.get_or_init(|| Regex::new(r"(?:^|[\s:])(?:-\s*\$?|\$\s*-)\s*(\d+\.\d{2})\b").unwrap());
+    lines.iter().any(|line| {
+        let upper = line.to_ascii_uppercase();
+        let labelled = match row {
+            SummaryRow::Subtotal => re_subtotal_label().is_match(&upper),
+            SummaryRow::Tax => {
+                re_tax_tokens().is_match(&upper)
+                    && !upper.contains("AFTER TAX")
+                    && !upper.contains("TOTAL")
+            }
+            SummaryRow::Total => {
+                (upper.contains("TOTAL") || upper.contains("AFTER TAX"))
+                    && !re_subtotal_label().is_match(&upper)
+                    && !upper.contains("DISCOUNT")
+                    && !upper.contains("SAVING")
+                    && !upper.contains("TOTAL NUMBER")
+                    && !upper.contains("TOTAL ITEMS")
+                    && !re_total_savings_label().is_match(&upper)
+                    && !re_loyalty_total_label().is_match(&upper)
+            }
+        };
+        labelled
+            && neg
+                .captures_iter(&normalize_decimal_spacing(line))
+                .filter_map(|caps| parse_cents(caps.get(1)?.as_str()))
+                .any(|printed| printed == cents)
+    })
+}

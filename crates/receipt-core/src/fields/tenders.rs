@@ -67,7 +67,8 @@ pub(crate) fn classify_tender_line(line_upper: &str) -> Option<&'static str> {
 ///
 /// - T&T and Sunny Foodmart print the Mastercard tender as a bare `Master`.
 ///   17 corpus receipts carry the line; none produced a tender.
-/// - Foody Mart prints `Credit Card` (44 receipts; likewise none).
+/// - Foody Mart prints `Credit Card` (44 receipts; likewise none), and
+///   `Credit Card Refund` on a refund, where the amount is money returned.
 ///
 /// Anchored at both ends rather than `contains`, because a row that goes on
 /// to say more is something else: `MASTER CHEF SAUCE 3.99` is a product, and
@@ -76,7 +77,8 @@ pub(crate) fn classify_tender_line(line_upper: &str) -> Option<&'static str> {
 pub(super) fn re_bare_card_label() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^\s*(?:MASTER|CREDIT\s+CARD\.?)(?:\s*\$?\s*[\d.,]+)?\s*$").unwrap()
+        Regex::new(r"^\s*(?:MASTER|CREDIT\s+CARD\.?(?:\s+REFUND)?)(?:\s*\$?\s*[\d.,]+)?\s*$")
+            .unwrap()
     })
 }
 pub(super) fn re_cash_label() -> &'static Regex {
@@ -276,7 +278,7 @@ pub fn extract_change(lines: &[String]) -> i64 {
 /// An empty tender block is not a disagreement — most receipts print none — and
 /// neither is a receipt with no usable total to check against.
 pub fn tenders_reconcile(lines: &[String], tenders: &[TenderLine], total_cents: i64) -> bool {
-    tenders.is_empty() || total_cents <= 0 || tendered_net_cents(lines, tenders) == total_cents
+    tenders.is_empty() || total_cents == 0 || tendered_net_cents(lines, tenders) == total_cents
 }
 
 /// What the payment block says was actually applied to this receipt: everything

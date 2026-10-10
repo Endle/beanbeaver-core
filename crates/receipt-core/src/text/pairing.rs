@@ -256,12 +256,25 @@ pub(super) fn plan_price_line(
     // forward, stopping at the first priced row rather than leaping over it.
     // When the description above is still unclaimed, the price is its own
     // ("Fresh Chicken Wings" / "(WRER)  10.04") and the backward walk is right.
-    let drift_paren_forward = rows.drift
+    //
+    // A parenthesised row with no letter or digit in it — a Chinese subtitle
+    // whose every glyph recognition dropped, read as `()` — names nothing, so
+    // it is never the price's own description, and the same test applies
+    // without waiting for drift to be established. Asia Food Mart's refund has
+    // only three items, too few to establish drift: `() -2.99H` sat between two
+    // identical Pepsi rows, the first already priced, and booked the second
+    // Pepsi's refund as an item called `() -`.
+    let contentless_paren =
+        desc_part.trim_start().starts_with('(') && !desc_part.chars().any(char::is_alphanumeric);
+    let drift_paren_forward = (rows.drift || contentless_paren)
         && desc_part.trim_start().starts_with('(')
         && nearest_desc_above_consumed(rows.all, rows.used, index)
         && !next_weight_row_owns_price;
     if drift_paren_forward {
         prefer_forward_desc = true;
+    }
+    if contentless_paren && !drift_paren_forward {
+        force_backward = true;
     }
     if has_reg_marker
         && force_backward
@@ -432,6 +445,22 @@ pub(super) fn inline_item(plan: &PricePlan, price_cents: Money) -> ParsedTextIte
         .replace(&desc_clean, "")
         .trim()
         .to_string();
+    // A leading-sign amount (`-2.99H`, `-$1.96`) starts at its digits, so the
+    // sign it was read with is still on the end of the row's text: a refund's
+    // `Suntory Pepsi Cola Zero P -2.99H` described the item as `... P -`. The
+    // sign is the price's, already counted, so it comes off here — after
+    // planning, where the planner has used the full row text to decide the row
+    // describes itself (`D7 -$5.28` passes the length test that `D7` alone
+    // would fail).
+    let desc_clean = if price_cents.is_negative() {
+        let unsigned = desc_clean.trim_end_matches('$').trim_end();
+        match unsigned.strip_suffix('-') {
+            Some(head) if !head.trim().is_empty() => head.trim_end().to_string(),
+            _ => desc_clean,
+        }
+    } else {
+        desc_clean
+    };
     ParsedTextItem {
         item_number: crate::extraction::leading_item_number(&plan.desc_part),
         description: desc_clean.clone(),
