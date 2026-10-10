@@ -523,6 +523,27 @@ pub fn parse_receipt(
         summary_amounts.insert(subtotal_cents);
     }
 
+    // A refund receipt prints its summary block negative (`Total after Tax
+    // -3.37`). The readers above work on magnitudes, so the sign is restored
+    // here, once the repairs that assume a sale have run: the receipt is a
+    // refund when the total's own row prints it negative, and then each figure
+    // takes the sign its own row prints. The items are already signed, so the
+    // receipt's identities hold unchanged: items sum to the subtotal, subtotal
+    // plus tax is the total, and the tenders (returned money, negated below)
+    // partition it. `summary_amounts` above keeps the magnitudes item
+    // extraction has always matched against.
+    let refund = fields::printed_negative(&lines, fields::SummaryRow::Total, total_cents.cents());
+    let signed = |row, amount: Money| {
+        if refund && fields::printed_negative(&lines, row, amount.cents()) {
+            -amount
+        } else {
+            amount
+        }
+    };
+    let total_cents = if refund { -total_cents } else { total_cents };
+    let subtotal_cents = subtotal_cents.map(|amount| signed(fields::SummaryRow::Subtotal, amount));
+    let tax_cents = tax_cents.map(|amount| signed(fields::SummaryRow::Tax, amount));
+
     let spatial_layout =
         doc.has_useful_bbox_data() && parse_helpers::is_spatial_layout_receipt(full_text);
 
@@ -653,7 +674,14 @@ pub fn parse_receipt(
     // the arithmetic (see `ReceiptWarningKind::TenderMismatch`), so the total
     // stands as parsed and `formatter` keeps the entry balanced by
     // falling back to a single payment posting.
-    let tender_lines = fields::extract_tenders(&lines);
+    let mut tender_lines = fields::extract_tenders(&lines);
+    // A refund's tender is money handed back (`Credit Card Refund 3.37`):
+    // signed against the refund's negative total, so the two still agree.
+    if refund {
+        for tender in &mut tender_lines {
+            tender.amount_cents = -tender.amount_cents;
+        }
+    }
     if !fields::tenders_reconcile(&lines, &tender_lines, total_cents.cents()) {
         let net_cents = Money::from_cents(fields::tendered_net_cents(&lines, &tender_lines));
         warnings.push(ParsedReceiptWarning {
@@ -747,6 +775,106 @@ mod tests {
             book.layers(),
         );
         assert!(renamed.account.is_none());
+    }
+
+    /// A refund prints its summary block negative and its tender as money
+    /// handed back. Every identity the parser relies on holds with the signs
+    /// as printed: items sum to the subtotal, subtotal plus tax is the total,
+    /// and the tender partitions it.
+    #[test]
+    fn a_refund_receipt_keeps_its_printed_signs() {
+        let parsed = parse_text(
+            "EXAMPLE FOOD MART\n\
+             && 01-Grocery\n\
+             Example Cola Zero P -2.99H\n\
+             Example Cola Zero P -2.99H\n\
+             Grocery T 3.00H\n\
+             Sub Total -2.98\n\
+             HST -0.39\n\
+             Total after Tax -3.37\n\
+             Credit Card Refund 3.37",
+        );
+        assert_eq!(parsed.total, Money::from_cents(-337));
+        assert_eq!(parsed.subtotal, Some(Money::from_cents(-298)));
+        assert_eq!(parsed.tax, Some(Money::from_cents(-39)));
+        let items: Vec<(&str, Money)> = parsed
+            .items
+            .iter()
+            .map(|item| (item.description.as_str(), item.price))
+            .collect();
+        assert_eq!(
+            items,
+            vec![
+                ("Example Cola Zero P", Money::from_cents(-299)),
+                ("Example Cola Zero P", Money::from_cents(-299)),
+                ("Grocery T", Money::from_cents(300)),
+            ]
+        );
+        let tenders: Vec<(&str, Money)> = parsed
+            .tenders
+            .iter()
+            .map(|tender| (tender.kind.as_str(), tender.amount))
+            .collect();
+        assert_eq!(tenders, vec![("card", Money::from_cents(-337))]);
+        assert!(
+            !parsed.warnings.iter().any(|w| matches!(
+                w.kind,
+                ReceiptWarningKind::SubtotalMismatch | ReceiptWarningKind::TenderMismatch
+            )),
+            "{:?}",
+            parsed.warnings
+        );
+    }
+
+    /// The same refund as grouped from the photo: the price column leans up a
+    /// row, so each amount lands on the row above its item — the department
+    /// banner, then the `()` left of a Chinese subtitle OCR dropped. Too few
+    /// items to establish drift, and the `()` row must still hand its price to
+    /// the second Pepsi rather than describe itself.
+    #[test]
+    fn a_contentless_paren_row_forwards_its_price_without_drift() {
+        let parsed = parse_text(
+            "EXAMPLE FOOD MART\n\
+             && 01-Grocery -2.99H\n\
+             Example Cola Zero P\n\
+             () -2.99H\n\
+             Example Cola Zero P\n\
+             Grocery T 3.00H\n\
+             (Grocery T)\n\
+             Sub Total -2.98\n\
+             HST -0.39\n\
+             Total after Tax -3.37\n\
+             Credit Card Refund 3.37",
+        );
+        let items: Vec<(&str, Money)> = parsed
+            .items
+            .iter()
+            .map(|item| (item.description.as_str(), item.price))
+            .collect();
+        assert_eq!(
+            items,
+            vec![
+                ("Example Cola Zero P", Money::from_cents(-299)),
+                ("Example Cola Zero P", Money::from_cents(-299)),
+                ("Grocery T", Money::from_cents(300)),
+            ]
+        );
+    }
+
+    /// The control: a sale's summary block can print a negative figure too
+    /// (`TOTAL DISCOUNT`), and that does not make it a refund.
+    #[test]
+    fn a_negative_discount_row_does_not_make_a_sale_a_refund() {
+        let parsed = parse_text(
+            "EXAMPLE MARKET\n\
+             MILK 5.00\n\
+             TOTAL DISCOUNT -1.00\n\
+             SUBTOTAL 4.00\n\
+             HST 0.00\n\
+             TOTAL 4.00",
+        );
+        assert_eq!(parsed.total, Money::from_cents(400));
+        assert_eq!(parsed.subtotal, Some(Money::from_cents(400)));
     }
 
     #[test]

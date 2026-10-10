@@ -1110,3 +1110,51 @@ fn joined_deadline_timestamp_does_not_hide_the_later_purchase() {
         );
     }
 }
+
+#[test]
+fn printed_negative_reads_each_summary_row_for_its_own_amount() {
+    let lines: Vec<String> = [
+        "Sub Total -2.98",
+        "HST -0.39",
+        "hst5% 0.00",
+        "Total after Tax -3.37",
+    ]
+    .iter()
+    .map(|line| line.to_string())
+    .collect();
+    assert!(printed_negative(&lines, SummaryRow::Total, 337));
+    assert!(printed_negative(&lines, SummaryRow::Subtotal, 298));
+    assert!(printed_negative(&lines, SummaryRow::Tax, 39));
+    // The minus must sit beside that exact amount on a row with that label.
+    assert!(!printed_negative(&lines, SummaryRow::Total, 298));
+    assert!(!printed_negative(&lines, SummaryRow::Tax, 0));
+    // `$-` and `-$` both count; a mid-token hyphen does not.
+    let dollar: Vec<String> = vec!["TOTAL $-12.50".into(), "TOTAL -$12.50".into()];
+    assert!(printed_negative(&dollar[..1], SummaryRow::Total, 1250));
+    assert!(printed_negative(&dollar[1..], SummaryRow::Total, 1250));
+    assert!(!printed_negative(
+        &["TOTAL-12.50".to_string()],
+        SummaryRow::Total,
+        1250
+    ));
+}
+
+#[test]
+fn a_sale_s_negative_summary_rows_are_not_its_total() {
+    let lines: Vec<String> = ["TOTAL DISCOUNT -4.00", "TOTAL SAVINGS -4.00", "TOTAL 4.00"]
+        .iter()
+        .map(|line| line.to_string())
+        .collect();
+    assert!(!printed_negative(&lines, SummaryRow::Total, 400));
+}
+
+#[test]
+fn a_credit_card_refund_row_is_a_card_tender() {
+    assert_eq!(
+        classify_tender_line("CREDIT CARD REFUND 3.37"),
+        Some("card")
+    );
+    assert_eq!(classify_tender_line("CREDIT CARD REFUND"), Some("card"));
+    // The terminal slip's header still is not.
+    assert_eq!(classify_tender_line("CREDIT CARD SALE"), None);
+}
