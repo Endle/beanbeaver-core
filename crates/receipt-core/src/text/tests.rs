@@ -1533,3 +1533,151 @@ fn damaged_multibuy_total_needs_a_matching_independent_offer() {
         );
     }
 }
+
+/// `(description, price)` for every item the text path emits.
+fn text_items(lines: &[&str], subtotal_cents: i64) -> Vec<(String, Money)> {
+    let lines: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+    let summary_amounts = HashSet::from([Money::from_cents(subtotal_cents)]);
+    extract_text_items(&lines, &summary_amounts)
+        .items
+        .into_iter()
+        .map(|item| (item.description, item.price))
+        .collect()
+}
+
+#[test]
+fn onsale_row_under_an_unclaimed_weighed_name_keeps_its_price() {
+    // Asia Food Mart 2026-10-07: the price column leans up a row (the priced
+    // banner establishes it), so the weighed Yu Choy's 1.97 sits on its
+    // `<ON SALE>` subtext row and Coriander's 1.99 on the weight row.
+    // 1.05 × 1.88 = 1.97. The subtext row used to search forward, skip the
+    // weight row and price Coriander at 1.97, leaving the weight row's 1.99 to
+    // walk back into Yu Choy: same total, both lines wrong.
+    let observed = text_items(
+        &[
+            "&8 02-Vegetable M 4.02",
+            "Chinesa Okra",
+            "*Baby Yu Choy",
+            "(OM())CON SALE> 1.97",
+            "1.05 1b @ $1.88/1b 1.99",
+            "*Coriander",
+            "()<ON SALE>",
+            "Sub Total 7.98",
+        ],
+        798,
+    );
+    assert_eq!(
+        observed,
+        vec![
+            ("Chinesa Okra".to_string(), Money::from_cents(402)),
+            ("*Baby Yu Choy".to_string(), Money::from_cents(197)),
+            ("*Coriander".to_string(), Money::from_cents(199)),
+        ]
+    );
+}
+
+#[test]
+fn weight_row_below_an_onsale_row_keeps_identical_weighed_lines_apart() {
+    // Asia Food Mart 2026-10-07: two weighed packs of the same beef, one after
+    // the other. The first "*YongDa" sits directly under the priced "Meat"
+    // row, so the name-claim test reads it as that row's continuation and
+    // calls the item above priced. The weight row under the subtext row
+    // settles it: 1.49 × 8.99 = 13.40, so 13.40 is the first pack's. Forwarded
+    // instead, it priced the second pack, and the second pack's own 13.57 was
+    // left with no name and dropped.
+    let observed = text_items(
+        &[
+            "&& 03-Meat 6.96",
+            "Fresh Pork Ear",
+            "Meat 11.68",
+            "*YongDa Angus Chuok Roll",
+            "(RNEMEKONSALE> 13.40",
+            "1.49 1b @ $8.99/1b",
+            "*YongDa Angus Chuok Roll",
+            "1.51 lb @ $8.99/1b 13.57",
+            "Sub Total 45.61",
+        ],
+        4561,
+    );
+    assert_eq!(
+        observed,
+        vec![
+            ("Fresh Pork Ear".to_string(), Money::from_cents(696)),
+            ("Meat".to_string(), Money::from_cents(1168)),
+            (
+                "*YongDa Angus Chuok Roll".to_string(),
+                Money::from_cents(1340)
+            ),
+            (
+                "*YongDa Angus Chuok Roll".to_string(),
+                Money::from_cents(1357)
+            ),
+        ]
+    );
+}
+
+#[test]
+fn dotted_department_banner_donates_its_price_to_the_item_below() {
+    // Asia Food Mart 2026-10-07: OCR read the banner's `&&` as `8.8`, so the
+    // banner was taken for an item named "8.8 20-Hot Food A".
+    let observed = text_items(
+        &[
+            "8.8 20-Hot Food A 12.99H",
+            "Hot Food",
+            "Hot Food 5.99H",
+            "Sub Total 18.98",
+        ],
+        1898,
+    );
+    assert_eq!(
+        observed,
+        vec![
+            ("Hot Food".to_string(), Money::from_cents(1299)),
+            ("Hot Food".to_string(), Money::from_cents(599)),
+        ]
+    );
+    // The dotted form needs the department number: a weight is not a banner.
+    assert!(super::patterns::re_dept_marker_prefix().is_match("8.8 20-HOT FOOD A"));
+    assert!(!super::patterns::re_dept_marker_prefix().is_match("8.8 OZ TUNA"));
+}
+
+#[test]
+fn reg_subtext_over_a_reconciling_weight_row_prices_the_name_above() {
+    // Bestco 2026-02-13, read live: the REG marker row carries the beef's own
+    // 15.08 (1.51 × 9.99), and the name above passes for the priced Pork
+    // Shoulder row's continuation. Forwarded, 15.08 priced the Beef Shank,
+    // whose own 40.59 was dropped; kept but self-described, it booked as an
+    // item named "(N4#REG13.99".
+    let observed = text_items(
+        &[
+            "&8 Meat 4.40",
+            "Fresh Ham Bone",
+            "Pork Shoulder Steak BBQ S 10.55",
+            "*Yongda Black Angus Baef B",
+            "(N4#REG13.99 15.08",
+            "1.51 1b @ $9.99/1b",
+            "*Beef Shank Hind Muscle",
+            "5.08 1b @ $7.99/1b 40.59",
+            "Sub Total 70.62",
+        ],
+        7062,
+    );
+    assert_eq!(
+        observed,
+        vec![
+            ("Fresh Ham Bone".to_string(), Money::from_cents(440)),
+            (
+                "Pork Shoulder Steak BBQ S".to_string(),
+                Money::from_cents(1055)
+            ),
+            (
+                "*Yongda Black Angus Baef B".to_string(),
+                Money::from_cents(1508)
+            ),
+            (
+                "*Beef Shank Hind Muscle".to_string(),
+                Money::from_cents(4059)
+            ),
+        ]
+    );
+}

@@ -326,9 +326,14 @@ pub(crate) fn re_section_aisle_prefix() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^[^A-Z0-9]*\d{1,2}\s*[-:]").unwrap())
 }
 
+/// The `&&` that opens a Foody Mart / Asia Food Mart department banner
+/// (`&& 20-Hot Food 熱食`), as OCR reads it: `&&`, `&8`, `88`, `8&`, or with a
+/// stray dot between the two glyphs (`8.8 20-Hot Food A`). The dotted form is
+/// only taken with the `NN-` department number after it, so `8.8 OZ ...`
+/// stays an item.
 pub(crate) fn re_dept_marker_prefix() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[&8]{2}\.?\s").unwrap())
+    RE.get_or_init(|| Regex::new(r"^(?:[&8]{2}\.?\s|[&8]\.[&8]\s+\d{2}\s*-)").unwrap())
 }
 
 pub(crate) fn re_total_ocr_variants() -> &'static Regex {
