@@ -5,6 +5,77 @@ use crate::money::Money;
 use std::collections::HashSet;
 
 #[test]
+fn keeps_repeated_two_letter_labels_with_their_own_prices() {
+    // Synthetic restaurant rows: preserve the printed label and each charge
+    // without inventing dish names or merging repeated specials.
+    let lines = [
+        "Soup 5.00",
+        "sp 12.50",
+        "Noodles 9.00",
+        "SP 8.50",
+        "OJ 3.00",
+        "Sub Total 38.00",
+        "HST 4.94",
+        "Total 42.94",
+    ]
+    .map(String::from);
+    let summary = [3800, 494, 4294].map(Money::from_cents).into();
+    let outcome = extract_text_items(&lines, &summary);
+    let items: Vec<_> = outcome
+        .items
+        .iter()
+        .map(|item| (item.description.as_str(), item.price))
+        .collect();
+    assert_eq!(
+        items,
+        [
+            ("Soup", Money::from_cents(500)),
+            ("sp", Money::from_cents(1250)),
+            ("Noodles", Money::from_cents(900)),
+            ("SP", Money::from_cents(850)),
+            ("OJ", Money::from_cents(300)),
+        ]
+    );
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+}
+
+#[test]
+fn short_label_exception_keeps_stub_and_malformed_price_guards() {
+    for rows in [
+        vec!["sp", "12.50"],
+        vec!["sp 12.5O"],
+        vec!["S 12.50"],
+        vec!["12 12.50"],
+        vec!["S? 12.50"],
+        vec!["#EG 12.50"], // damaged REG marker
+    ] {
+        let lines: Vec<_> = rows.iter().map(|row| row.to_string()).collect();
+        let outcome = extract_text_items(&lines, &HashSet::new());
+        assert!(outcome.items.is_empty(), "{rows:?}: {:?}", outcome.items);
+    }
+}
+
+#[test]
+fn short_inline_labels_do_not_replace_unpriced_product_names() {
+    // A damaged subtitle or REG marker can be just two letters. Recover the
+    // real description above it before accepting the short printed label.
+    let lines = ["Beef Roll", "EG 12.50", "Black Tiger Shrimp", "FY 8.50"].map(String::from);
+    let outcome = extract_text_items(&lines, &HashSet::new());
+    let items: Vec<_> = outcome
+        .items
+        .iter()
+        .map(|item| (item.description.as_str(), item.price))
+        .collect();
+    assert_eq!(
+        items,
+        [
+            ("Beef Roll", Money::from_cents(1250)),
+            ("Black Tiger Shrimp", Money::from_cents(850)),
+        ]
+    );
+}
+
+#[test]
 fn recovers_asterisk_tax_flag_and_ocr_merged_orphan_price() {
     // FreshCo 2026-05-02_freshcc_117_85: "$25.96*HC" must parse despite
     // the '*' separator, and the OCR-merged "$11.19" on the qty row must

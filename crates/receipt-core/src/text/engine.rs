@@ -124,7 +124,11 @@ pub fn extract_text_items(lines: &[String], summary_amounts: &HashSet<Money>) ->
                 continue;
             };
 
-            if plan.describes_itself() {
+            // Short labels may also be OCR debris under an unpriced product
+            // name. Preserve an existing description pairing first; use the
+            // short inline label only when no better description was found.
+            let inline_description = plan.describes_itself();
+            if inline_description && plan.desc_part.len() > 2 {
                 deferred.push(DeferredTextOutcome::Item(inline_item(&plan, price_cents)));
                 // Only block subsequent backward walks when the inline text is
                 // a genuine description. Low-alpha junk like "#E$" must stay
@@ -153,6 +157,10 @@ pub fn extract_text_items(lines: &[String], summary_amounts: &HashSet<Money>) ->
                             &search.qty,
                         )));
                         used_text_lines[desc_idx] = true;
+                    }
+                    None if inline_description => {
+                        deferred.push(DeferredTextOutcome::Item(inline_item(&plan, price_cents)));
+                        used_text_lines[i] = true;
                     }
                     None => {
                         if price_cents > Money::ZERO {
