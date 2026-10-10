@@ -370,13 +370,23 @@ pub(super) fn section_header_price_is_repeated(
 }
 
 impl PricePlan {
-    /// Whether the row's own text is the description, so no search is needed.
+    /// Whether the row's own text can describe the item. Two-letter labels are
+    /// used only after searching for a fuller description on a neighboring row.
     ///
     /// This is the common case and the cheap one — everything below exists for
     /// the rows where it is false.
     pub(super) fn describes_itself(&self) -> bool {
+        // Two-letter labels such as a restaurant's `sp` can own an explicit
+        // trailing price. Keep this exception local to inline pairing, without
+        // relaxing neighboring-description searches or the longer-description
+        // requirement for malformed-price reconciliation.
+        let short_label = self.desc_part.len() == 2
+            && self
+                .desc_part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphabetic());
         !self.desc_part.is_empty()
-            && self.desc_part.len() > 2
+            && (self.desc_part.len() > 2 || short_label)
             && !self.is_qty_expr
             && !self.force_backward
             && !self.drift_paren_forward
