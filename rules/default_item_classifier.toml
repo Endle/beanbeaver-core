@@ -56,7 +56,9 @@
 #           so the chip the app shows -- on a tub of ice cream. Skin cream is
 #           printed in full, so nothing is lost by requiring a literal match.
 #   ORION   (snacks, legacy_0021) is a brand, five letters, one from ONION.
-exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD", "ORANGE", "POCKY", "SMOOTHIE", "FRESH SMOOTH TO", "BLACK TEA", "BLACK TIGER", "BLACK TIE", "OKAR", "FACE CREAM", "EYE CREAM", "DAY CREAM", "ORION"]
+#   FANT    (drink, legacy_0027) is FANTA truncated by the Loblaw chains
+#           ("FANT ORG ZS"). Four letters, one from FANS, PANT and WANT.
+exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD", "ORANGE", "POCKY", "SMOOTHIE", "FRESH SMOOTH TO", "BLACK TEA", "BLACK TIGER", "BLACK TIE", "OKAR", "FACE CREAM", "EYE CREAM", "DAY CREAM", "ORION", "FANT"]
 
 # BRANDS — text that names the maker, blanked out before any keyword is matched.
 #
@@ -583,7 +585,12 @@ id = "legacy_0027"
 # sparkling waters by flavour: "*Chi Forest Apple Flavor S" booked as Fruit on
 # APPLE (5); the brand (9) wins on `keyword_length`. Corpus: asia_food_mart
 # 2026-10-07 $189.88.
-keywords = ["WATER", "SPARKLING WATER", "MINERAL WATER", "SPRING WATER", "COCONUT WATER", "COCONUT WTR", "SPORTS DRINK", "SOFT DRINK", "GATORADE", "POWERADE", "ENERGY DRINK", "RED BULL", "MONSTER", "MNSTR", "CRUSH", "FANTA STRAUBERRY", "FANTA STRAWBERRY", "FANTA", "PEACE TEA", "DRINK", "BEVERAGE", "ZOA", "BIOSTEEL", "HONEY WATER", "ICED TEA", "CHI FOREST"]
+#
+# "FANT" is FANTA cut to the Loblaw column width: No Frills prints Fanta Orange
+# Zero Sugar as "FANT ORG ZS", and none of its tokens reached a rule. Exact-only
+# (see `exact_only_keywords`) because four letters fuzz into FANS/PANT/WANT.
+# Corpus: no_frills 2026-03-10 $60.90 and 2026-10-09 $58.57.
+keywords = ["WATER", "SPARKLING WATER", "MINERAL WATER", "SPRING WATER", "COCONUT WATER", "COCONUT WTR", "SPORTS DRINK", "SOFT DRINK", "GATORADE", "POWERADE", "ENERGY DRINK", "RED BULL", "MONSTER", "MNSTR", "CRUSH", "FANTA STRAUBERRY", "FANTA STRAWBERRY", "FANTA", "FANT", "PEACE TEA", "DRINK", "BEVERAGE", "ZOA", "BIOSTEEL", "HONEY WATER", "ICED TEA", "CHI FOREST"]
 tags = ["grocery/drink"]
 priority = 0
 exact_only = false
