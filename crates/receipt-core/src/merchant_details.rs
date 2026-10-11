@@ -215,6 +215,18 @@ fn street_like(line: &str) -> bool {
     street_in(line).is_some()
 }
 
+/// Some LCBO headers name the branch as `<store#> <road> & <cross street>`
+/// above the civic address, and that label is street-shaped. Its leading
+/// number is the store number printed elsewhere (`ST:<store#>`), which is
+/// what separates it from the address below it.
+fn names_the_branch(street: &str, store_number: Option<&str>) -> bool {
+    let Some(store) = store_number.map(|store| store.trim_start_matches('0')) else {
+        return false;
+    };
+    let civic: String = street.chars().take_while(char::is_ascii_digit).collect();
+    !store.is_empty() && civic.trim_start_matches('0') == store
+}
+
 fn clean_component(value: &str) -> Option<String> {
     let cleaned = value
         .trim_matches(|c: char| c.is_ascii_whitespace() || c == ',' || c == '-')
@@ -449,6 +461,7 @@ pub fn extract_merchant_details(lines: &[String]) -> MerchantDetails {
         }
     }
 
+    let mut branch_label = None;
     for (index, original) in lines.iter().enumerate() {
         let line = original.trim();
         if line.is_empty() {
@@ -464,7 +477,8 @@ pub fn extract_merchant_details(lines: &[String]) -> MerchantDetails {
             let without_postal = format!("{} {}", &line[..range.start], &line[range.end..]);
             let (same_street, same_city, same_region) = address_in(&without_postal);
             if out.street_address.is_none() {
-                out.street_address = same_street;
+                out.street_address = same_street
+                    .filter(|street| !names_the_branch(street, out.store_number.as_deref()));
             }
             // The postal line is the strongest city/region context and may
             // replace an earlier, provisional neighbouring-line candidate.
@@ -500,7 +514,9 @@ pub fn extract_merchant_details(lines: &[String]) -> MerchantDetails {
                 let end = (index + 2).min(lines.len().saturating_sub(1));
                 for nearby in lines[start..=end].iter().rev() {
                     let nearby = nearby.trim();
-                    if let Some((street, _)) = street_in(nearby) {
+                    if let Some((street, _)) = street_in(nearby).filter(|(street, _)| {
+                        !names_the_branch(street, out.store_number.as_deref())
+                    }) {
                         out.street_address = Some(street);
                         add_raw(&mut out.raw_lines, nearby);
                         break;
@@ -521,6 +537,11 @@ pub fn extract_merchant_details(lines: &[String]) -> MerchantDetails {
         let Some(street) = street else {
             continue;
         };
+        // A branch label is the address only when nothing else is.
+        if names_the_branch(&street, out.store_number.as_deref()) {
+            branch_label.get_or_insert((street, line));
+            continue;
+        }
         if out.street_address.is_none() {
             out.street_address = Some(street);
         }
@@ -573,6 +594,13 @@ pub fn extract_merchant_details(lines: &[String]) -> MerchantDetails {
                 out.city = city;
                 add_raw(&mut out.raw_lines, evidence);
             }
+        }
+    }
+
+    if out.street_address.is_none() {
+        if let Some((street, evidence)) = branch_label {
+            out.street_address = Some(street);
+            add_raw(&mut out.raw_lines, evidence);
         }
     }
 
@@ -710,6 +738,24 @@ mod tests {
         assert_eq!(found.region.as_deref(), Some("ON"));
         assert_eq!(found.postal_code.as_deref(), Some("L3P 1W2"));
         assert_eq!(found.store_number.as_deref(), Some("390"));
+    }
+
+    #[test]
+    fn branch_label_above_the_civic_address_is_not_the_street() {
+        let found = extract_merchant_details(&lines(
+            "LCBO\n0123 MAPLE ROAD & ELM\n4567 MAPLE ROAD\nEXAMPLEVILLE, ON A1A-1A1\n\
+             ST:0123 TRM:0001 TRN:1 SALE",
+        ));
+        assert_eq!(found.street_address.as_deref(), Some("4567 MAPLE ROAD"));
+        assert_eq!(found.city.as_deref(), Some("EXAMPLEVILLE"));
+        assert_eq!(found.store_number.as_deref(), Some("0123"));
+
+        // With no other street on the receipt, the label is still the best
+        // address there is.
+        let found = extract_merchant_details(&lines(
+            "LCBO\n0123 MAPLE ROAD & ELM\nEXAMPLEVILLE, ON A1A-1A1\nST:123 TRM:0001",
+        ));
+        assert_eq!(found.street_address.as_deref(), Some("0123 MAPLE ROAD"));
     }
 
     #[test]
