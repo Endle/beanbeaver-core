@@ -33,10 +33,13 @@ pub(crate) fn classify_tender_line(line_upper: &str) -> Option<&'static str> {
     {
         // Receipt footers advertise gift cards and prizes with currency amounts.
         // These words describe an offer, not a payment made on this receipt.
+        // VIN is WIN as OCR reads it: Loblaw's "Win a $1,000 PC gift card or"
+        // footer comes back as "Vin a ..." often enough that guarding the
+        // amount alone keeps losing ($1,00o once, $1.000 the next capture).
         if line_upper.contains("GIFT CARDS")
             || line_upper
                 .split(|c: char| !c.is_ascii_alphabetic())
-                .any(|word| matches!(word, "WIN" | "CHANCE" | "SURVEY"))
+                .any(|word| matches!(word, "WIN" | "VIN" | "CHANCE" | "SURVEY"))
         {
             return None;
         }
