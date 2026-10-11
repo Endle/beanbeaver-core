@@ -6,7 +6,8 @@ mod tenders;
 pub(crate) use amounts::{extract_summary_reconciled, extract_total, printed_negative, SummaryRow};
 pub(crate) use dates::extract_date;
 pub(crate) use tenders::{
-    classify_tender_line, extract_tenders, tendered_net_cents, tenders_reconcile, TenderLine,
+    classify_tender_line, extract_tenders, recover_noisy_card_amount, tendered_net_cents,
+    tenders_reconcile, TenderLine,
 };
 #[cfg(test)]
 mod tests;

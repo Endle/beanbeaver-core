@@ -5,6 +5,38 @@ use crate::money::Money;
 use std::collections::HashSet;
 
 #[test]
+fn currency_sale_noise_needs_exact_whole_receipt_reconciliation() {
+    let rows = ["MILK 2.00", "CRANBERRY JUICE $7.29916 SALEW"].map(String::from);
+    let parsed = extract_text_items(&rows, &[Money::from_cents(929)].into());
+    assert_eq!(parsed.items.len(), 2);
+    assert_eq!(parsed.items[1].price, Money::from_cents(729));
+    for summary in [HashSet::new(), [Money::from_cents(928)].into()] {
+        let parsed = extract_text_items(&rows, &summary);
+        assert_eq!(parsed.items.len(), 1);
+        assert!(parsed
+            .warnings
+            .iter()
+            .any(|w| w.kind == crate::common::ReceiptWarningKind::PossibleMissedItem));
+    }
+    for row in [
+        "JUICE 7.29916 SALEW",
+        "JUICE $7.29916 /kg",
+        "JUICE $7.29916 SALEW 2.00",
+        "JUICE $7.２９９ SALEW",
+        "JUICE $99999999999999999.29916 SALEW",
+    ] {
+        let parsed = extract_text_items(&[row.into()], &[Money::from_cents(729)].into());
+        assert!(
+            parsed
+                .items
+                .iter()
+                .all(|item| item.price != Money::from_cents(729)),
+            "{row}"
+        );
+    }
+}
+
+#[test]
 fn keeps_repeated_two_letter_labels_with_their_own_prices() {
     // Synthetic restaurant rows: preserve the printed label and each charge
     // without inventing dish names or merging repeated specials.

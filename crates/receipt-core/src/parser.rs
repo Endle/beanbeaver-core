@@ -670,11 +670,29 @@ pub fn parse_receipt(
     // — `extract_tenders` used to swallow it, returning nothing at all, which
     // made a misread amount look like a receipt with no payment block.
     //
-    // Deliberately *only* a report. Which side is wrong is not recoverable from
-    // the arithmetic (see `ReceiptWarningKind::TenderMismatch`), so the total
-    // stands as parsed and `formatter` keeps the entry balanced by
-    // falling back to a single payment posting.
+    // Disagreement alone cannot identify which side is wrong. The narrow
+    // malformed-token repair below additionally requires literal price-prefix
+    // evidence and the item/subtotal/tax identities; other disagreements stay
+    // visible and formatter falls back to a single payment posting.
     let mut tender_lines = fields::extract_tenders(&lines);
+    let items_sum: Money = items.iter().map(|item| item.price).sum();
+    if !refund
+        && !items.is_empty()
+        && subtotal_cents == Some(items_sum)
+        && items_sum + tax_cents.unwrap_or(Money::ZERO) == total_cents
+    {
+        if let Some(observed) =
+            fields::recover_noisy_card_amount(&lines, &mut tender_lines, total_cents.cents())
+        {
+            warnings.push(ParsedReceiptWarning {
+                kind: ReceiptWarningKind::PriceAutoCorrected,
+                message: format!(
+                    "auto-corrected malformed card amount \"{observed}\" -> \"{total_cents}\" using its currency prefix and the item/subtotal/total arithmetic",
+                ),
+                after_item_index: None,
+            });
+        }
+    }
     // A refund's tender is money handed back (`Credit Card Refund 3.37`):
     // signed against the refund's negative total, so the two still agree.
     if refund {
@@ -736,6 +754,97 @@ mod tests {
     use crate::extraction::is_coupon_reference_line;
     use crate::money::Money;
     use crate::rules::default_parser_rule_layers;
+
+    #[test]
+    fn sale_and_card_bleed_through_require_corroborated_literal_prices() {
+        let raw = "LONGOS\nCRANBERRY JUICE $7.29916 SALEW\nItems Subtotal $7.29\nSubtotal $7.29\nTotal $7.29\nMasterCard $7,290.008.";
+        let parsed = parse_text(raw);
+        assert_eq!(parsed.items.len(), 1);
+        assert_eq!(parsed.items[0].price, Money::from_cents(729));
+        assert_eq!(parsed.items[0].description, "CRANBERRY JUICE");
+        assert_eq!(
+            parsed.items[0].tag_path.as_deref(),
+            Some("grocery/drink/juice")
+        );
+        assert_eq!(parsed.tenders.len(), 1);
+        assert_eq!(parsed.tenders[0].amount, Money::from_cents(729));
+        assert_eq!(parsed.tenders[0].raw_label, "MasterCard");
+        assert_eq!(parsed.raw_text, raw);
+        assert_eq!(parsed.warnings.len(), 2);
+        assert!(parsed
+            .warnings
+            .iter()
+            .all(|w| w.kind == ReceiptWarningKind::PriceAutoCorrected));
+
+        // A different subtotal is not permission to invent different cents.
+        let inconsistent = parse_text(&raw.replace("$7.29\n", "$7.28\n"));
+        assert!(inconsistent.items.is_empty());
+        assert!(inconsistent
+            .warnings
+            .iter()
+            .any(|w| w.kind == ReceiptWarningKind::TenderMismatch));
+    }
+
+    #[test]
+    fn noisy_card_recovery_leaves_valid_and_uncorroborated_payments_alone() {
+        for (item, subtotal, payment, expected) in [
+            (
+                "JUICE $7.29",
+                "Subtotal $7.29",
+                "MasterCard $7,290.00",
+                29000,
+            ),
+            (
+                "JUICE $7.29",
+                "Subtotal $7.29",
+                "MasterCard $7,290.00.",
+                29000,
+            ),
+            (
+                "JUICE $7.29",
+                "Subtotal $7.29",
+                "MasterCard $8,290.008.",
+                29000,
+            ),
+            (
+                "JUICE $6.29",
+                "Subtotal $7.29",
+                "MasterCard $7,290.008.",
+                29000,
+            ),
+            ("JUICE $7.29", "", "MasterCard $7,290.008.", 29000),
+            ("JUICE $7.29", "Subtotal $7.29", "MasterCard $7.30", 730),
+            ("JUICE $7.29", "Subtotal $7.29", "Cash $7,290.008.", 29000),
+            (
+                "JUICE $7.29",
+                "Subtotal $7.29",
+                "MasterCard $7,290.008.\nVISA $1.00",
+                29000,
+            ),
+            (
+                "JUICE $7.29",
+                "Subtotal $7.29",
+                "MasterCard $7,290.008.\nCHANGE $0.00",
+                29000,
+            ),
+        ] {
+            let parsed = parse_text(&format!(
+                "LONGOS\n{item}\n{subtotal}\nTOTAL $7.29\n{payment}"
+            ));
+            assert_eq!(
+                parsed.tenders[0].amount,
+                Money::from_cents(expected),
+                "{payment}"
+            );
+            assert!(
+                parsed
+                    .warnings
+                    .iter()
+                    .all(|w| w.kind != ReceiptWarningKind::PriceAutoCorrected),
+                "{payment}"
+            );
+        }
+    }
 
     #[test]
     fn prefix_scan_explanation_and_typed_rename_have_distinct_contracts() {
