@@ -13,6 +13,9 @@ pub(crate) struct MalformedTrailingPriceCandidate {
     pub(crate) category_source: String,
     pub(crate) observed_token: String,
     pub(crate) observed_fraction: String,
+    /// A currency-marked price followed by bleed-through digits: only its
+    /// literal two-cent prefix may be recovered, never an edited alternative.
+    pub(crate) prefix_only: bool,
     pub(crate) whole_dollars: i64,
     pub(crate) context: String,
 }

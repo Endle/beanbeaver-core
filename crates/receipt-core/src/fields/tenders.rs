@@ -235,6 +235,50 @@ pub fn extract_tenders(lines: &[String]) -> Vec<TenderLine> {
 
     tenders
 }
+
+/// Recover a single card amount whose currency token absorbed trailing numeric
+/// noise. This is not reconciliation of arbitrary mismatching tenders: the
+/// literal first two fractional digits must spell the corroborated total, and
+/// a well-formed amount (including thousands grouping) is never rewritten.
+/// The caller additionally requires the item/subtotal/tax identities to hold.
+/// Return the original token so the correction can be reported to the user.
+pub(crate) fn recover_noisy_card_amount(
+    lines: &[String],
+    tenders: &mut [TenderLine],
+    total: i64,
+) -> Option<String> {
+    let [tender] = tenders else { return None };
+    if tender.kind != "card"
+        || total <= 0
+        || tender.amount_cents == total
+        || lines
+            .iter()
+            .any(|line| re_change_label().is_match(&line.to_ascii_uppercase()))
+    {
+        return None;
+    }
+    static NOISY: OnceLock<Regex> = OnceLock::new();
+    static GROUPED: OnceLock<Regex> = OnceLock::new();
+    let noisy =
+        NOISY.get_or_init(|| Regex::new(r"\$([0-9]+)[.,]([0-9]{2})([0-9.,]+)\s*$").unwrap());
+    let grouped =
+        GROUPED.get_or_init(|| Regex::new(r"^\$[0-9]{1,3}(?:,[0-9]{3})+\.[0-9]{2}\.?$").unwrap());
+    let line = lines.get(tender.source_line_index)?;
+    let caps = noisy.captures(line)?;
+    let token = caps.get(0)?;
+    if grouped.is_match(token.as_str().trim()) {
+        return None;
+    }
+    let dollars = caps.get(1)?.as_str().parse::<i64>().ok()?;
+    let cents = caps.get(2)?.as_str().parse::<i64>().ok()?;
+    if dollars.checked_mul(100)?.checked_add(cents)? != total {
+        return None;
+    }
+    tender.amount_cents = total;
+    tender.raw_label = line[..token.start()].trim().to_string();
+    Some(token.as_str().trim().to_string())
+}
+
 pub(super) fn re_change_label() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // Word-boundary matched on purpose: plain `contains("CHANGE")` also fires

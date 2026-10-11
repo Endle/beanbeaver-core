@@ -5,7 +5,9 @@ use super::rows::*;
 use super::types::*;
 use crate::common::ReceiptWarningKind;
 use crate::money::Money;
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 pub(super) fn maybe_push_warning(
     warnings: &mut Vec<TextParserWarning>,
     items_len: usize,
@@ -59,8 +61,28 @@ pub(super) fn build_malformed_price_candidate(
         return None;
     }
 
+    // Reverse-side printing can join a currency price and its SALE marker.
+    // Keep only a literal prefix candidate; the existing whole-receipt
+    // reconciliation must corroborate it before an item can be emitted.
+    // Currency and SALE anchors exclude weights, unit prices, and identifiers.
+    static BLEED: OnceLock<Regex> = OnceLock::new();
+    let bleed = BLEED
+        .get_or_init(|| Regex::new(r"\$([0-9]+)\.([0-9]{3,})\s+(?i:SALE)[A-Za-z]*\s*$").unwrap());
+    let bleed_price = bleed.captures(line);
+    let prefix_only = bleed_price.is_some();
     let (observed_token, observed_fraction, whole_dollars, price_start) =
-        extract_trailing_noisy_price(line)?;
+        if let Some(caps) = bleed_price {
+            let whole = caps.get(1)?.as_str();
+            let fraction = caps.get(2)?.as_str();
+            (
+                format!("{whole}.{fraction}"),
+                fraction.to_string(),
+                whole.parse::<i64>().ok()?,
+                caps.get(0)?.start(),
+            )
+        } else {
+            extract_trailing_noisy_price(line)?
+        };
     let desc_part = line[..price_start].trim();
     if desc_part.is_empty() {
         return None;
@@ -83,6 +105,7 @@ pub(super) fn build_malformed_price_candidate(
         category_source: cleaned,
         observed_token,
         observed_fraction,
+        prefix_only,
         whole_dollars,
         context: truncated_context(line),
     })
@@ -109,6 +132,20 @@ pub(super) fn levenshtein_distance(left: &str, right: &str) -> usize {
 pub(super) fn malformed_candidate_price_options(
     candidate: &MalformedTrailingPriceCandidate,
 ) -> Vec<CandidatePriceOption> {
+    if candidate.prefix_only {
+        let cents = candidate.observed_fraction[..2].parse::<i64>().unwrap();
+        return candidate
+            .whole_dollars
+            .checked_mul(100)
+            .and_then(|whole| whole.checked_add(cents))
+            .map(|cents| {
+                vec![CandidatePriceOption {
+                    price: Money::from_cents(cents),
+                    score: candidate.observed_fraction.len() - 2,
+                }]
+            })
+            .unwrap_or_default();
+    }
     let mut best_by_price: HashMap<Money, usize> = HashMap::new();
 
     for cents in 0..=99i64 {
