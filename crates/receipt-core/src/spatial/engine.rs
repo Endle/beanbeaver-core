@@ -38,7 +38,14 @@ pub fn extract_spatial_items(doc: &OcrDocument) -> SpatialExtractionOutcome {
             prefer_below,
         } = price_context(source_line, closest_line);
 
-        let mut is_summary = price_is_summary(price_y, closest_line, &all_lines, total_line_y);
+        let mut is_summary = price_is_summary(
+            price_y,
+            price_candidate.price_scaled,
+            source_line,
+            closest_line,
+            &all_lines,
+            total_line_y,
+        );
 
         let mut onsale_target_line_index = None;
         if !is_summary && price_line_has_onsale {

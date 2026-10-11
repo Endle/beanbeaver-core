@@ -21,12 +21,28 @@ use crate::money::Money;
 ///    summary row nearby when the price sits in the TOTAL band. This is the
 ///    case that catches a summary column whose labels OCR read onto separate
 ///    rows.
+///
+/// Before all three: **the row the amount was grouped onto is labelled**, and
+/// the amount is that row's trailing price. Line grouping already compensated
+/// for the lean of the amount column when it put `55.16` on `SUBTOTAL`; the
+/// y tests above re-derive that from raw centres and can lose it. On a No
+/// Frills capture whose amounts print half a row high, `55.16` sat nearest the
+/// unlabelled `2 @ $0.35` row, every reading said "not summary", and the
+/// fallback priced the `47-OTHER SERVICES` banner at the subtotal.
 pub(super) fn price_is_summary(
     price_y: f64,
+    price_scaled: i64,
+    source_line: &ParsedLine,
     closest_line: &ParsedLine,
     all_lines: &[ParsedLine],
     total_line_y: Option<f64>,
 ) -> bool {
+    if is_summary_line(&source_line.left_text)
+        && trailing_price_scaled(&source_line.full_text) == Some(price_scaled)
+    {
+        return true;
+    }
+
     if let Some(total_y) = total_line_y {
         if price_y > total_y - MAX_ITEM_DISTANCE {
             for candidate in all_lines {
@@ -255,7 +271,19 @@ pub(super) fn select_target_line(
                 && selected_line.line_y > price_y + SPATIAL_FLOAT_EPSILON
                 && line_has_trailing_price(&selected_line.full_text);
             if selected_line_is_next_priced_row {
-                suppress_fallback_for_ambiguous_code_only_source = true;
+                // The price is not the next item's, but it may still be the
+                // row above's: OCR can split a Loblaw line between its SKU and
+                // its description, leaving `(2)05600001066 17.00` under an
+                // unpriced `CRUSH ZERO ORANG HMRJ` that sits on the same
+                // printed line. Only that shape is taken; anything else keeps
+                // the price unpaired, as before.
+                match split_description_above(price_candidate.source_line_index, price_y, rows) {
+                    Some((index, distance)) => {
+                        chosen_line_index = Some(index);
+                        chosen_distance = distance;
+                    }
+                    None => suppress_fallback_for_ambiguous_code_only_source = true,
+                }
             } else {
                 chosen_line_index = Some(index);
                 chosen_distance = distance;
@@ -271,6 +299,36 @@ pub(super) fn select_target_line(
         source_repeats_previous_priced_item: source_line_repeats_previous_priced_item,
         shifted_to_deposit_stub: shifted_deposit_target.is_some(),
     }
+}
+
+/// The description half of a printed line whose SKU half carries the price.
+///
+/// Called only for a code-only source row whose own price would otherwise go
+/// unpaired. The row directly above qualifies when it is a usable, unpriced
+/// item row within `Y_TOLERANCE` of the source (the same printed line, split
+/// by grouping) and the price sits no lower than the source row. A priced row
+/// above is a finished item, and anything further away is a different line.
+fn split_description_above(
+    source_index: usize,
+    price_y: f64,
+    rows: Rows<'_>,
+) -> Option<(usize, f64)> {
+    let source_y = rows.all[source_index].line_y;
+    if price_y > source_y + SPATIAL_FLOAT_EPSILON {
+        return None;
+    }
+    let (index, above) = rows
+        .all
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.line_y < source_y)
+        .max_by(|(_, a), (_, b)| a.line_y.partial_cmp(&b.line_y).unwrap())?;
+    let usable = !rows.used[index]
+        && source_y - above.line_y <= Y_TOLERANCE + SPATIAL_FLOAT_EPSILON
+        && is_valid_item_line(above, rows.total_line_y)
+        && !line_has_trailing_price(&above.full_text)
+        && !looks_like_quantity_expression(&above.left_text);
+    usable.then(|| (index, (above.line_y - price_y).abs()))
 }
 
 /// The item description a row yields, or `None` if the row cannot name one.
