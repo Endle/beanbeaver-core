@@ -1402,6 +1402,10 @@ mod tests {
             assert_eq!(key(glass).as_deref(), Some("household/supply"));
         }
         assert_eq!(key("RED WINE").as_deref(), Some("alcohol/beverage"));
+        assert_eq!(
+            key("Kobayashi Kantan Senjomar").as_deref(),
+            Some("household/supply")
+        );
         // FreshCo prints diced tomatoes as "Tom Diced".
         assert_eq!(
             key("Tom Diced").as_deref(),
