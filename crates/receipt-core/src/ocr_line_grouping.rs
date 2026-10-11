@@ -267,6 +267,49 @@ fn is_code_stub_label(text: &str) -> bool {
     rest.len() >= 9 && rest.chars().all(|ch| ch.is_ascii_digit())
 }
 
+/// A standalone product code, as opposed to a code followed by a description
+/// or a size such as `500ML`. These rows can carry prices, so they must not be
+/// typed `Never`: only a better-aligned description immediately below can
+/// displace their claim.
+fn is_standalone_product_code(text: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^[A-Z]*\d+(?:-\d+)*$").unwrap())
+        .is_match(text.trim())
+}
+
+fn code_row_yields_to_description(
+    dets: &[Detection],
+    left: &[usize],
+    position: usize,
+    right_index: usize,
+    reached: &[usize],
+) -> bool {
+    if !is_standalone_product_code(&dets[left[position]].text) {
+        return false;
+    }
+    // A SKU and its description split horizontally are still one printed
+    // row. Keep its price even if the next item's box overlaps it more.
+    if reached.iter().any(|&index| {
+        dets[index].min_x < dets[right_index].min_x
+            && dets[index].text.chars().any(|ch| ch.is_ascii_alphabetic())
+            && !is_standalone_product_code(&dets[index].text)
+    }) {
+        return false;
+    }
+    let Some(&next) = left.get(position + 1) else {
+        return false;
+    };
+    let text = dets[next].text.trim();
+    amount_claim(text) == AmountClaim::Any
+        && !summary_label_re().is_match(text)
+        && text.split_whitespace().count() > 1
+        && text.chars().any(|ch| ch.is_ascii_alphabetic())
+        && !is_quantity_breakdown_label(text)
+        && boxes_overlap_y(&dets[next], &dets[right_index], PAIR_OVERLAP_GATE)
+        && line_overlap_ratio(dets, right_index, &[next])
+            > line_overlap_ratio(dets, right_index, &[left[position]])
+}
+
 /// True for POS transaction-id header rows: the word "Transaction" followed by
 /// nothing but a digit run (Clover prints "Transaction 037972" directly above
 /// the first item). Like code stubs, the row never carries an amount, so it
@@ -968,6 +1011,12 @@ fn pair_columns(
             if !same_row || !claim.accepts(&dets[right_index].text) {
                 continue;
             }
+            // Some shops print a code on its own line above the product name.
+            // A leaning price overlaps both: first-fit otherwise emits the
+            // code as the item and drops the name that is aligned with it.
+            if code_row_yields_to_description(dets, left, position, right_index, &row) {
+                continue;
+            }
             // Third guard: a breakdown that states its own extension may not
             // hold an amount that contradicts it. See
             // [`breakdown_extension_cents`] — this is the only guard here that
@@ -1293,6 +1342,69 @@ mod tests {
         assert!(belongs_in_left_column("232952 COKE", 0.25)); // digit-led SKU
         assert!(belongs_in_left_column("TOTAL", 0.25)); // summary label
         assert!(!belongs_in_left_column("CRAISINS 1.8", 0.25)); // alpha description
+    }
+
+    #[test]
+    fn standalone_product_codes_yield_to_better_aligned_names_below() {
+        // A price overlaps the code above and its product name below. Both
+        // alpha-prefixed and hyphenated codes must leave it to the name.
+        let dets = vec![
+            det_span("AB12345", 38.0, 698.0, 744.0),
+            det_span("Drain Cleaner", 55.0, 736.0, 788.0),
+            det_span("10.99H", 864.0, 725.0, 774.0),
+            det_span("CC1234-56-78", 39.0, 827.0, 870.0),
+            det_span("Wine Glass", 34.0, 862.0, 920.0),
+            det_span("1.47H", 887.0, 855.0, 907.0),
+        ];
+        let lines = rendered(&dets, 1100.0);
+        assert!(
+            lines.contains(&"Drain Cleaner 10.99H".to_string()),
+            "{lines:?}"
+        );
+        assert!(lines.contains(&"Wine Glass 1.47H".to_string()), "{lines:?}");
+        assert!(lines.contains(&"AB12345".to_string()));
+        assert!(lines.contains(&"CC1234-56-78".to_string()));
+    }
+
+    #[test]
+    fn product_codes_keep_prices_without_a_better_product_name() {
+        for next in ["NEXT ITEM", "TOTAL", "INSTANT SAVINGS", "2 @ $1.00"] {
+            let dets = vec![
+                det_span("AB12345", 40.0, 200.0, 240.0),
+                det_span("3.00H", 800.0, 200.0, 240.0),
+                det_span(next, 40.0, 225.0, 265.0),
+            ];
+            let lines = rendered(&dets, 1000.0);
+            assert!(lines.contains(&"AB12345 3.00H".to_string()), "{lines:?}");
+        }
+        // A summary or breakdown is never the description, even when it
+        // overlaps the price more than the code does.
+        for next in ["TOTAL AFTER TAX", "INSTANT SAVINGS", "2 @ $1.00"] {
+            let dets = vec![
+                det_span("AB12345", 40.0, 200.0, 240.0),
+                det_span("3.00H", 800.0, 225.0, 265.0),
+                det_span(next, 40.0, 225.0, 265.0),
+            ];
+            let lines = rendered(&dets, 1000.0);
+            assert!(lines.contains(&"AB12345 3.00H".to_string()), "{lines:?}");
+        }
+    }
+
+    #[test]
+    fn code_with_a_description_on_its_own_row_keeps_its_price() {
+        // The middle-column name belongs to the code's row. The next name
+        // overlaps the price more, but must not steal a complete item's price.
+        let dets = vec![
+            det_span("1234567", 40.0, 200.0, 240.0),
+            det_span("FIRST ITEM", 350.0, 200.0, 240.0),
+            det_span("3.00H", 800.0, 225.0, 265.0),
+            det_span("NEXT ITEM", 40.0, 230.0, 270.0),
+        ];
+        let lines = rendered(&dets, 1000.0);
+        assert!(
+            lines.contains(&"1234567 FIRST ITEM 3.00H".to_string()),
+            "{lines:?}"
+        );
     }
 
     #[test]

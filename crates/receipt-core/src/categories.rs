@@ -1394,6 +1394,14 @@ mod tests {
             key("SMIRNOFF ICE CREAMSICLE BLEST").as_deref(),
             Some("alcohol/beverage")
         );
+        for glass in [
+            "1-pc Wine Glass",
+            "l-pc Wine Glass",
+            "Martini/Cocktail Glass 19",
+        ] {
+            assert_eq!(key(glass).as_deref(), Some("household/supply"));
+        }
+        assert_eq!(key("RED WINE").as_deref(), Some("alcohol/beverage"));
         // FreshCo prints diced tomatoes as "Tom Diced".
         assert_eq!(
             key("Tom Diced").as_deref(),
