@@ -1045,6 +1045,24 @@ fn a_thousands_separator_with_a_misread_zero_is_not_a_price() {
 }
 
 #[test]
+fn a_survey_footer_read_as_vin_is_not_a_gift_card_tender() {
+    // The same footer as above, read with a period for the comma this time:
+    // `$1.000` is a well-formed amount, so only the offer wording can tell
+    // it apart from a payment. OCR reads its WIN as VIN.
+    assert_eq!(classify_tender_line("VIN A $1.000 PC GIFT CARD OR"), None);
+    assert_eq!(classify_tender_line("WIN A $1.000 PC GIFT CARD OR"), None);
+    assert_eq!(classify_tender_line("GIFT CARD 25.00"), Some("gift_card"));
+    let lines = vec![
+        "TOTAL 58.57".to_string(),
+        "ACcount: MASTERCARD CAD$ 58.57".to_string(),
+        "Vin a $1.000 PC gift card or".to_string(),
+    ];
+    let tenders = extract_tenders(&lines);
+    assert_eq!(tenders.len(), 1);
+    assert_eq!(tenders[0].kind, "card");
+}
+
+#[test]
 fn a_real_comma_decimal_point_still_parses() {
     // The repair this guard sits inside must keep working: OCR reads a
     // price's decimal point as a comma often enough to be worth repairing.
