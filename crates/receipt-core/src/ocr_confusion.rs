@@ -30,6 +30,12 @@ const COST_SAME_GLYPH: f64 = 0.1;
 /// which misfiled two corpus fixtures as `Bakery`. A pair that only *sounds*
 /// reasonable is a false-positive generator — add one when a real receipt
 /// demands it, not before.
+///
+/// `C`/`O` was added on that evidence: a `C` is an `O` with a gap, and a blot
+/// that bridges the gap closes it (the same argument as `C`/`G`, where a stroke
+/// is added instead). Asia Food Mart's "Biscuit Original Flavor" came back as
+/// `Bisouit` on one capture and `Bisoult` on another, so the snacks keyword
+/// BISCUIT missed and the line booked to FIXME.
 const COST_SHARED_SKELETON: f64 = 0.3;
 
 /// Confusable only under heavy smearing. Plausible, but weak evidence, so it
@@ -68,6 +74,7 @@ pub fn confusion_cost(a: char, b: char) -> f64 {
         | ('D', 'O')
         | ('O', 'Q')
         | ('C', 'G')
+        | ('C', 'O')
         | ('E', 'F')
         | ('H', 'M')
         | ('H', 'N')
@@ -366,6 +373,16 @@ mod tests {
         // Both must land inside the equality budget, or categorization regresses.
         assert!(substring_cost("LYSOL", "LYS0L BATH P 059") <= NOISE_TOLERANCE);
         assert!(substring_cost("LYSDL", "LYSOL BATH P 059") <= NOISE_TOLERANCE);
+    }
+
+    #[test]
+    fn substring_search_prices_a_bridged_c_as_an_o() {
+        assert_eq!(confusion_cost('C', 'O'), COST_SHARED_SKELETON);
+        assert_eq!(confusion_cost('O', 'C'), COST_SHARED_SKELETON);
+        assert!(substring_cost("BISCUIT", "BISOUIT ORLGINAL FLAVOR") <= NOISE_TOLERANCE);
+        // One bridged C is the whole budget: with a second misread (I as L)
+        // on top, the word is no longer "equal apart from OCR noise".
+        assert!(substring_cost("BISCUIT", "BISOULT ORLGINAL FLAVOR") > NOISE_TOLERANCE);
     }
 
     #[test]

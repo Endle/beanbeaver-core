@@ -1411,6 +1411,38 @@ mod tests {
             Some("grocery/drink/juice")
         );
 
+        // Asia Food Mart. OCR bridges the C of BISCUIT into an O; the flavour
+        // words BEEF and SEAFOOD used to claim a vegetarian snack for Meat and
+        // a rice noodle for Seafood.
+        assert_eq!(
+            key("Bisouit Orlginal Flavor").as_deref(),
+            Some("grocery/snacks")
+        );
+        assert_eq!(
+            key("ZhenXiang Beef Flavor Bea").as_deref(),
+            Some("grocery/snacks")
+        );
+        assert_eq!(
+            key("*Chawy Shiso & Seafood Fla").as_deref(),
+            Some("grocery/staple")
+        );
+        // The same brand at Bestco, where BEAN in SOYBEAN had it as Staple.
+        assert_eq!(
+            key("Zhen Xiang Soybean Vegeta").as_deref(),
+            Some("grocery/snacks")
+        );
+        // C/O lets "Pctato" read as POTATO; the noodle must stay a staple, and
+        // a coupon line's "STORE COUPONS" must not read as OREO.
+        assert_eq!(
+            key("Sweet Pctato Noodle $").as_deref(),
+            Some("grocery/staple")
+        );
+        assert_eq!(
+            key("Sweet Potato Noodle").as_deref(),
+            Some("grocery/staple")
+        );
+        assert_eq!(key("Kanufacturer/Store Compons HER CPN"), None);
+
         assert_eq!(
             key("2773717 MONSTER VRTY").as_deref(),
             Some("grocery/drink")
