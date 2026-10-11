@@ -58,7 +58,11 @@
 #   ORION   (snacks, legacy_0021) is a brand, five letters, one from ONION.
 #   FANT    (drink, legacy_0027) is FANTA truncated by the Loblaw chains
 #           ("FANT ORG ZS"). Four letters, one from FANS, PANT and WANT.
-exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD", "ORANGE", "POCKY", "SMOOTHIE", "FRESH SMOOTH TO", "BLACK TEA", "BLACK TIGER", "BLACK TIE", "OKAR", "FACE CREAM", "EYE CREAM", "DAY CREAM", "ORION", "FANT"]
+#   OREO    (snacks, legacy_0021) is a brand, four letters. Once C/O became an
+#           OCR confusion pair, it matched the "OREC" that "STORE COUPONS"
+#           leaves when spaces are dropped, and filed a No Frills coupon line
+#           as Snacks. Oreo is printed in full.
+exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD", "ORANGE", "POCKY", "SMOOTHIE", "FRESH SMOOTH TO", "BLACK TEA", "BLACK TIGER", "BLACK TIE", "OKAR", "FACE CREAM", "EYE CREAM", "DAY CREAM", "ORION", "FANT", "OREO"]
 
 # BRANDS — text that names the maker, blanked out before any keyword is matched.
 #
@@ -393,7 +397,20 @@ id = "legacy_0017"
 # wins the same tiebreak "CORN STARCH" already relies on, so the vegetable
 # sweet potato is untouched. Corpus: t_t_supermarket 2026-09-15 $16.20 and
 # 2026-06-23 $12.94 must both be Staple.
-keywords = ["RICE", "PASTA", "NOODLE", "NOODLES", "DRIED NOOD", "SPAGHETTI", "MACARONI", "PENNE", "FLOUR", "SUGAR", "OIL", "OLIVE OIL", "CANOLA OIL", "VINEGAR", "OATMEAL", "OATS", "CEREAL", "QUINOA", "COUSCOUS", "BARLEY", "MILLET", "LENTIL", "LENTILS", "CHICKPEA", "BEAN", "BEANS", "BLACK BEAN", "KIDNEY BEAN", "PINTO BEAN", "INSTANT NOODLE", "INSTANT NOODLES", "INSTANT NOO", "LONGKOU", "VERMICELLI", "SWEET POTATO VERMICELLI", "RAMEN", "DANDAN", "CORN STARCH", "CORNSTARCH", "SHODOSHIMA"]
+#
+# "SHISO & SEAFOOD" is Asia Food Mart's "*Chewy Shiso & Seafood Fla"
+# (超力紫苏海八鲜米粉), an instant rice noodle. The 25-column print cuts it before
+# any product word, so the flavour's SEAFOOD (7) filed it as Seafood; the
+# 13-character phrase wins on `keyword_length` at equal priority. Not keyed on
+# CHEWY, which OCR reads as "Chawy" on two of the three captures. Corpus:
+# asia_food_mart 2026-10-07 $189.88.
+#
+# "SWEET POTATO NOODLE" is "SWEET POTATO VERMICELLI" again. Sunny Foodmart
+# prints "Sweet Pctato Noodle"; that stayed Staple only while nothing read
+# Pctato as POTATO. With C/O an OCR confusion pair, "SWEET POTATO" (11) took it
+# from NOODLE (6) for Vegetable, and a correctly printed one would always have
+# gone that way. Corpus: sunny_foodmart 2026-03-10 $25.44.
+keywords =["RICE", "PASTA", "NOODLE", "NOODLES", "DRIED NOOD", "SPAGHETTI", "MACARONI", "PENNE", "FLOUR", "SUGAR", "OIL", "OLIVE OIL", "CANOLA OIL", "VINEGAR", "OATMEAL", "OATS", "CEREAL", "QUINOA", "COUSCOUS", "BARLEY", "MILLET", "LENTIL", "LENTILS", "CHICKPEA", "BEAN", "BEANS", "BLACK BEAN", "KIDNEY BEAN", "PINTO BEAN", "INSTANT NOODLE", "INSTANT NOODLES", "INSTANT NOO", "LONGKOU", "VERMICELLI", "SWEET POTATO VERMICELLI", "RAMEN", "DANDAN", "CORN STARCH", "CORNSTARCH", "SHODOSHIMA", "SHISO & SEAFOOD", "SWEET POTATO NOODLE"]
 tags = ["grocery/staple"]
 priority = 0
 exact_only = false
@@ -476,7 +493,12 @@ id = "legacy_0021"
 # ONION. The corpus's other BISCUIT lines (Sandwich Biscuits, Pocky Biscuit
 # Stick, Jiashili Wafer Biscuits) were already snacks. Corpus: asia_food_mart
 # 2026-10-07 $189.88.
-keywords = ["BUTTER FLAVORED", "BUTTER FLAVOURED", "POTATO CHIPS", "CHIP", "CHIPS", "POPCORN", "PRETZEL", "NUTS", "ALMONDS", "CASHEWS", "PEANUTS", "WALNUTS", "PISTACHIOS", "TRAIL MIX", "GRANOLA BAR", "PROTEIN BAR", "ENERGY BAR", "CANDY", "CHOCOLATE", "GUMMY", "GUMMIES", "SKITTLES", "M&M", "SNICKERS", "TWIX", "KITKAT", "REESE", "OREO", "GOLDFISH", "CHEETOS", "DORITOS", "PRINGLES", "LAYS", "RUFFLES", "TOSTITOS", "CHEEZ-IT", "RITZ", "SENBEI", "RICE CRACKER", "SACHIMA", "EGG FLAVOR", "EGG FLAVOU", "GRILLING BAMBOO", "BISCUIT", "ORION", "WEI LONG", "WEILONG"]
+#
+# "ZHENXIANG" is the same receipt's "ZhenXiang Beef Flavor Bea" (鎮香肥牛味素食品),
+# a beef-flavoured vegetarian snack that BEEF (4) filed as Meat — the BUTTER
+# FLAVORED argument again. Keyed on the brand rather than "BEEF FLAVOR", which
+# would also take a beef-flavour instant noodle away from NOODLE (6).
+keywords = ["BUTTER FLAVORED", "BUTTER FLAVOURED", "POTATO CHIPS", "CHIP", "CHIPS", "POPCORN", "PRETZEL", "NUTS", "ALMONDS", "CASHEWS", "PEANUTS", "WALNUTS", "PISTACHIOS", "TRAIL MIX", "GRANOLA BAR", "PROTEIN BAR", "ENERGY BAR", "CANDY", "CHOCOLATE", "GUMMY", "GUMMIES", "SKITTLES", "M&M", "SNICKERS", "TWIX", "KITKAT", "REESE", "OREO", "GOLDFISH", "CHEETOS", "DORITOS", "PRINGLES", "LAYS", "RUFFLES", "TOSTITOS", "CHEEZ-IT", "RITZ", "SENBEI", "RICE CRACKER", "SACHIMA", "EGG FLAVOR", "EGG FLAVOU", "GRILLING BAMBOO", "BISCUIT", "ORION", "WEI LONG", "WEILONG", "ZHENXIANG"]
 tags = ["grocery/snacks"]
 priority = 0
 exact_only = false

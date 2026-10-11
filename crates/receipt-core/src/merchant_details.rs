@@ -196,10 +196,12 @@ fn street_in(line: &str) -> Option<(String, std::ops::Range<usize>)> {
     let found = street_re().find(line)?;
     // A labelled unit belongs to the street, not to the following city.
     // Match it only immediately after a recognized street so ordinary product
-    // text or a bare city cannot supply an apartment identifier.
+    // text or a bare city cannot supply an apartment identifier. A bare `#`
+    // unit (`456 Maple Ave, #A`) needs the comma, so a store number printed
+    // after the street (`Ave #1234`) is not taken for one.
     static UNIT: OnceLock<Regex> = OnceLock::new();
     let unit_re = UNIT.get_or_init(|| {
-        Regex::new(r"(?i)^\s*,?\s*(?:UNIT|SUITE|STE\.?)\s+#?[A-Z0-9]+(?:-[A-Z0-9]+)?\b")
+        Regex::new(r"(?i)^\s*(?:,?\s*(?:UNIT|SUITE|STE\.?)\s+#?|,\s*#)[A-Z0-9]+(?:-[A-Z0-9]+)?\b")
             .expect("valid address-unit regex")
     });
     let end = unit_re
@@ -700,6 +702,20 @@ mod tests {
             Some("456 Maple Ave Unit A")
         );
         assert_eq!(found.city, None);
+    }
+
+    #[test]
+    fn bare_hash_unit_after_a_comma_stays_with_the_street() {
+        let found = extract_merchant_details(&lines(
+            "EXAMPLE MART\n456 Maple Ave, #A\nExampleville, Ontario, A1A 1A1",
+        ));
+        assert_eq!(found.street_address.as_deref(), Some("456 Maple Ave, #A"));
+        assert_eq!(found.city.as_deref(), Some("Exampleville"));
+        // Without the comma a trailing `#` number may be the store's, not a unit.
+        assert_eq!(
+            street_in("456 Maple Ave #1234").map(|s| s.0).as_deref(),
+            Some("456 Maple Ave")
+        );
     }
 
     #[test]
