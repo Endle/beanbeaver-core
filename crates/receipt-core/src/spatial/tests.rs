@@ -851,3 +851,129 @@ fn damaged_scale_unit_does_not_steal_the_produce_price() {
     assert_eq!(outcome.items[0].price, Money::from_cents(360));
     assert!(!super::patterns::re_weight_info_line().is_match("1.250 ky PLUMS"));
 }
+
+/// A No Frills capture whose amount column prints half a row high, in its own
+/// OCR pixels (874 x 3100), normalized here.
+fn nf_word(text: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> OcrWord {
+    word(text, x0 / 874.0, y0 / 3100.0, x1 / 874.0, y1 / 3100.0)
+}
+
+fn nf_line(words: Vec<OcrWord>) -> OcrLine {
+    let text = words
+        .iter()
+        .map(|w| w.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    line(&text, words)
+}
+
+#[test]
+fn a_leaning_subtotal_amount_does_not_price_a_department_banner() {
+    // `55.16` was grouped onto SUBTOTAL, but its centre sits nearest the
+    // unlabelled `2 @ $0.35` row. Read as an item price, it fell back to the
+    // nearest describable row above and priced `47-OTHER SERVICES` at the
+    // subtotal.
+    let lines = vec![
+        nf_line(vec![nf_word(
+            "47-OTHER SERVICES",
+            76.0,
+            706.0,
+            301.0,
+            753.0,
+        )]),
+        nf_line(vec![
+            nf_word("(2)18902", 104.0, 746.0, 210.0, 778.0),
+            nf_word("RESBL SHRT BG NF HQ", 323.0, 727.0, 575.0, 771.0),
+            nf_word("0.70", 701.0, 743.0, 772.0, 787.0),
+        ]),
+        nf_line(vec![nf_word("2 @ $0.35", 120.0, 772.0, 247.0, 812.0)]),
+        nf_line(vec![
+            nf_word("SUBTOTAL", 75.0, 802.0, 268.0, 842.0),
+            nf_word("55.16", 652.0, 777.0, 793.0, 819.0),
+        ]),
+        nf_line(vec![
+            nf_word("H=HST 13%", 122.0, 833.0, 246.0, 870.0),
+            nf_word("26.20 @ 13.000%", 284.0, 821.0, 483.0, 865.0),
+            nf_word("3.41", 703.0, 812.0, 770.0, 847.0),
+        ]),
+        nf_line(vec![
+            nf_word("TOTAL", 78.0, 868.0, 195.0, 896.0),
+            nf_word("58.57", 651.0, 837.0, 789.0, 886.0),
+        ]),
+    ];
+    let outcome = extract_spatial_items(&OcrDocument { lines });
+    let items: Vec<_> = outcome
+        .items
+        .iter()
+        .map(|item| (item.description.as_str(), item.price))
+        .collect();
+    assert_eq!(
+        items,
+        [("18902 RESBL SHRT BG NF HQ", Money::from_cents(70))]
+    );
+}
+
+fn crush_block(description_top: f64) -> Vec<OcrLine> {
+    let d = description_top;
+    vec![
+        nf_line(vec![
+            nf_word("21-GROCERY", 80.0, 407.0, 213.0, 454.0),
+            nf_word("CRUSH ZERO ORANG HMRJ", 324.0, d, 603.0, d + 56.0),
+        ]),
+        nf_line(vec![
+            nf_word("(2)05600001066", 104.0, 430.0, 288.0, 485.0),
+            nf_word("17.00", 695.0, 426.0, 774.0, 469.0),
+        ]),
+        nf_line(vec![
+            nf_word("2 @$8.50", 124.0, 463.0, 252.0, 511.0),
+            nf_word("HMRJ", 554.0, 475.0, 616.0, 512.0),
+        ]),
+        nf_line(vec![
+            nf_word("06700001418", 102.0, 496.0, 249.0, 540.0),
+            nf_word("FANT ORG ZS", 286.0, 480.0, 438.0, 532.0),
+            nf_word("8.50", 654.0, 464.0, 720.0, 502.0),
+        ]),
+    ]
+}
+
+#[test]
+fn a_sku_row_prices_the_description_ocr_split_off_above_it() {
+    // Grouping joined `CRUSH ZERO ORANG HMRJ` to the department banner and left
+    // its SKU and price on their own row. The only priced row in reach is the
+    // next item, which the code-only guard rightly refuses; the description on
+    // the same printed line, just above, is the one that owns 17.00.
+    let outcome = extract_spatial_items(&OcrDocument {
+        lines: crush_block(410.0),
+    });
+    let items: Vec<_> = outcome
+        .items
+        .iter()
+        .map(|item| (item.description.as_str(), item.price))
+        .collect();
+    assert_eq!(
+        items,
+        [
+            ("CRUSH ZERO ORANG HMRJ", Money::from_cents(1700)),
+            ("FANT ORG ZS", Money::from_cents(850)),
+        ]
+    );
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+}
+
+#[test]
+fn a_sku_row_does_not_reach_a_description_a_whole_line_above() {
+    // Same block with the description lifted a full row: that is a different
+    // printed line, so the price stays unpaired, as it was before.
+    let outcome = extract_spatial_items(&OcrDocument {
+        lines: crush_block(300.0),
+    });
+    assert!(
+        outcome
+            .items
+            .iter()
+            .all(|item| item.price != Money::from_cents(1700)),
+        "{:?}",
+        outcome.items
+    );
+    assert_eq!(outcome.warnings.len(), 1);
+}
