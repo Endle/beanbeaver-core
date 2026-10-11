@@ -724,6 +724,18 @@ tags = ["household/supply"]
 priority = 0
 exact_only = false
 
+[[rules]]
+# Checkout bags: the fee or the reusable bag sold at the till. No Frills
+# prints "RESBL SHRT BG NF HQ" (no BAG at all), FreshCo "FreshCo 2.0 ReuseBag"
+# and "Carry Bag Large Ther", Foody Mart "Shopping Bag Fee", Walmart
+# "SHOPPING BAG". Booked as household supply with the store bags above.
+# Corpus: no_frills 2026-10-09 $58.57; changes exactly those four lines.
+id = "shopping_bags"
+keywords = ["SHOPPING BAG", "CARRY BAG", "BAG FEE", "REUSABLE BAG", "REUSEBAG", "REUSE BAG", "RESBL SHRT BG"]
+tags = ["household/supply"]
+priority = 0
+exact_only = false
+
 
 [[rules]]
 id = "legacy_0041"
