@@ -659,6 +659,15 @@ priority = 1
 exact_only = true
 
 [[rules]]
+id = "drinking_glassware"
+# Match the vessel explicitly; at the wine rule's priority, the longer
+# keyword wins the account without changing classification of actual wine.
+keywords = ["WINE GLASS", "COCKTAIL GLASS"]
+tags = ["household/supply"]
+priority = 1
+exact_only = true
+
+[[rules]]
 id = "legacy_0029"
 keywords = ["PAPER TOWEL", "TOILET PAPER", "TISSUE", "DISPOSABLE GLOVES", "GLOVES", "BATH TISS", "KLEENEX", "SCOTTIES", "SC0TTIES", "CASHMERE", "NAPKIN", "NAPKINS", "ALUMINUM FOIL", "PLASTIC WRAP", "CLING WRAP", "PARCHMENT", "WAX PAPER", "TRASH BAG", "GARBAGE BAG", "ZIPLOC", "STORAGE BAG", "SANDWICH BAG", "SPONGE", "DISH SOAP", "DISHWASHER", "LAUNDRY DETERGENT", "LAUNDRY", "POWERWASH", "FABRIC SOFTENER", "BLEACH", "CLEANER", "CLEANING", "DISINFECTANT", "LYSOL", "CLOROX", "WINDEX", "MR CLEAN", "FEBREZE", "AIR FRESHENER", "CANDLE", "LIGHT BULB", "BATTERY", "BATTERIES"]
 tags = ["household/supply"]
