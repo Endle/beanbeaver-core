@@ -25,6 +25,20 @@ pub(crate) struct ExtractionOutcome {
     pub warnings: Vec<ReceiptWarning>,
 }
 
+/// Repair lowercase `l` read in the numeric slot of a hyphenated piece count.
+/// The unit corroborates `1-pc`; this is not a general letter/digit rewrite.
+/// Require a separate token, keep real numeric counts and model codes intact,
+/// and leave the original OCR text available on the receipt for review.
+pub(crate) fn normalize_piece_count_ocr(description: String) -> String {
+    if !description.contains("l-") {
+        return description;
+    }
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(^|\s|\()l-((?i:pcs?|pieces?))\b").unwrap())
+        .replace_all(&description, "${1}1-${2}")
+        .into_owned()
+}
+
 /// Costco's manufacturer-coupon line: `<coupon number> / <item number>`, printed
 /// under the item it reduces with a trailing-minus amount (`4.00- H`). Unlike
 /// `TPD/<item>` it carries no letters, so no keyword rule can tag it and every
@@ -199,6 +213,22 @@ mod tests {
     use super::{fold_zero_priced_loads, leading_item_number, ExtractedItem, ExtractionOutcome};
     use crate::common::{ReceiptWarning, ReceiptWarningKind};
     use crate::money::Money;
+
+    #[test]
+    fn repairs_only_a_separate_piece_count_token() {
+        for (raw, expected) in [
+            ("Example l-pc Wine Glass", "Example 1-pc Wine Glass"),
+            ("l-PCS Cup", "1-PCS Cup"),
+            ("Cup (l-piece)", "Cup (1-piece)"),
+            ("11-pc Set", "11-pc Set"),
+            ("l-pcb Module", "l-pcb Module"),
+            ("Model-l-pc", "Model-l-pc"),
+            ("Model I-PC", "Model I-PC"),
+            ("l-Litre Bottle", "l-Litre Bottle"),
+        ] {
+            assert_eq!(super::normalize_piece_count_ocr(raw.into()), expected);
+        }
+    }
 
     fn item(description: &str, cents: i64) -> ExtractedItem {
         ExtractedItem {

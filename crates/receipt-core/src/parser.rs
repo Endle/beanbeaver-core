@@ -114,6 +114,7 @@ fn build_item(
     rule_layers: &ParserRuleLayers,
     vocab: Option<&crate::merchant_vocab::MerchantVocab>,
 ) -> ParsedReceiptItem {
+    let description = crate::extraction::normalize_piece_count_ocr(description);
     // Expansion is a **fallback, never an override**. Classify the printed text
     // first and keep that answer whenever it produces one; only reach for the
     // expanded reading when the shorthand classified to nothing.
@@ -754,6 +755,25 @@ mod tests {
     use crate::extraction::is_coupon_reference_line;
     use crate::money::Money;
     use crate::rules::default_parser_rule_layers;
+
+    #[test]
+    fn piece_count_repair_preserves_ocr_evidence_and_user_edits() {
+        let raw = "EXAMPLE SHOP\nExample l-pc Wine Glass 1.47\nTOTAL 1.47";
+        let parsed = parse_text(raw);
+        assert_eq!(parsed.items.len(), 1);
+        assert_eq!(parsed.items[0].description, "Example 1-pc Wine Glass");
+        assert_eq!(parsed.items[0].price, Money::from_cents(147));
+        assert_eq!(parsed.items[0].quantity, 1);
+        assert_eq!(parsed.raw_text, raw);
+
+        let typed = super::classified_item(
+            "Example l-pc Wine Glass".into(),
+            Money::from_cents(147),
+            1,
+            &default_parser_rule_layers(),
+        );
+        assert_eq!(typed.description, "Example l-pc Wine Glass");
+    }
 
     #[test]
     fn sale_and_card_bleed_through_require_corroborated_literal_prices() {
