@@ -63,3 +63,9 @@ aliases = ["PHARMASAVE"]
 [[families]]
 canonical = "LONGO'S"
 aliases = ["LONGOS"]
+
+# The Japan Living slogan can be more legible than the logo; the branch
+# header still supplies the explicit brand.
+[[families]]
+canonical = "OOMOMO"
+aliases = ["OOMOMO"]

@@ -11,6 +11,9 @@ use super::types::*;
 use crate::money::Money;
 use std::collections::HashSet;
 pub fn extract_text_items(lines: &[String], summary_amounts: &HashSet<Money>) -> ExtractionOutcome {
+    if let Some(table) = super::code_price_table::extract(lines) {
+        return table;
+    }
     let mut deferred = Vec::new();
     let normalized_lines: Vec<String> = lines
         .iter()
