@@ -757,6 +757,41 @@ mod tests {
     use crate::rules::default_parser_rule_layers;
 
     #[test]
+    fn code_price_table_classifies_names_and_reads_currency_marked_tax() {
+        let raw = concat!(
+            "JAPAN LIYING\nOomomo Example\nITEM CODE PRICE QTY TOTAL PRICE\n",
+            "1234567890123 2.50 250\nHAND TOWEL COTTON\n",
+            "1234567890124 2.00 2.00\nMARUKAWA LEMON GUM\n",
+            "SUB TOTAL $: 4.50\nTOTAL $: 5.09\nHST $ 0 59"
+        );
+        let parsed = super::parse_receipt(
+            &crate::ocr_document::OcrDocument::from_text(raw),
+            &default_parser_rule_layers(),
+            "receipt.jpg",
+            &[],
+            &crate::rules::default_merchant_families(),
+            2026,
+        );
+        assert_eq!(parsed.merchant, "OOMOMO");
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            parsed.items[0].account.as_deref(),
+            Some("Expenses:Home:HouseholdSupply")
+        );
+        assert_eq!(
+            parsed.items[1].account.as_deref(),
+            Some("Expenses:Food:Grocery:Snacks:Mint")
+        );
+        assert_eq!(parsed.tax, Some(Money::from_cents(59)));
+        assert_eq!(parsed.total, Money::from_cents(509));
+        assert!(parsed
+            .warnings
+            .iter()
+            .all(|w| w.kind == ReceiptWarningKind::PriceAutoCorrected));
+        assert_eq!(parsed.warnings.len(), 1);
+    }
+
+    #[test]
     fn piece_count_repair_preserves_ocr_evidence_and_user_edits() {
         let raw = "EXAMPLE SHOP\nExample l-pc Wine Glass 1.47\nTOTAL 1.47";
         let parsed = parse_text(raw);

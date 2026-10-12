@@ -1476,3 +1476,17 @@ keywords = ["100% DELUXE - JUMBO SHRIM"]
 tags = ["grocery/frozen/dumpling"]
 priority = 0
 exact_only = true
+
+[[rules]]
+id = "household_cleaning_tools"
+keywords = ["BROOM", "DUSTPAN", "WINDOW WIPER", "WINDOWWIPER", "HAND TOWEL", "SOUP BOWL"]
+tags = ["household/supply"]
+priority = 1
+exact_only = false
+
+[[rules]]
+id = "marukawa_lemon_gum"
+keywords = ["MARUKAWA"]
+tags = ["grocery/snacks/mint"]
+priority = 1
+exact_only = false

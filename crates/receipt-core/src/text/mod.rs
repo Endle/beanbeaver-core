@@ -1,4 +1,5 @@
 //! Text-line extraction, with separate row, quantity, pairing and reconciliation stages.
+mod code_price_table;
 mod engine;
 mod pairing;
 mod patterns;

@@ -1176,3 +1176,20 @@ fn a_credit_card_refund_row_is_a_card_tender() {
     // The terminal slip's header still is not.
     assert_eq!(classify_tender_line("CREDIT CARD SALE"), None);
 }
+
+#[test]
+fn currency_marked_tax_accepts_a_spaced_decimal() {
+    for input in ["HST $ 1 30", "Subtotal 10.00\nHST $ 1 30\nTOTAL 11.30"] {
+        let lines = input.lines().map(str::to_string).collect::<Vec<_>>();
+        assert_eq!(extract_tax(&lines), Some(130));
+    }
+    for input in [
+        "HST 123456789 RT0001",
+        "HST 13 00",
+        "HST $ 1 3",
+        "HST $ 1 300",
+        "HST $ 1 30 extra",
+    ] {
+        assert_eq!(extract_tax(&[input.to_string()]), None, "{input}");
+    }
+}

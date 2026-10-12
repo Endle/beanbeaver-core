@@ -655,12 +655,31 @@ pub(super) fn sum_summary_block_tax_rows(lines: &[String]) -> Option<i64> {
         if !re_tax_tokens().is_match(&line_upper) {
             continue;
         }
-        if let Some(amount) = extract_price_from_line(line) {
+        if let Some(amount) = tax_price(line) {
             amounts.push(amount);
         }
     }
     (!amounts.is_empty()).then(|| amounts.iter().sum())
 }
+fn tax_price(line: &str) -> Option<i64> {
+    extract_price_from_line(line).or_else(|| {
+        // An explicit tax label and currency marker delimit the amount. OCR
+        // may leave whitespace where the decimal printed; do not extend this
+        // to registration numbers, rates, or arbitrary integer tax tokens.
+        static RE: OnceLock<Regex> = OnceLock::new();
+        let captures = RE
+            .get_or_init(|| {
+                Regex::new(r"(?i)^\s*(?:HST|GST|PST|QST|TAX)\s*\$\s*(\d+)\s+(\d{2})\s*$").unwrap()
+            })
+            .captures(line)?;
+        captures[1]
+            .parse::<i64>()
+            .ok()?
+            .checked_mul(100)?
+            .checked_add(captures[2].parse().ok()?)
+    })
+}
+
 pub fn extract_tax(lines: &[String]) -> Option<i64> {
     // Falls through to the row scan below when the receipt has no subtotal label
     // or prints no tax between it and the total — that scan also reaches amounts
@@ -690,7 +709,7 @@ pub fn extract_tax(lines: &[String]) -> Option<i64> {
         }
 
         if has_tax_keyword {
-            if let Some(amount) = extract_price_from_line(&lines[idx]) {
+            if let Some(amount) = tax_price(&lines[idx]) {
                 return Some(amount);
             }
 
