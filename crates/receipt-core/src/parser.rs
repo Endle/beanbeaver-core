@@ -757,6 +757,30 @@ mod tests {
     use crate::rules::default_parser_rule_layers;
 
     #[test]
+    fn names_above_sku_quantity_price_rows_survive_missing_ocr_quantities() {
+        for rows in [
+            "[S] Small bowl 110x60mm\nAB123 2 4.00 8.00H\n[S] Large bowl 140x70mm\nCD456 1 6.00 6.00H",
+            "[S] Small bowl 110x60mm\nAB123 4.00 8.00H\n[S] Large bowl 140x70mm\nCD456 6.00 6.00H",
+        ] {
+            let raw = format!(
+                "EXAMPLE SHOP\nItem Qty Price Amount\n{rows}\nSubtotal: $14.00\nHST: $1.82\nTotal: $15.82"
+            );
+            let parsed = parse_text(&raw);
+            assert_eq!(parsed.items.len(), 2);
+            assert_eq!(parsed.items[0].description, "[S] Small bowl 110x60mm");
+            assert_eq!(parsed.items[0].quantity, 2);
+            assert_eq!(parsed.items[0].price, Money::from_cents(800));
+            assert_eq!(parsed.items[1].description, "[S] Large bowl 140x70mm");
+            assert_eq!(parsed.items[1].quantity, 1);
+            assert_eq!(parsed.items[1].price, Money::from_cents(600));
+            assert_eq!(parsed.subtotal, Some(Money::from_cents(1400)));
+            assert_eq!(parsed.tax, Some(Money::from_cents(182)));
+            assert_eq!(parsed.total, Money::from_cents(1582));
+            assert_eq!(parsed.raw_text, raw);
+        }
+    }
+
+    #[test]
     fn code_price_table_classifies_names_and_reads_currency_marked_tax() {
         let raw = concat!(
             "JAPAN LIYING\nOomomo Example\nITEM CODE PRICE QTY TOTAL PRICE\n",
