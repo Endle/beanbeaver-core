@@ -668,6 +668,14 @@ priority = 1
 exact_only = true
 
 [[rules]]
+id = "tableware_bowls"
+# Keep the size on rice bowls: the bare phrase can describe prepared food.
+keywords = ["RICE BOWL 115X63MM", "TAYO BOWL"]
+tags = ["household/supply"]
+priority = 1
+exact_only = true
+
+[[rules]]
 id = "kantan_drain_cleaner"
 keywords = ["KANTAN SENJOMAR"]
 tags = ["household/supply"]

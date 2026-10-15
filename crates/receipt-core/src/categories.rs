@@ -1402,6 +1402,12 @@ mod tests {
             assert_eq!(key(glass).as_deref(), Some("household/supply"));
         }
         assert_eq!(key("RED WINE").as_deref(), Some("alcohol/beverage"));
+        for name in ["[S] Rice bowl 115x63mm", "[S] 40 Tayo bowl 140x67mm"] {
+            assert_eq!(key(name).as_deref(), Some("household/supply"), "{name}");
+        }
+        for food in ["RICE", "CHICKEN RICE BOWL"] {
+            assert_ne!(key(food).as_deref(), Some("household/supply"), "{food}");
+        }
         assert_eq!(
             key("Kobayashi Kantan Senjomar").as_deref(),
             Some("household/supply")
