@@ -1,6 +1,38 @@
 use regex::Regex;
 use std::sync::OnceLock;
 
+/// A damaged quantity/rate annotation with no reliable quantity or product name.
+/// It must neither claim another row's price nor become a product itself.
+pub(crate) fn is_incomplete_quantity_ocr(text: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^\s*(?:[@06e€©]|1[06])\s*\$\s*\d+(?:[.,]\s*\d{0,2})?\s*$").unwrap()
+    })
+    .is_match(text)
+}
+
+/// Read OCR substitutions only inside a complete quantity/rate expression.
+/// Product names and standalone prices are left alone. The literal dollar
+/// sign and the rate's two decimal places keep a numeric SKU out of this path.
+pub(crate) fn normalize_quantity_ocr(text: &str) -> String {
+    static COUNT: OnceLock<Regex> = OnceLock::new();
+    let count = COUNT.get_or_init(|| {
+        Regex::new(
+            r"^\s*(\d)(?:\s*[e€©]|\s+[06])\s*\$\s*(\d+\.\d{2})(\s+(?:\$?\d+\.\d{2})[A-Za-z]*\s*)?$",
+        )
+        .unwrap()
+    });
+    if let Some(c) = count.captures(text) {
+        return format!(
+            "{} @ ${}{}",
+            &c[1],
+            &c[2],
+            c.get(3).map_or("", |m| m.as_str())
+        );
+    }
+    text.to_string()
+}
+
 /// What a parser warning *is*, as a value rather than as English prose.
 ///
 /// The parser's job is to report every finding honestly; deciding whether a
