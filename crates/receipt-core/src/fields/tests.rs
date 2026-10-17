@@ -3,6 +3,84 @@ use super::dates::*;
 use super::prices::*;
 use super::tenders::*;
 
+fn faint_total_card_purchase() -> Vec<String> {
+    [
+        "TOTAL AFTER TAX",
+        "Credit Card",
+        "TRANSACTION RECORD",
+        "Card Type MASTERCARD",
+        "Card Entry CHIP",
+        "Trans Type PURCHASE",
+        "Amount $42.37",
+        "Auth # ABC123",
+        "Reference # 123456",
+        "APPROVED",
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
+#[test]
+fn unreadable_total_uses_a_single_approved_purchase_amount() {
+    let lines = faint_total_card_purchase();
+    assert_eq!(extract_total(&lines), 4237);
+    let tenders = extract_tenders(&lines);
+    assert_eq!(tenders.len(), 1);
+    assert_eq!(tenders[0].amount_cents, 4237);
+    assert_eq!(extract_subtotal(&lines), None);
+    assert_eq!(extract_tax(&lines), None);
+    // The colon is optional on the terminal's own label.
+    let mut colon = lines.clone();
+    colon[6] = "Amount: $42.37".into();
+    assert_eq!(extract_total(&colon), 4237);
+}
+
+#[test]
+fn terminal_fallback_requires_an_unreadable_total_and_approved_purchase() {
+    for (i, replacement) in [
+        (0, "TOTAL 0.00"),
+        (0, "ITEM COUNT 42"),
+        (5, "Trans Type REFUND"),
+        (6, "Amount Due $42.37"),
+        (6, "Amount $42.3"),
+        (9, "DECLINED"),
+        (9, "NOT APPROVED"),
+    ] {
+        let mut lines = faint_total_card_purchase();
+        lines[i] = replacement.into();
+        assert_eq!(extract_total(&lines), 0, "{replacement}");
+    }
+    let mut no_card = faint_total_card_purchase();
+    no_card[1] = "TRANSACTION".into();
+    no_card[3] = "CHIP".into();
+    assert_eq!(extract_total(&no_card), 0);
+    let mut readable = faint_total_card_purchase();
+    readable[0] = "TOTAL 52.37".into();
+    assert_eq!(extract_total(&readable), 5237);
+}
+
+#[test]
+fn terminal_fallback_never_promotes_a_partial_or_ambiguous_payment() {
+    for other in [
+        "Gift Card 10.00",
+        "Gift Card",
+        "Cash 10.00",
+        "Store Credit",
+        "Cash Back 5.00",
+        "PARTIAL APPROVAL",
+        "SPLIT PAYMENT",
+        "VISA 10.00",
+        "Amount 10.00",
+    ] {
+        let mut lines = faint_total_card_purchase();
+        lines.insert(1, other.into());
+        assert_eq!(approved_purchase_total(&lines), None, "{other}");
+    }
+    let mut two = faint_total_card_purchase();
+    two.extend(faint_total_card_purchase());
+    assert_eq!(approved_purchase_total(&two), None);
+}
+
 #[test]
 fn tax_equal_to_the_subtotal_is_rederived() {
     // Pharmasave: the summary column drifted up a row, so HST claimed the

@@ -3,6 +3,89 @@ use super::prices::*;
 use regex::Regex;
 use std::sync::OnceLock;
 
+/// A payment terminal's labelled amount, with or without the printed colon.
+/// Anchoring the whole row excludes prose, balances, tips and amount-due labels.
+pub(super) fn authorization_amount(line: &str) -> Option<i64> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let caps = RE
+        .get_or_init(|| {
+            Regex::new(r"(?i)^\s*AMOUNT\s*:?\s*\$?\s*(\d+\.\d{2})\s*(?:CAD)?\s*$").unwrap()
+        })
+        .captures(line)?;
+    extract_price_from_line(&caps[1])
+}
+
+/// Recover an unreadable receipt total from a single approved card purchase.
+/// The card, purchase and approval context must surround the amount. Any
+/// second payment instrument (even with an unreadable amount), refund or cash
+/// back leaves the total unknown rather than mistaking one payment for it.
+pub(super) fn approved_purchase_total(lines: &[String]) -> Option<i64> {
+    static TOTAL: OnceLock<Regex> = OnceLock::new();
+    let total_label = TOTAL.get_or_init(|| {
+        Regex::new(r"(?i)^\s*(?:GRAND\s+)?TOTAL(?:\s+AFTER\s+TAX)?\s*:?\s*$").unwrap()
+    });
+    // A readable zero is a real value, and a terminal-only fragment does not
+    // establish that its charge covers the whole receipt.
+    if !lines.iter().any(|line| total_label.is_match(line)) {
+        return None;
+    }
+    let upper: Vec<_> = lines.iter().map(|line| line.to_ascii_uppercase()).collect();
+    if upper.iter().any(|line| {
+        matches!(
+            classify_tender_line(line),
+            Some("cash" | "gift_card" | "store_credit")
+        ) || line.contains("REFUND") && !line.contains("NO REFUND")
+            || line.contains("CASH BACK")
+            || line.contains("PARTIAL")
+            || line.contains("SPLIT PAYMENT")
+            || line.contains("DECLINED")
+            || line.contains("NOT APPROVED")
+    }) {
+        return None;
+    }
+    // Even an unapproved second amount makes a split/partial slip ambiguous.
+    if lines
+        .iter()
+        .filter(|line| authorization_amount(line).is_some())
+        .count()
+        != 1
+    {
+        return None;
+    }
+    let mut amounts = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let Some(amount) = authorization_amount(line).filter(|n| *n > 0) else {
+            continue;
+        };
+        // Same bounded authorization block as tender_from_authorization_block.
+        const WINDOW: usize = 12;
+        let before = &upper[i.saturating_sub(WINDOW)..i];
+        let after = &upper[i + 1..(i + 1 + WINDOW).min(lines.len())];
+        if before.iter().any(|s| s.trim_end().ends_with("PURCHASE"))
+            && before
+                .iter()
+                .any(|s| classify_tender_line(s) == Some("card"))
+            && after.iter().any(|s| {
+                s.trim() == "APPROVED"
+                    || s.contains("CARDHOLDER APPROVED")
+                    || s.contains("CARDROLDER APPROVED")
+            })
+        {
+            amounts.push(amount);
+        }
+    }
+    match amounts.as_slice() {
+        [amount] => {
+            let conflicting_card = upper.iter().enumerate().any(|(i, line)| {
+                classify_tender_line(line) == Some("card")
+                    && tender_amount_for_line(lines, i).is_some_and(|other| other != *amount)
+            });
+            (!conflicting_card).then_some(*amount)
+        }
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TenderLine {
     pub source_line_index: usize,
@@ -126,7 +209,7 @@ fn tender_from_authorization_block(lines: &[String]) -> Option<TenderLine> {
             if row_upper.contains("TOTAL") {
                 break;
             }
-            if !row_upper.contains("AMOUNT:") {
+            if authorization_amount(row).is_none() && !row_upper.contains("AMOUNT:") {
                 continue;
             }
             // An AMOUNT: row with no readable amount ends the search rather

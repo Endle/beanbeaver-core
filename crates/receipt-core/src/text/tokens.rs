@@ -43,8 +43,9 @@ pub(crate) fn normalize_decimal_spacing(text: &str) -> String {
             i += 3;
             continue;
         }
-        out.push(bytes[i] as char);
-        i += 1;
+        let ch = text[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
     }
     out
 }

@@ -17,7 +17,15 @@ pub fn extract_text_items(lines: &[String], summary_amounts: &HashSet<Money>) ->
     let mut deferred = Vec::new();
     let normalized_lines: Vec<String> = lines
         .iter()
-        .map(|line| normalize_decimal_spacing(line))
+        .map(|line| {
+            if crate::common::is_incomplete_quantity_ocr(line) {
+                // Keep source-line indices stable for warnings and row claims.
+                String::new()
+            } else {
+                crate::common::normalize_quantity_ocr(line)
+            }
+        })
+        .map(|line| normalize_decimal_spacing(&line))
         .map(|line| normalize_tax_code_ocr(&line))
         .map(|line| strip_trailing_sale_marker(&line))
         .collect();

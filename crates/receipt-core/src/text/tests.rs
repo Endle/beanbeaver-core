@@ -1094,6 +1094,33 @@ fn comma_decimal_normalization_leaves_non_price_commas_untouched() {
     assert_eq!(normalize_decimal_spacing("Anytown, ON"), "Anytown, ON");
     // Negative: three fraction digits are not a clean 2-decimal price.
     assert_eq!(normalize_decimal_spacing("0,999"), "0,999");
+    assert_eq!(
+        normalize_decimal_spacing("Crème 奶茶 € 2,49"),
+        "Crème 奶茶 € 2.49"
+    );
+}
+
+#[test]
+fn damaged_quantity_rows_do_not_create_extra_products() {
+    let lines = [
+        "Noodles 3.49",
+        "1 €$3.49",
+        "16$3.49",
+        "0$3.49",
+        "Milk 4.99",
+        "1 6 $4.99",
+        "10$4.99",
+        "@ $4.99",
+        "10$2",
+    ]
+    .map(String::from);
+    let parsed = extract_text_items(&lines, &HashSet::new());
+    let items: Vec<_> = parsed
+        .items
+        .iter()
+        .map(|i| (i.description.as_str(), i.price.cents()))
+        .collect();
+    assert_eq!(items, [("Noodles", 349), ("Milk", 499)]);
 }
 
 #[test]

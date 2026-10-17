@@ -213,6 +213,7 @@ fn amount_claim(text: &str) -> AmountClaim {
         || is_department_header_label(text)
         || is_priced_in_savings_label(text)
         || is_annotation_continuation_label(text)
+        || crate::common::is_incomplete_quantity_ocr(text)
     {
         return AmountClaim::Never;
     }

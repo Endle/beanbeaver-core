@@ -8,7 +8,12 @@ use std::sync::OnceLock;
 /// `reconcile_total_with_charge`).
 pub fn extract_total(lines: &[String]) -> i64 {
     let raw = repair_leading_currency_digit(lines, extract_total_raw(lines));
-    reconcile_total_with_charge(lines, raw)
+    let reconciled = reconcile_total_with_charge(lines, raw);
+    if reconciled == 0 {
+        approved_purchase_total(lines).unwrap_or(reconciled)
+    } else {
+        reconciled
+    }
 }
 
 /// A `$` read as a `5`: Costco's "TOTAL $173.15" comes back as one detection
