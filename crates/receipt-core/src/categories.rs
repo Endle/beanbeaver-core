@@ -1233,6 +1233,37 @@ mod tests {
     }
 
     #[test]
+    fn truncated_seafood_pork_dumpling_alias_requires_the_full_product() {
+        let layers = default_parser_rule_layers();
+        let key = |description: &str| classify_item_key(description, &layers.category_rules, None);
+        for description in [
+            "Jin Tian Seafood & Pork Dum",
+            "Jin Tlan Seafood & Fork Dum",
+            "Jin Tian Seafood & Fork Dum",
+            "Jin Tlan Seafood & Pork Dum",
+        ] {
+            assert_eq!(
+                key(description).as_deref(),
+                Some("grocery/frozen/dumpling"),
+                "{description}"
+            );
+        }
+        for description in [
+            "Jin Tian Seafood Balls",
+            "Jin Tian Pork Balls",
+            "Seafood & Pork",
+            "Other Brand Seafood & Fork Dum",
+            "Fork 4PC Set",
+        ] {
+            assert_ne!(
+                key(description).as_deref(),
+                Some("grocery/frozen/dumpling"),
+                "{description}"
+            );
+        }
+    }
+
+    #[test]
     fn truncated_wonton_alias_requires_brand_and_product_prefix() {
         let layers = default_parser_rule_layers();
         let key = |description: &str| classify_item_key(description, &layers.category_rules, None);

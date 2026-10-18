@@ -148,13 +148,15 @@ pub(crate) fn classify_tender_line(line_upper: &str) -> Option<&'static str> {
     }
     None
 }
-/// Two card labels the substring tests above never see, each the whole row
+/// Card labels the substring tests above never see, each the whole row
 /// (optionally with its amount) and nothing else:
 ///
 /// - T&T and Sunny Foodmart print the Mastercard tender as a bare `Master`.
 ///   17 corpus receipts carry the line; none produced a tender.
 /// - Foody Mart prints `Credit Card` (44 receipts; likewise none), and
 ///   `Credit Card Refund` on a refund, where the amount is money returned.
+/// - The exact OCR spelling `Gredit Cand` needs a complete same-row amount.
+///   No fuzzy matching or amount from an adjacent row is allowed for it.
 ///
 /// Anchored at both ends rather than `contains`, because a row that goes on
 /// to say more is something else: `MASTER CHEF SAUCE 3.99` is a product, and
@@ -163,7 +165,7 @@ pub(crate) fn classify_tender_line(line_upper: &str) -> Option<&'static str> {
 pub(super) fn re_bare_card_label() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^\s*(?:MASTER|CREDIT\s+CARD\.?(?:\s+REFUND)?)(?:\s*\$?\s*[\d.,]+)?\s*$")
+        Regex::new(r"^\s*(?:(?:MASTER|CREDIT\s+CARD\.?(?:\s+REFUND)?)(?:\s*\$?\s*[\d.,]+)?|GREDIT\s+CAND\s+\$?\s*\d+\.\d{2})\s*$")
             .unwrap()
     })
 }
@@ -318,8 +320,40 @@ pub fn extract_tenders(lines: &[String]) -> Vec<TenderLine> {
     if tenders.is_empty() {
         tenders.extend(tender_from_authorization_block(lines));
     }
+    if tenders.is_empty() {
+        tenders.extend(tender_from_sale_header(lines));
+    }
 
     tenders
+}
+
+/// A sale header can echo a payment already itemized elsewhere. Use it only
+/// as a last resort, and only when one header carries its own currency amount.
+/// Amount-less headers, multiple copies, and malformed amounts stay unresolved.
+fn tender_from_sale_header(lines: &[String]) -> Option<TenderLine> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE
+        .get_or_init(|| Regex::new(r"(?i)^\s*CREDIT\s+CARD\s+SALE\s+\$(\d+\.\d{2})\s*$").unwrap());
+    let mut candidates = lines.iter().enumerate().filter(|(_, line)| {
+        let mut words = line.split_whitespace();
+        ["CREDIT", "CARD", "SALE"].iter().all(|expected| {
+            words
+                .next()
+                .is_some_and(|word| word.eq_ignore_ascii_case(expected))
+        })
+    });
+    let (idx, line) = candidates.next()?;
+    if candidates.next().is_some() {
+        return None;
+    }
+    let caps = re.captures(line)?;
+    let amount_cents = extract_price_from_line(&caps[1]).filter(|amount| *amount > 0)?;
+    Some(TenderLine {
+        source_line_index: idx,
+        raw_label: trim_tender_label(line),
+        amount_cents,
+        kind: "card",
+    })
 }
 
 /// Recover a single card amount whose currency token absorbed trailing numeric

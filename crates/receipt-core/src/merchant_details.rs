@@ -92,7 +92,7 @@ fn phone_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?:^|[^0-9])((?:\+?1[ .-]?)?(?:\(\s*[2-9][0-9]{2}\s*\)|[2-9][0-9]{2})[ .-]?[2-9][0-9]{2}[ .-]?[0-9]{4})\b",
+            r"(?:^|[^0-9])((?:\+?1[ .-]?)?(?:\(\s*[2-9][0-9]{2}\s*\)|[2-9][0-9]{2})[ .-]?[2-9][0-9]{2}[ .-]?[0-9]{4})(?:\b|(?i:(?:HST|GST)#\d{9}(?:RT\d{4})?\b))",
         )
         .expect("valid phone regex")
     })
@@ -166,7 +166,7 @@ fn street_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)\b\d+[A-Z-]*\s+(?:(?:HWY|HIGHWAY)\s+\d+[A-Z-]*\b|(?:[A-Z0-9.'-]+\s+){0,8}(?:ST(?:REET)?|RD|ROAD|AVE(?:NUE)?|BLVD|BOULEVARD|DR(?:IVE)?|LANE|LN|COURT|CT|CIRCLE|CIR|PKWY|PARKWAY)\b\.?)(?:\s+(?:EAST|WEST|NORTH|SOUTH|E|W|N|S)\b)?",
+            r"(?i)\b(?:UNIT\s+)?\d+[A-Z-]*\s+(?:(?:HWY|HIGHWAY)\s+(?:#\s*)?\d+[A-Z-]*\b|(?:[A-Z0-9.'-]+\s+){0,8}(?:ST(?:REET)?|RD|ROAD|AVE(?:NUE)?|BLVD|BOULEVARD|DR(?:IVE)?|LANE|LN|COURT|CT|CIRCLE|CIR|PKWY|PARKWAY)\b\.?)(?:\s+(?:EAST|WEST|NORTH|SOUTH|E|W|N|S)\b)?",
         )
         .expect("valid street-address regex")
     })
@@ -268,9 +268,22 @@ fn city_region_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)^(.+?)(?:,\s*|\s+)(ALBERTA|BRITISH COLUMBIA|MANITOBA|NEW BRUNSWICK|NEWFOUNDLAND(?: AND LABRADOR)?|NOVA SCOTIA|ONTARIO|PRINCE EDWARD ISLAND|QUEBEC|SASKATCHEWAN|(?-i:[A-Z]{2})\b)(?:\s*[, -]\s*.*)?$",
+            r"(?i)^(.+?)(?:,\s*|\s+)(ALBERTA|BRITISH COLUMBIA|MANITOBA|NEW BRUNSWICK|NEWFOUNDLAND(?: AND LABRADOR)?|NOVA SCOTIA|ONTARIO|PRINCE EDWARD ISLAND|QUEBEC|SASKATCHEWAN|(?-i:[A-Z]{2})\b)\.?(?:\s*[, -]\s*.*)?$",
         )
         .expect("valid city/region regex")
+    })
+}
+
+fn comma_canadian_region_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        // Case alone is not meaningful after a city comma. Restrict this
+        // fallback to explicit Canadian region codes, so lowercase prose
+        // such as "light is on" does not become a city and province.
+        Regex::new(
+            r"(?i)^(.+?),\s*(AB|BC|MB|NB|NL|NS|NT|NU|ON|PE|QC|SK|YT)\b\.?(?:\s*[, -]\s*.*)?$",
+        )
+        .expect("valid comma-delimited Canadian region regex")
     })
 }
 
@@ -285,7 +298,9 @@ fn remove_contact_metadata(value: &str) -> String {
     static TAX_ID: OnceLock<Regex> = OnceLock::new();
     TAX_ID
         .get_or_init(|| {
-            Regex::new(r"(?i)\b(?:HST|GST)\s*#\s*\d{9}(?:RT\d{4})?\b")
+            // An S read as 5 is removable only with the complete numeric
+            // registration and RT suffix; this never repairs address text.
+            Regex::new(r"(?i)\b(?:(?:HST|GST)\s*#\s*\d{9}(?:RT\d{4})?|H5T\s*#\s*\d{9}RT\d{4})\b")
                 .expect("valid tax-registration regex")
         })
         .replace_all(&without_phone, " ")
@@ -293,15 +308,31 @@ fn remove_contact_metadata(value: &str) -> String {
 }
 
 fn city_region_in(value: &str) -> (Option<String>, Option<String>) {
+    // Nearby product rows are not address context, even when their words
+    // resemble a city and a two-letter region. Apply the street parser's
+    // price guard before contact cleanup can remove a product barcode.
+    if trailing_price_re().is_match(value) {
+        return (None, None);
+    }
     let without_phone = remove_contact_metadata(value);
     let cleaned = without_phone
         .trim_matches(|c: char| c.is_ascii_whitespace() || c == ',' || c == '-')
         .trim();
-    if cleaned.is_empty() {
+    // OCR can split SHOPPING into tokens that resemble a two-letter region.
+    // Reject the whole greeting before attempting city/region extraction.
+    if cleaned.is_empty()
+        || cleaned
+            .split_whitespace()
+            .collect::<String>()
+            .eq_ignore_ascii_case("HAPPYSHOPPINGDAY")
+    {
         return (None, None);
     }
 
-    if let Some(captures) = city_region_re().captures(cleaned) {
+    if let Some(captures) = city_region_re()
+        .captures(cleaned)
+        .or_else(|| comma_canadian_region_re().captures(cleaned))
+    {
         let city = captures.get(1).and_then(|m| clean_component(m.as_str()));
         let region = captures.get(2).and_then(|m| clean_component(m.as_str()));
         let city_is_plausible = city
@@ -322,8 +353,7 @@ fn city_region_in(value: &str) -> (Option<String>, Option<String>) {
             .chars()
             .any(|ch| matches!(ch, '#' | '*' | '/' | '\\'))
         && !cleaned.contains(',')
-        && !cleaned.to_ascii_uppercase().contains("WWW.")
-        && !cleaned.eq_ignore_ascii_case("HAPPY SHOPPING DAY");
+        && !cleaned.to_ascii_uppercase().contains("WWW.");
     (plausible.then(|| cleaned.to_string()), None)
 }
 
@@ -429,6 +459,12 @@ pub fn extract_merchant_details(lines: &[String]) -> MerchantDetails {
                 .captures(line)
                 .and_then(|captures| captures.get(1))
             {
+                // A hash inside the recognized address labels a highway or
+                // unit, not a branch. A separate trailing store hash remains
+                // eligible because it lies outside the street's range.
+                if street_in(line).is_some_and(|(_, range)| range.contains(&value.start())) {
+                    continue;
+                }
                 out.store_number = Some(value.as_str().to_string());
                 add_raw(&mut out.raw_lines, line);
                 break;
@@ -802,6 +838,130 @@ mod tests {
         assert_eq!(found.region.as_deref(), Some("Ontario"));
         assert_eq!(found.postal_code.as_deref(), Some("L3R 1N3"));
         assert_eq!(found.phone_number.as_deref(), Some("(905)305-9866"));
+    }
+
+    #[test]
+    fn numbered_highway_accepts_hash_before_route_and_preserves_unit() {
+        for route in ["Highway #8", "HWY # 8", "Highway 8"] {
+            for separator in [" ", "\n"] {
+                let street = format!("456 {route} Unit 12");
+                let found = extract_merchant_details(&lines(&format!(
+                    "EXAMPLE MART\n{street}{separator}Exampleville ON A1A 1A1\nGIFT GC VAR 12345678901 0.00"
+                )));
+                assert_eq!(found.street_address.as_deref(), Some(street.as_str()));
+                assert_eq!(found.city.as_deref(), Some("Exampleville"));
+                assert_eq!(found.region.as_deref(), Some("ON"));
+                assert_eq!(found.postal_code.as_deref(), Some("A1A 1A1"));
+            }
+        }
+        assert_eq!(street_in("456 Highway #8 2.99"), None);
+    }
+
+    #[test]
+    fn numbered_highway_hash_is_not_a_store_number() {
+        let found = extract_merchant_details(&lines(
+            "EXAMPLE MART\n456 Highway #12\nExampleville ON A1A 1A1",
+        ));
+        assert_eq!(found.street_address.as_deref(), Some("456 Highway #12"));
+        assert_eq!(found.store_number, None);
+        let found = extract_merchant_details(&lines("456 Maple Ave #1234"));
+        assert_eq!(found.store_number.as_deref(), Some("1234"));
+    }
+
+    #[test]
+    fn region_abbreviation_accepts_a_trailing_period() {
+        for location in ["Exampleville, ON.", "Exampleville, ON. A1A 1A1"] {
+            let found = extract_merchant_details(&lines(&format!(
+                "456 Maple Ave\n{location}\n(416) 555-0123"
+            )));
+            assert_eq!(found.city.as_deref(), Some("Exampleville"));
+            assert_eq!(found.region.as_deref(), Some("ON"));
+        }
+        assert_eq!(city_region_in("PRODUCT ON. SALE 2.99"), (None, None));
+    }
+
+    #[test]
+    fn comma_delimited_canadian_region_accepts_mixed_case() {
+        for region in ["oN", "on", "bC", "qC"] {
+            let found =
+                extract_merchant_details(&lines(&format!("Exampleville, {region} A1A 1A1")));
+            assert_eq!(found.city.as_deref(), Some("Exampleville"));
+            assert_eq!(found.region.as_deref(), Some(region));
+        }
+        // A bare lowercase word is not enough to reinterpret prose as a region.
+        assert_eq!(city_region_in("light is on").1, None);
+        assert_eq!(city_region_in("PRODUCT, gc").1, None);
+    }
+
+    #[test]
+    fn phone_can_touch_an_explicit_tax_registration_label() {
+        for tax in [
+            "HST#123456789RT0001",
+            "GST#123456789",
+            "hst#123456789RT0001",
+        ] {
+            let found = extract_merchant_details(&lines(&format!("(416)555-0123{tax}")));
+            assert_eq!(found.phone_number.as_deref(), Some("(416)555-0123"));
+        }
+        assert!(phone_in("(416)555-0123HSTUFF").is_none());
+        assert!(phone_in("(416)555-0123HST#123").is_none());
+    }
+
+    #[test]
+    fn confused_tax_label_needs_a_complete_registration_before_city() {
+        let found = extract_merchant_details(&lines(
+            "456 Maple Ave\n(416)555-0123 H5T#123456789RT0001 Exampleville, Ontario A1A 1A1",
+        ));
+        assert_eq!(found.city.as_deref(), Some("Exampleville"));
+        assert_eq!(found.region.as_deref(), Some("Ontario"));
+        for prefix in ["H5T#123", "H5T#123456789", "OTHER#123456789RT0001"] {
+            assert_eq!(
+                city_region_in(&format!("{prefix} Exampleville, Ontario")),
+                (None, None)
+            );
+        }
+    }
+
+    #[test]
+    fn printed_unit_prefix_belongs_to_the_street() {
+        for street in ["Unit 456 Highway 8 East", "UNIT 456 Maple Ave"] {
+            let found = extract_merchant_details(&lines(&format!(
+                "EXAMPLE MART\n{street}\nExampleville ON A1A 1A1"
+            )));
+            assert_eq!(found.street_address.as_deref(), Some(street));
+            assert_eq!(found.city.as_deref(), Some("Exampleville"));
+        }
+        assert_eq!(street_in("UNIT 456 MAPLE AVE 2.99"), None);
+        assert_eq!(street_in("UNIT 456 PRODUCT"), None);
+    }
+
+    #[test]
+    fn split_shopping_greeting_is_not_a_city_or_region() {
+        for greeting in ["HAPPY SHOPPING DAY", "HAPPY SHOPPI NG DAY"] {
+            assert_eq!(city_region_in(greeting), (None, None));
+            let found = extract_merchant_details(&lines(&format!(
+                "EXAMPLE MART\n456 Maple Ave\n{greeting}"
+            )));
+            assert_eq!(found.city, None);
+            assert_eq!(found.region, None);
+        }
+    }
+
+    #[test]
+    fn priced_product_near_address_is_not_a_city_or_region() {
+        for product in ["GIFT GC VAR 12345678901 0.00", "MAPLE ON SALE 2.99"] {
+            assert_eq!(city_region_in(product), (None, None));
+            let found = extract_merchant_details(&lines(&format!(
+                "EXAMPLE MART\n456 Maple Ave Unit A\nExamplevi11e ON A1A 1A1\nHST 123456789\n{product}"
+            )));
+            assert_eq!(found.city, None);
+            assert_eq!(found.region, None);
+            assert_eq!(
+                found.street_address.as_deref(),
+                Some("456 Maple Ave Unit A")
+            );
+            assert_eq!(found.postal_code.as_deref(), Some("A1A 1A1"));
+        }
     }
 
     #[test]
