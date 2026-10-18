@@ -1485,6 +1485,16 @@ tags = ["grocery/frozen/dumpling"]
 priority = 0
 exact_only = true
 
+# The complete brand + product prefix identifies the seafood/pork dumpling
+# when the item column truncates DUMPLING. Keep the observed OCR spellings
+# exact-only; neither the brand nor bare SEAFOOD, FORK, or DUM is sufficient.
+[[rules]]
+id = "jin_tian_seafood_pork_dumpling"
+keywords = ["JIN TIAN SEAFOOD & PORK DUM", "JIN TLAN SEAFOOD & FORK DUM", "JIN TIAN SEAFOOD & FORK DUM", "JIN TLAN SEAFOOD & PORK DUM"]
+tags = ["grocery/frozen/dumpling"]
+priority = 0
+exact_only = true
+
 [[rules]]
 id = "household_cleaning_tools"
 keywords = ["BROOM", "DUSTPAN", "WINDOW WIPER", "WINDOWWIPER", "HAND TOWEL", "SOUP BOWL"]

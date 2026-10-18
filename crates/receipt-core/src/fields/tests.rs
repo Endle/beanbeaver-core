@@ -1033,6 +1033,57 @@ fn a_bare_credit_card_label_is_a_card_tender() {
 }
 
 #[test]
+fn an_exact_ocr_card_alias_requires_its_own_amount() {
+    assert_eq!(classify_tender_line("GREDIT CAND 12.34"), Some("card"));
+    let lines = ["Total 12.34", "Gredit Cand 12.34"].map(String::from);
+    let tenders = extract_tenders(&lines);
+    assert_eq!(tenders.len(), 1);
+    assert_eq!(tenders[0].kind, "card");
+    assert_eq!(tenders[0].amount_cents, 1234);
+    assert!(extract_tenders(&["Gredit Cand".into(), "12.34".into()]).is_empty());
+    for line in [
+        "GREDIT CAND",
+        "GREDIT CAND SALE 12.34",
+        "GREDIT CAND CANDY 2.99",
+        "GREDIT CAND 1234",
+        "GREDIT CAND 1..34",
+        "CREDIT CARD SALE 12.34",
+    ] {
+        assert_eq!(classify_tender_line(line), None, "{line}");
+    }
+}
+
+#[test]
+fn a_single_sale_header_amount_is_a_last_resort_card_tender() {
+    let lines = ["TOTAL $12.34", "CREDIT CARD SALE $12.34", "MASTERCARD 9876"].map(String::from);
+    let tenders = extract_tenders(&lines);
+    assert_eq!(tenders.len(), 1);
+    assert_eq!(tenders[0].kind, "card");
+    assert_eq!(tenders[0].amount_cents, 1234);
+    assert_eq!(tenders[0].source_line_index, 1);
+
+    // A regular tender takes precedence over a terminal's charge echo.
+    let mut with_tender = lines.to_vec();
+    with_tender.push("MASTERCARD $12.34".into());
+    let tenders = extract_tenders(&with_tender);
+    assert_eq!(tenders.len(), 1);
+    assert_eq!(tenders[0].source_line_index, 3);
+
+    for rows in [
+        vec!["CREDIT CARD SALE", "$12.34"],
+        vec!["CREDIT CARD SALE $12.34", "CREDIT CARD SALE $12.34"],
+        vec!["CREDIT CARD SALE $12.34", "CREDIT CARD SALE $5.00"],
+        vec!["CREDIT CARD SALE $12.34", "CREDIT CARD SALE"],
+        vec!["CREDIT CARD SALE $12.34", "CREDIT CARD SALE $5..00"],
+        vec!["CREDIT CARD SALE $0.00"],
+        vec!["CREDIT CARD SALE $1..34"],
+    ] {
+        let lines = rows.into_iter().map(String::from).collect::<Vec<_>>();
+        assert!(extract_tenders(&lines).is_empty(), "{lines:?}");
+    }
+}
+
+#[test]
 fn change_is_the_last_amount_on_a_merged_row() {
     // Costco's customer copy prints the card charge and the change on
     // consecutive rows, and line grouping merges them. Reading the FIRST
