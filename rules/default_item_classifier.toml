@@ -140,6 +140,20 @@ tags = ["grocery/frozen"]
 priority = -200
 exact_only = false
 
+# Foody Mart's BBQ counter (燒臘: char siu, roast duck, sold cooked by weight)
+# prints the bare name "BBQ"; book it like the HOT FOOD counter. Priority 0 so
+# any longer keyword on the line still owns the account: "BBQ Chicken Leg"
+# stays Meat on CHICKEN, "BBQ SAUCE" stays Seasoning. Declared before the meat
+# rule for the same reason as frozen_department_item above: on those lines the
+# meat tag must stay last, which is the label the app shows. Exact-only because
+# three letters fuzz into too much.
+[[rules]]
+id = "bbq_counter"
+keywords = ["BBQ"]
+tags = ["grocery/prepared_meal"]
+priority = 0
+exact_only = true
+
 [[rules]]
 id = "legacy_0000"
 # "MILK CHOCOLATE" (note: the product is chocolate made with milk; distinct from
