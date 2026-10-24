@@ -51,6 +51,20 @@ fn is_summary_anchor_label(text: &str) -> bool {
     .is_match(text)
 }
 
+/// A complete Canadian tax registration is header metadata, not a product
+/// description or a tax amount. Centered registrations can overlap the first
+/// item and otherwise attach to it in the MIDDLE pass. That contaminates the
+/// name with `HST`, so item extraction rejects it and searches another row.
+/// Reserve the whole detection as its own line; merely making it a LEFT label
+/// would still let it claim the first item's price or attract its barcode.
+fn is_tax_registration(text: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)^\s*(?:HST|GST|PST)\s*[:#]?\s*\d{9}(?:\s*RT\d{4})?\s*$").unwrap()
+    })
+    .is_match(text)
+}
+
 /// Decide whether a detection sits in the LEFT (SKU/summary-label) column.
 ///
 /// `x_norm < 0.2` is unambiguously LEFT. In the 0.2-0.3 transition band the
@@ -1186,9 +1200,15 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
 
     // Partition into LEFT / MIDDLE / RIGHT, preserving detection order so the
     // subsequent stable center_y sorts match the Python list semantics.
-    let summary_groups = summary::reconciled_groups(dets);
+    let mut reserved_groups = summary::reconciled_groups(dets);
+    reserved_groups.extend(
+        dets.iter()
+            .enumerate()
+            .filter(|(_, det)| is_tax_registration(&det.text))
+            .map(|(i, _)| vec![i]),
+    );
     let mut reserved = vec![false; dets.len()];
-    for &i in summary_groups.iter().flatten() {
+    for &i in reserved_groups.iter().flatten() {
         reserved[i] = true;
     }
     let mut left: Vec<usize> = Vec::new();
@@ -1306,7 +1326,7 @@ pub fn group_detections_into_lines(dets: &[Detection], image_width: f64) -> Vec<
     }
 
     // Within-line left-to-right, then lines top-to-bottom (both stable).
-    lines.extend(summary_groups);
+    lines.extend(reserved_groups);
     for line in &mut lines {
         line.sort_by(|&a, &b| {
             dets[a]
@@ -1338,6 +1358,51 @@ mod tests {
             min_x,
             bbox: Vec::new(),
         }
+    }
+
+    #[test]
+    fn tax_registration_requires_a_complete_identifier_detection() {
+        for text in ["HST 123456789", "gst # 123456789 RT0001", "PST:123456789"] {
+            assert!(is_tax_registration(text), "{text}");
+        }
+        for text in [
+            "HST",
+            "HST 13%",
+            "HST 1.23",
+            "HST 1234567.89",
+            "HST 123456789 1.23",
+            "HST 12345678",
+            "HST 1234567890",
+            "APPLE GC VAR. HST 123456789",
+            "GST TAX GUIDE 9.99",
+        ] {
+            assert!(!is_tax_registration(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn centered_tax_registration_stays_out_of_the_first_item() {
+        let dets = vec![
+            det_span("DOLLARAMA", 170.0, 140.0, 285.0),
+            det_span("123 Example Road", 270.0, 295.0, 370.0),
+            det_span("Example ON A1A 1A1", 345.0, 345.0, 415.0),
+            det_span("HST 123456789", 395.0, 395.0, 460.0),
+            det_span("APPLE GC VAR.", 50.0, 425.0, 490.0),
+            det_span("00000000000", 570.0, 450.0, 510.0),
+            det_span("0.00", 905.0, 460.0, 510.0),
+            det_span("Variable 10-500", 50.0, 475.0, 540.0),
+            det_span("30.00", 885.0, 505.0, 560.0),
+        ];
+        let lines = rendered(&dets, 1150.0);
+        assert!(lines.contains(&"HST 123456789".to_string()), "{lines:?}");
+        assert!(
+            lines.contains(&"APPLE GC VAR. 00000000000 0.00".to_string()),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&"Variable 10-500 30.00".to_string()),
+            "{lines:?}"
+        );
     }
 
     #[test]
