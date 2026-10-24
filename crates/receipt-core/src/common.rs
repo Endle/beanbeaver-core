@@ -14,20 +14,25 @@ pub(crate) fn is_incomplete_quantity_ocr(text: &str) -> bool {
 /// Read OCR substitutions only inside a complete quantity/rate expression.
 /// Product names and standalone prices are left alone. The literal dollar
 /// sign and the rate's two decimal places keep a numeric SKU out of this path.
+///
+/// `B` is another reading of the `@`, and the rate may come back with a comma
+/// decimal: Foody Mart's faint `1 @ $1.98` has read `1B$1,98`, and unrepaired
+/// it became the name of the next item, taking that item's price.
 pub(crate) fn normalize_quantity_ocr(text: &str) -> String {
     static COUNT: OnceLock<Regex> = OnceLock::new();
     let count = COUNT.get_or_init(|| {
         Regex::new(
-            r"^\s*(\d)(?:\s*[e€©]|\s+[06])\s*\$\s*(\d+\.\d{2})(\s+(?:\$?\d+\.\d{2})[A-Za-z]*\s*)?$",
+            r"^\s*(\d)(?:\s*[e€©B]|\s+[06])\s*\$\s*(\d+)[.,](\d{2})(\s+(?:\$?\d+\.\d{2})[A-Za-z]*\s*)?$",
         )
         .unwrap()
     });
     if let Some(c) = count.captures(text) {
         return format!(
-            "{} @ ${}{}",
+            "{} @ ${}.{}{}",
             &c[1],
             &c[2],
-            c.get(3).map_or("", |m| m.as_str())
+            &c[3],
+            c.get(4).map_or("", |m| m.as_str())
         );
     }
     text.to_string()

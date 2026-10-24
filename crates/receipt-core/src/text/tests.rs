@@ -1789,3 +1789,57 @@ fn three_char_subtext_tail_is_not_a_name() {
         )]
     );
 }
+
+#[test]
+fn garbled_count_row_amount_goes_to_the_item_whose_count_row_totals_it() {
+    // Foody Mart, faint print: Calpis's `1 @ $1.98` read `1B$1,98`, its own
+    // 1.98 was lost, and the egg's 2.98 was lifted onto that row. Unrepaired,
+    // the row named the egg ("1B$1.98"); repaired but walked backward, the
+    // 2.98 priced Calpis (1 x 1.98 cannot), leaving the egg unpriced.
+    let observed = text_items(
+        &[
+            "Calpis Candy",
+            "Asahi",
+            "(E145K40 100g)@4.99(1/$1.98)",
+            "1B$1,98 2.98",
+            "Lian Preserved Duck Egg",
+            "1 @ $2.98",
+            "Roasted Beef Noodle 2.98",
+            "Sub Total 5.96",
+        ],
+        596,
+    );
+    assert_eq!(
+        observed,
+        vec![
+            (
+                "Lian Preserved Duck Egg".to_string(),
+                Money::from_cents(298)
+            ),
+            ("Roasted Beef Noodle".to_string(), Money::from_cents(298)),
+        ]
+    );
+}
+
+#[test]
+fn garbled_weight_rows_are_not_names() {
+    // The decimal point read as a space, and the `@` read as `0`: both rows
+    // are still weight rows, so the name above them keeps the price.
+    let observed = text_items(
+        &[
+            "Baby Yu Choy",
+            "1 19 1b @ $1.88/1b 2.80",
+            "Peru Clementine in Bag",
+            "2.27 1b 0 $1.99/1b 4.52",
+            "Sub Total 7.32",
+        ],
+        732,
+    );
+    assert_eq!(
+        observed,
+        vec![
+            ("Baby Yu Choy".to_string(), Money::from_cents(280)),
+            ("Peru Clementine in Bag".to_string(), Money::from_cents(452)),
+        ]
+    );
+}
