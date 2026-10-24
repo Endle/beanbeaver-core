@@ -1104,6 +1104,29 @@ mod tests {
             crate::categories::classify_item("MILK", &layers.category_rules).tags,
             vec!["grocery", "grocery/dairy", "grocery/dairy/milk"]
         );
+        // Eggs end on their own "egg" tag (the app's label) and still book to
+        // Dairy — including Loblaw's carton line, which never prints EGG.
+        for eggs in ["XL EGGS", "NN MED WHT OUWRP", "LA - Quail Eggs"] {
+            let classified = crate::categories::classify_item(eggs, &layers.category_rules);
+            assert_eq!(
+                classified.tags.last().map(String::as_str),
+                Some("grocery/dairy/egg"),
+                "{eggs}"
+            );
+            assert_eq!(
+                classified.account.as_deref(),
+                Some("Expenses:Food:Grocery:Dairy"),
+                "{eggs}"
+            );
+        }
+        // A product that only mentions egg keeps its own label last.
+        assert_eq!(
+            crate::categories::classify_item("PORTUGUESE EGG TARTS", &layers.category_rules)
+                .tags
+                .last()
+                .map(String::as_str),
+            Some("grocery/bakery")
+        );
         // An unrecognized line classifies to no tags rather than a guess.
         assert!(
             crate::categories::classify_item("ZZQW UNKNOWN ITEM", &layers.category_rules)

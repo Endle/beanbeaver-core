@@ -42,6 +42,12 @@ display = "Dairy"
 path = "grocery/dairy/milk"
 display = "Milk"
 
+# Like milk: a label under dairy with no account of its own, so eggs still
+# book to Dairy. Declared by the tag-only rule `egg_tag`.
+[[tags]]
+path = "grocery/dairy/egg"
+display = "Egg"
+
 [[tags]]
 path = "grocery/drink"
 display = "Drink"
