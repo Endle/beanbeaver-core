@@ -344,7 +344,13 @@ id = "legacy_0010"
 # lower rule index files Asia Food Mart's "100% Jumbo Shrimp Wonton x2" (百分百
 # 大蝦雲吞, under `&& 06-Frozen`) as shrimp. The 12-char compound wins outright.
 # Corpus: asia_food_mart 2026-10-07 $189.88.
-keywords = ["DUMPLING", "GYOZA", "POTSTICKER", "WONTON", "BAO", "XIAOLONGBAO", "SHRIMP WONTON"]
+#
+# "DUNPLING" is an observed OCR spelling, not a word: faint Foody Mart print
+# read the second of two identical "LSK - Fish Dumplings" (林生記鮮蝦魚皮餃) as
+# "Fish Dunplings", and with DUMPLING missed, FISH (seafood/fish) filed it as
+# fish. It has no English neighbour to collide with. Corpus: foody_mart
+# 2026-10-14 $156.72 (recapture).
+keywords = ["DUMPLING", "GYOZA", "POTSTICKER", "WONTON", "BAO", "XIAOLONGBAO", "SHRIMP WONTON", "DUNPLING"]
 tags = ["grocery/frozen/dumpling"]
 priority = 0
 exact_only = false
@@ -555,7 +561,14 @@ id = "legacy_0025"
 # description to the column width, so "PC 100% CRAN" and "COCKTAIL JCE" carry no
 # spelled-out signal at all. Both are listed in `exact_only_keywords` above —
 # they are far too short to survive the fuzzy stage safely.
-keywords = ["ORANGE JUICE", "APPLE JUICE", "GRAPE JUICE", "FRUIT PUNCH", "CRANBERRY", "LEMONADE", "SMOOTHIE", "JUICE", "JCE", "CRAN", "V8", "PC OJ"]
+#
+# "PEACH JUICE" and "MANGO JUICE" are here for the reason ORANGE, APPLE and
+# GRAPE JUICE are: the fruit keyword (legacy_0006) ties JUICE (5) on
+# `keyword_length` at equal priority, and the lower rule index files the drink
+# as Fruit. The compound wins outright. Corpus: foody_mart 2026-10-14 $156.72
+# ("Mr. Kon - Peach Juice", 康師傅水蜜桃飲品 500ml, twice) and no_frills
+# 2026-03-10 $60.90 ("FRT MANGO JUICE").
+keywords = ["ORANGE JUICE", "APPLE JUICE", "GRAPE JUICE", "PEACH JUICE", "MANGO JUICE", "FRUIT PUNCH", "CRANBERRY", "LEMONADE", "SMOOTHIE", "JUICE", "JCE", "CRAN", "V8", "PC OJ"]
 tags = ["grocery/drink/juice"]
 priority = 0
 exact_only = false
@@ -1524,6 +1537,47 @@ exact_only = true
 id = "jin_tian_seafood_pork_dumpling"
 keywords = ["JIN TIAN SEAFOOD & PORK DUM", "JIN TLAN SEAFOOD & FORK DUM", "JIN TIAN SEAFOOD & FORK DUM", "JIN TLAN SEAFOOD & PORK DUM"]
 tags = ["grocery/frozen/dumpling"]
+priority = 0
+exact_only = true
+
+# Jin Tian's jumbo-shrimp line is wonton and dumplings, and Foody Mart's
+# column cuts the product word to its first letter: "Jin Tian - Jumbo Shrimp
+# C" (錦添大蝦韭菜雲吞, chive wonton) and "Jin Tian Jumbo Shrimp D" (錦添大蝦水餃),
+# both under `&& 06-Frozen`. SHRIMP (6) filed both as shrimp. Brand-qualified
+# for the reason the DELUXE rule above gives: a bare "JUMBO SHRIMP C" or "D"
+# is just as likely Cooked or Deveined shrimp. Both observed spellings, with
+# and without the dash. Corpus: foody_mart 2026-10-14 $156.72 (recapture).
+[[rules]]
+id = "jin_tian_jumbo_shrimp_dumpling"
+keywords = ["JIN TIAN - JUMBO SHRIMP", "JIN TIAN JUMBO SHRIMP"]
+tags = ["grocery/frozen/dumpling"]
+priority = 0
+exact_only = true
+
+# Sweet-potato vermicelli truncated by Foody Mart's column to "NX - Dried Sweet
+# Potato V" (農辛紅薯粉條 500g). "SWEET POTATO VERMICELLI" (legacy_0017) has
+# nothing to match once VERMICELLI is cut, so the produce rule's SWEET POTATO
+# (12) filed a dried noodle as Vegetable. The trailing V is the whole signal:
+# without it, dried sweet potato is a snack, so this stays exact-only rather
+# than letting the fuzzy stage reach "Dried Sweet Potato" itself. Corpus:
+# foody_mart 2026-10-14 $156.72, both captures.
+[[rules]]
+id = "sweet_potato_vermicelli_truncated"
+keywords = ["DRIED SWEET POTATO V"]
+tags = ["grocery/staple"]
+priority = 0
+exact_only = true
+
+# Potato crackers, cut by Foody Mart's column to "WJXZ - Okashi Potato Crac"
+# (經典大蒜味馬鈴薯餅乾, garlic potato crackers). POTATO (6, produce) filed them as
+# Vegetable. The keyword stops at CRA because the same line has also read
+# "Potato Crae". It is long enough to beat POTATO on `keyword_length`, and
+# exact-only so its fuzzy neighbourhood stays out of the produce aisle.
+# Corpus: foody_mart 2026-10-14 $156.72, both captures.
+[[rules]]
+id = "potato_cracker_snack"
+keywords = ["POTATO CRA"]
+tags = ["grocery/snacks"]
 priority = 0
 exact_only = true
 
