@@ -167,6 +167,24 @@ tags = ["grocery/dairy"]
 priority = 0
 exact_only = false
 
+# Eggs, labelled as such under dairy. Tag-only, like the milk rule: the path has
+# no account, so this claims nothing and eggs still book to Dairy. The keywords
+# repeat every rule that identifies an egg — EGG/EGGS above, Loblaw's
+# "NN MED WHT OVWRP" carton (`no_name_med_wht_ovwrp_eggs`) and quail eggs
+# (`quail_eggs`), which never print a readable EGG.
+#
+# Declared here, straight after the dairy rule and ahead of every other food
+# rule, because the app labels an item by its LAST tag and tags union in file
+# order. An egg tart, an egg-flavoured pudding or an egg-yolk sachima also hits
+# EGG, but its own bakery or snack rule comes later in the file and stays the
+# label; on a plain egg line nothing follows, so "Egg" is last.
+[[rules]]
+id = "egg_tag"
+keywords = ["EGG", "EGGS", "MED WHT OVWRP", "MED WHT OUWRP", "QUAIL"]
+tags = ["grocery/dairy/egg"]
+priority = 0
+exact_only = false
+
 [[rules]]
 id = "legacy_0001"
 keywords = ["CHICKEN", "CHICKN", "FREE RANGE CHIC", "BEEF", "BEAF", "PORK", "BACON", "SAUSAGE", "HAM", "TURKEY", "LAMB", "STEAK", "GROUND MEAT", "MEATBALL", "SALAMI", "PEPPERONI", "PROSCIUTTO", "ROTISSERIE", "DRUMSTICK", "MEAT", "BEEF BELLY", "BEEF BELLY ROLL", "ANGUS", "DUCK FEET", "DUCK LEG", "DUCK WING", "DUCK BREAST", "DUCK NECK", "BRISKET"]
