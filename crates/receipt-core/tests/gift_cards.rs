@@ -272,3 +272,46 @@ fn correcting_total_recomputes_tender_mismatch_without_changing_payment() {
         parsed.tenders[0].gift_card
     );
 }
+
+#[test]
+fn centered_tax_registration_does_not_rename_a_zero_priced_gift_card() {
+    // Synthetic geometry: a centered registration overlaps the first product.
+    // Keep the zero-price SKU valid so the existing variable-load fold can use it.
+    let rows = [
+        ("DOLLARAMA", 170.0, 140.0, 1000.0, 285.0),
+        ("123 Example Road", 270.0, 295.0, 850.0, 370.0),
+        ("Example ON A1A 1A1", 345.0, 345.0, 800.0, 415.0),
+        ("HST 123456789", 395.0, 395.0, 725.0, 460.0),
+        ("APPLE GC VAR.", 50.0, 425.0, 380.0, 490.0),
+        ("00000000000", 570.0, 450.0, 850.0, 510.0),
+        ("0.00", 905.0, 460.0, 1020.0, 510.0),
+        ("Variable 10-500", 50.0, 475.0, 430.0, 540.0),
+        ("30.00", 885.0, 505.0, 1020.0, 560.0),
+        ("TOTAL $30.00", 50.0, 700.0, 1020.0, 750.0),
+    ];
+    let detections = rows
+        .into_iter()
+        .map(|(text, x0, y0, x1, y1)| RawDetection {
+            text: text.into(),
+            confidence: 0.99,
+            points: vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)],
+        })
+        .collect();
+    let page = RawDetectionPage::try_new(detections, 1150, 1000, 0).unwrap();
+    let parsed = process_receipt(
+        page,
+        "synthetic.jpg",
+        None,
+        Date::new(2026, 10, 1).unwrap(),
+        "Liabilities:Card",
+        "CAD",
+        "Expenses:Tax",
+        None,
+    )
+    .parsed;
+    assert_eq!(parsed.items.len(), 1, "{:?}", parsed.items);
+    assert!(parsed.items[0].description.starts_with("APPLE GC VAR."));
+    assert!(!parsed.items[0].description.contains("HST"));
+    assert_eq!(parsed.items[0].price.to_string(), "30.00");
+    assert_eq!(parsed.total.to_string(), "30.00");
+}
