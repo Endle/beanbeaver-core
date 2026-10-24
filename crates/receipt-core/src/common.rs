@@ -1,12 +1,26 @@
 use regex::Regex;
 use std::sync::OnceLock;
 
+/// Repair decimal punctuation only when the entire OCR box is a money token.
+/// Do this before row claims: a quantity annotation must be able to compare
+/// its extension with `2, 49`, just as it can with `2.49`. Three fractional
+/// digits, prose and bare integers remain untouched.
+pub(crate) fn normalize_amount_ocr(text: &str) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^\s*(\$?-?\d+)[.,]\s*(\d{2})([A-Za-z]?-?)\s*$").unwrap())
+        .replace(text, "$1.$2$3")
+        .into_owned()
+}
+
 /// A damaged quantity/rate annotation with no reliable quantity or product name.
 /// It must neither claim another row's price nor become a product itself.
+/// OCR can fuse a single-unit count with an `@` read as 0/6/8, or read `$` as S.
+/// Recognize the whole annotation without inventing its missing quantity.
+/// Multi-unit numeric prefixes remain ambiguous: `20$0.10` can carry a price.
 pub(crate) fn is_incomplete_quantity_ocr(text: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^\s*(?:[@06e€©]|1[06])\s*\$\s*\d+(?:[.,]\s*\d{0,2})?\s*$").unwrap()
+        Regex::new(r"^\s*(?:(?:[@06e€©]|1\s*[068])\s*\$|1[068]\s*S|1\s+C\s*\$)\s*\d+(?:[., ]\s*\d{0,2})?\s*$").unwrap()
     })
     .is_match(text)
 }

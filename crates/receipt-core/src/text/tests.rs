@@ -1112,6 +1112,10 @@ fn damaged_quantity_rows_do_not_create_extra_products() {
         "10$4.99",
         "@ $4.99",
         "10$2",
+        "18$4.99",
+        "10S4.99",
+        "1 C$4.99",
+        "1 8$4 99",
     ]
     .map(String::from);
     let parsed = extract_text_items(&lines, &HashSet::new());

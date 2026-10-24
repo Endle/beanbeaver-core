@@ -437,13 +437,17 @@ fn is_quantity_breakdown_label(text: &str) -> bool {
 /// erases the fact that the description already took the item's price and lets
 /// the breakdown claim the next one.
 ///
-/// Anchored on a leading `(` *and* an `@`, which is what separates it from the
-/// parenthesised prefixes chains put on ordinary item rows — T&T prints
-/// `(SALE) RED POMELO W $2.32`, which carries its own amount and has no `@`.
+/// Require a leading `(` and either an `@` or a trailing regular-price/deal
+/// pair. OCR sometimes loses the `@` and reads the deal's `$` as a digit;
+/// the nested `price(N/price)` shape still identifies the annotation without
+/// interpreting those damaged amounts. Ordinary parenthesised products such
+/// as `(SALE) RED POMELO W $2.32` do not have that shape.
 fn is_annotation_continuation_label(text: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^\s*\([^@]*@").unwrap())
-        .is_match(text)
+    RE.get_or_init(|| {
+        Regex::new(r"^\s*\((?:[^@]*@|.*\d[., ]\s*\d{2}\s*\(\d+/\$?\d+[.,]\d{2}\)\s*$)").unwrap()
+    })
+    .is_match(text)
         && text.contains(|c: char| c.is_ascii_digit())
 }
 
