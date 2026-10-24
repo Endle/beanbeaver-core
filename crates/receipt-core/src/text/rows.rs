@@ -28,6 +28,74 @@ pub(super) fn normalize_tax_code_ocr(text: &str) -> String {
     }
 }
 
+/// Repair an `H` tax flag that faint print turned into `11`, where the item's
+/// own count row proves the amount.
+///
+/// With its crossbar faded, `H` is two vertical strokes: Foody Mart's `1.98H`
+/// has read `1.9811` and `1,9811`, `3.99H` has read `3.9911`. No price grammar
+/// accepts four fraction digits, so the row went unpriced and the item was
+/// dropped. The token alone cannot be repaired, and
+/// [`crate::common::normalize_amount_ocr`] deliberately leaves `1, 9811`
+/// alone: nothing in it says which digits are money. The rows below can.
+/// Foody prints `1 @ $1.98` under every counted item, and a count row that
+/// totals exactly the amount in front of the `11` is what licenses the
+/// reading. Without one the row stays unpriced, as before.
+///
+/// Like [`normalize_tax_code_ocr`], this runs on whole rows because it needs
+/// row context. Returns the evidence per repaired row, so the repair is
+/// reported rather than silent.
+pub(super) fn repair_h_flag_read_as_11(lines: &mut [String]) -> Vec<Option<String>> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"(^|\s)(\$?\d+)[.,](\d{2})11\s*$").unwrap());
+    let mut evidence = vec![None; lines.len()];
+    for index in 0..lines.len() {
+        let Some(caps) = re.captures(&lines[index]) else {
+            continue;
+        };
+        let amount = format!("{}.{}", &caps[2], &caps[3]);
+        let Some(cents) = parse_cents(amount.trim_start_matches('$')) else {
+            continue;
+        };
+        if !count_row_below_totals_to(lines, index, cents) {
+            continue;
+        }
+        let token = caps.get(0).unwrap();
+        evidence[index] = Some(format!(
+            "auto-corrected OCR amount \"{}\" -> \"{amount}H\" using the item's count row",
+            token.as_str().trim()
+        ));
+        lines[index] = format!("{}{}{amount}H", &lines[index][..token.start()], &caps[1]);
+    }
+    evidence
+}
+
+/// Whether the first count row within the item block below `index` comes to
+/// exactly `amount`. Subtext and name rows are passed over; another priced row,
+/// a summary row or a department banner means the block ended without one.
+fn count_row_below_totals_to(lines: &[String], index: usize, amount: Money) -> bool {
+    for next in lines.iter().skip(index + 1).take(4) {
+        let next = next.trim();
+        if next.is_empty() {
+            continue;
+        }
+        // Checked before the trailing-price test: `1 @ $1.98` ends in a price.
+        if let Some(modifier) = parse_quantity_modifier(next) {
+            if matches!(modifier.pattern_type, QuantityPatternType::CountAtPrice) {
+                return modifier.unit_price.is_some_and(|unit| {
+                    unit.cents() * i64::from(modifier.quantity) == amount.cents()
+                });
+            }
+        }
+        if line_has_trailing_price(next)
+            || looks_like_summary_line(next)
+            || is_section_header_text(next)
+        {
+            return false;
+        }
+    }
+    false
+}
+
 /// Drop a `SALE` marker printed in its own column after an item's price.
 ///
 /// Longo's flags a discounted line by printing `SALE` to the right of the tax
