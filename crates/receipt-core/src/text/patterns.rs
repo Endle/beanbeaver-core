@@ -260,9 +260,14 @@ pub(crate) fn re_weight_at_price() -> &'static Regex {
     // The per-unit rate is captured (when readable) so the row's own total
     // is computable: "3.37 lb @ $2.98/lb" costs 10.04, so a trailing 7.45 on
     // that row can be recognized as another item's drifted price.
+    //
+    // The weight may have lost its decimal point to a space ("1 19 lb @
+    // $1.88/lb", Foody Mart's faint 1.49). That reading is captured but does
+    // not parse, so the row is known to be a weight row without its arithmetic
+    // being trusted.
     RE.get_or_init(|| {
         Regex::new(&format!(
-            r"(?i)^(\d+\.?\d*)\s*{WEIGHT_UNIT_CLASS}{WEIGHT_UNIT_AT_SEP}@(?:\s*\$?(\d+\.\d{{2}}))?"
+            r"(?i)^(\d+\.?\d*|\d\s\d{{2}})\s*{WEIGHT_UNIT_CLASS}{WEIGHT_UNIT_AT_SEP}@(?:\s*\$?(\d+\.\d{{2}}))?"
         ))
         .unwrap()
     })
@@ -272,9 +277,11 @@ pub(crate) fn re_weight_rate_no_at() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // OCR-dropped `@` variant: "1.86 lb  $2.49/lb". The `/unit` tail is
     // required so a bare "weight + total" line can't masquerade as a rate.
+    // The `@` may also come back as a `0`, as in `re_count_at_price`:
+    // "2.27 lb 0 $1.99/lb".
     RE.get_or_init(|| {
         Regex::new(&format!(
-            r"(?i)^(\d+\.?\d*)\s*{WEIGHT_UNIT_CLASS}\s+\$?(\d+\.\d{{2}})\s*/"
+            r"(?i)^(\d+\.?\d*)\s*{WEIGHT_UNIT_CLASS}\s+(?:[0O]\s+)?\$?(\d+\.\d{{2}})\s*/"
         ))
         .unwrap()
     })

@@ -56,10 +56,17 @@ pub(super) fn orphan_qty_pairing(
     // Honey's own price on its deal-subtext row). Under receipt-level drift even
     // a coincidentally-reconciling echo ("1 @ $1.99  1.99" where the next item
     // also costs 1.99) is the next item's price.
+    //
+    // Arithmetic on both sides stands in for that: when the row's own count
+    // cannot come to the amount and the item below prints a count row that
+    // does, the amount is the item below's even though the name above is
+    // still unpriced (its own amount lost to OCR).
     let above_consumed = nearest_desc_above_consumed(rows.all, rows.used, index);
     let echo_is_drifted = rows.drift && above_consumed;
+    let next_count_row_confirms =
+        !reconciles_as_own_total && next_item_count_row_totals_to(index, line, orphan_cents, rows);
     if orphan_cents <= Money::ZERO
-        || !above_consumed
+        || !(above_consumed || next_count_row_confirms)
         || (reconciles_as_own_total && !echo_is_drifted)
     {
         return None;
@@ -386,6 +393,48 @@ pub(super) fn plan_price_line(
         is_priced_section_header,
         is_qty_expr,
     })
+}
+
+/// Whether a count row's trailing amount is the NEXT item's, by arithmetic on
+/// both sides: it is not this row's own total, and the item below prints a
+/// count row that comes to exactly it.
+///
+/// Foody Mart prints `name / (subtext) / 1 @ $unit` per item with the amount on
+/// the name row, and a lifted amount lands on the count row above instead:
+/// `1 @ $1.98  2.98` / `Preserved Duck Egg` / `1 @ $2.98`. Walked backward,
+/// the 2.98 priced the item above (1 × 1.98 says it cannot be that item's)
+/// and left the egg unpriced.
+fn next_item_count_row_totals_to(index: usize, line: &str, price: Money, rows: Lines<'_>) -> bool {
+    let count_total = |text: &str| {
+        parse_quantity_modifier(text).and_then(|modifier| {
+            matches!(modifier.pattern_type, QuantityPatternType::CountAtPrice)
+                .then_some(modifier.unit_price?.cents() * i64::from(modifier.quantity))
+        })
+    };
+    if count_total(line).map_or(true, |own| own == price.cents()) {
+        return false;
+    }
+    let mut named = false;
+    for j in (index + 1)..rows.all.len().min(index + 5) {
+        let next = rows.all[j].trim();
+        if next.is_empty() || rows.used[j] {
+            return false;
+        }
+        // Checked before the trailing-price test: `1 @ $2.98` ends in a price.
+        if looks_like_quantity_expression(next) {
+            return named && count_total(next) == Some(price.cents());
+        }
+        if line_has_trailing_price(next) {
+            return false;
+        }
+        if looks_like_summary_line(next) || is_section_header_text(next) {
+            return false;
+        }
+        if !next.starts_with('(') {
+            named = true;
+        }
+    }
+    false
 }
 
 /// Whether the item below a priced department banner repeats the banner's own
