@@ -724,6 +724,15 @@ pub(super) fn re_all_digits_and_dots() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^[\d.]+$").unwrap())
 }
 
+/// A three-letter word ("BBQ", "Egg", "Ham") is a real product name; the
+/// backward walk otherwise treats every row of three characters or fewer as
+/// debris. Letters only: the tail of a mangled Chinese subtext ("AA)") is
+/// also three characters, and under live OCR it stole the meat-counter price
+/// from the name above it on foody_mart 121_99.
+fn is_three_letter_name(line: &str) -> bool {
+    line.len() == 3 && line.chars().all(|ch| ch.is_ascii_alphabetic())
+}
+
 /// Walk 3 — the ordinary case: the name is printed above its price.
 ///
 /// This is the only walk that collects quantity context, because a quantity row
@@ -768,7 +777,7 @@ pub(super) fn describe_backward(index: usize, plan: &PricePlan, rows: Lines<'_>)
             || (prev_line.starts_with('(') && !prev_line.contains(')'))
             || re_onsale_parenthetical().is_match(prev_line)
             || re_parenthetical_multibuy().is_match(prev_line)
-            || prev_line.len() <= 3
+            || (prev_line.len() <= 3 && !is_three_letter_name(prev_line))
         {
             continue;
         }

@@ -1740,3 +1740,52 @@ fn reg_subtext_over_a_reconciling_weight_row_prices_the_name_above() {
         ]
     );
 }
+
+#[test]
+fn three_letter_name_above_qty_row_takes_its_total() {
+    // Foody Mart's BBQ counter prints the bare name "BBQ" over a Chinese
+    // subtext and a `2 @ $8.99  17.98H` row. The backward walk skipped every
+    // row of three characters or fewer, so the item was dropped and the
+    // receipt came out 17.98 short of its subtotal.
+    let observed = text_items(
+        &[
+            "&& 07-BBQ",
+            "BBQ",
+            "2 @ $8.99 17.98H",
+            "&& 14-Bakery 1 2.29",
+            "BAKERY",
+            "Sub Total 20.27",
+        ],
+        2027,
+    );
+    assert_eq!(
+        observed,
+        vec![
+            ("BBQ".to_string(), Money::from_cents(1798)),
+            ("BAKERY".to_string(), Money::from_cents(229)),
+        ]
+    );
+}
+
+#[test]
+fn three_char_subtext_tail_is_not_a_name() {
+    // Live OCR of a Foody meat cut splits its Chinese subtext down to "AA)".
+    // Three characters, but not a word: the name above still owns the price.
+    let observed = text_items(
+        &[
+            "&& 03-Meat",
+            "Meat Corner - AA Beef Pla",
+            "AA)",
+            "1.28 1b @ $9.98/1b 12.77",
+            "Sub Total 12.77",
+        ],
+        1277,
+    );
+    assert_eq!(
+        observed,
+        vec![(
+            "Meat Corner - AA Beef Pla".to_string(),
+            Money::from_cents(1277)
+        )]
+    );
+}
