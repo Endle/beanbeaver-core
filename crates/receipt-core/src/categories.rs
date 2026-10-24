@@ -1172,8 +1172,35 @@ mod tests {
                 "Expenses:Food:Grocery:Snacks",
             ),
             ("La Pian (Spicy Gluten Sli", "Expenses:Food:Grocery:Snacks"),
+            // potato crackers, column-truncated and OCR-damaged (Foody Mart)
+            ("WJXZ - Okashi Potato Crac", "Expenses:Food:Grocery:Snacks"),
+            ("WJXZ - Okashi Potato Crae", "Expenses:Food:Grocery:Snacks"),
+            // juice beats the fruit it is made from
+            ("Mr. Kon - Peach Juice", "Expenses:Food:Grocery:Drink:Juice"),
+            ("FRT MANGO JUICE", "Expenses:Food:Grocery:Drink:Juice"),
             // staple
             ("LHL - Malatang Slightly S", "Expenses:Food:Grocery:Staple"),
+            ("NX - Dried Sweet Potato V", "Expenses:Food:Grocery:Staple"),
+            // ...but the produce itself is untouched
+            ("Sweet Potato", "Expenses:Food:Grocery:Vegetable"),
+            // Jin Tian's truncated wonton / dumplings, with and without the dash
+            (
+                "Jin Tian - Jumbo Shrimp C",
+                "Expenses:Food:Grocery:Frozen:Dumpling",
+            ),
+            (
+                "Jin Tian Jumbo Shrimp D",
+                "Expenses:Food:Grocery:Frozen:Dumpling",
+            ),
+            (
+                "LSK - Fish Dunplings",
+                "Expenses:Food:Grocery:Frozen:Dumpling",
+            ),
+            // ...but unbranded jumbo shrimp is still shrimp
+            (
+                "Jumbo Shrimp Deveined",
+                "Expenses:Food:Grocery:Seafood:Shrimp",
+            ),
             // seafood
             (
                 "BQ - Frozen Raw Peeled Un",
