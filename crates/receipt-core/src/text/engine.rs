@@ -15,7 +15,7 @@ pub fn extract_text_items(lines: &[String], summary_amounts: &HashSet<Money>) ->
         return table;
     }
     let mut deferred = Vec::new();
-    let normalized_lines: Vec<String> = lines
+    let mut normalized_lines: Vec<String> = lines
         .iter()
         .map(|line| {
             if crate::common::is_incomplete_quantity_ocr(line) {
@@ -29,13 +29,17 @@ pub fn extract_text_items(lines: &[String], summary_amounts: &HashSet<Money>) ->
         .map(|line| normalize_tax_code_ocr(&line))
         .map(|line| strip_trailing_sale_marker(&line))
         .collect();
+    let h_flag_repairs = repair_h_flag_read_as_11(&mut normalized_lines);
     let (normalized_lines, price_corrections): (Vec<String>, Vec<Option<String>>) =
         normalized_lines
             .into_iter()
-            .map(|line| match recover_repeated_multi_buy_total(&line) {
-                Some((corrected, evidence)) => (corrected, Some(evidence)),
-                None => (line, None),
-            })
+            .zip(h_flag_repairs)
+            .map(
+                |(line, h_flag_repair)| match recover_repeated_multi_buy_total(&line) {
+                    Some((corrected, evidence)) => (corrected, Some(evidence)),
+                    None => (line, h_flag_repair),
+                },
+            )
             .unzip();
     // Track description lines already consumed by an earlier price so a later
     // price's forward/backward search can't grab the same description. Without

@@ -1597,6 +1597,80 @@ fn damaged_multibuy_total_needs_a_matching_independent_offer() {
     }
 }
 
+#[test]
+fn h_flag_read_as_11_is_repaired_when_the_count_row_proves_the_amount() {
+    // Foody Mart 2026-10-14_foody_mart_156_72_recapture: faint `1.98H` and
+    // `3.99H` read `1,9811` and `3.9911`, so both items were dropped. The
+    // first also landed on the department banner, which forwards its price.
+    let lines = [
+        "&& 01-Grocery 1,9811",
+        "Calpis Candy",
+        "Asahi",
+        "(E145K40 100g)@4.99(1/$1.98)",
+        "1 @ $1.98",
+        "Mr. Kon - Peach Juice 0.51",
+        "(Mk9500m)01.99(2/$2.50)",
+        "1 @ $0.51",
+        "Tong Yi - Milk Tea Origin 3.9911",
+        "(-751.5L)04.99(1/83.99)",
+        "1 @ $3.99",
+    ]
+    .map(String::from);
+    let result = extract_text_items(&lines, &HashSet::new());
+    let observed: Vec<(String, Money)> = result
+        .items
+        .iter()
+        .map(|item| (item.description.clone(), item.price))
+        .collect();
+    assert_eq!(
+        observed,
+        vec![
+            ("Calpis Candy".to_string(), Money::from_cents(198)),
+            ("Mr. Kon - Peach Juice".to_string(), Money::from_cents(51)),
+            (
+                "Tong Yi - Milk Tea Origin".to_string(),
+                Money::from_cents(399)
+            ),
+        ]
+    );
+    let corrections: Vec<_> = result
+        .warnings
+        .iter()
+        .filter(|w| w.kind == crate::common::ReceiptWarningKind::PriceAutoCorrected)
+        .map(|w| (w.after_item_index, w.message.as_str()))
+        .collect();
+    assert_eq!(corrections.len(), 2, "{:?}", result.warnings);
+    assert_eq!(corrections[0].0, Some(0));
+    assert!(corrections[0].1.contains("\"1,9811\" -> \"1.98H\""));
+    assert_eq!(corrections[1].0, Some(2));
+}
+
+#[test]
+fn h_flag_read_as_11_needs_a_count_row_that_totals_to_it() {
+    use super::rows::repair_h_flag_read_as_11;
+    for block in [
+        // No count row at all: nothing says which digits are money.
+        &["EXCHANGE RATE 1.3611"][..],
+        // The count row disagrees: `3.99H` misread as `3.9011` stays unpriced.
+        &["ongY 3.9011", "(-751.5L)04.99(1/83.99)", "1 @ $3.99"],
+        // A priced row ends the item block before the count row is reached.
+        &["ITEM 1.9811", "NEXT ITEM 2.98", "1 @ $1.98"],
+        // Glued to a word, the digits are not a whole amount token.
+        &["CODE1.9811", "1 @ $1.98"],
+    ] {
+        let mut lines: Vec<String> = block.iter().map(|line| line.to_string()).collect();
+        assert_eq!(
+            repair_h_flag_read_as_11(&mut lines),
+            vec![None; block.len()]
+        );
+        assert_eq!(lines, block, "{block:?}");
+    }
+    let mut lines = ["ITEM 2.0011", "(sub)", "2 @ $1.00"].map(String::from);
+    let evidence = repair_h_flag_read_as_11(&mut lines);
+    assert_eq!(lines[0], "ITEM 2.00H");
+    assert!(evidence[0].is_some());
+}
+
 /// `(description, price)` for every item the text path emits.
 fn text_items(lines: &[&str], subtotal_cents: i64) -> Vec<(String, Money)> {
     let lines: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
