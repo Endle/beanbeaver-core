@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use receipt_core::categories::resolve_account_target;
 use receipt_core::ocr_transform::{transform, RawDetection, RawDetectionPage};
-use receipt_core::parser::parse_receipt;
+use receipt_core::parser::{parse_receipt, ParsedReceiptItem};
 use receipt_core::rules::{
     default_known_merchants, default_merchant_families, parser_rule_layers_with_overrides,
 };
@@ -114,6 +114,74 @@ fn price_matches(expected: &str, actual: Money) -> bool {
 fn item_desc_matches(actual: &str, expected: &str) -> bool {
     let (a, e) = (actual.to_uppercase(), expected.to_uppercase());
     !e.is_empty() && (a.contains(&e) || e.contains(&a))
+}
+
+/// One `critical_items` entry, as the matcher reads it.
+#[derive(Clone, Copy)]
+struct ExpectedLine<'a> {
+    desc: &'a str,
+    price: &'a str,
+    category: Option<&'a str>,
+    known: bool,
+}
+
+impl ExpectedLine<'_> {
+    /// Whether `item` satisfies this entry on its own: description, price and
+    /// (when asserted) category.
+    fn fits(&self, item: &ParsedReceiptItem, mapping: &HashMap<String, String>) -> bool {
+        item_desc_matches(&item.description, self.desc)
+            && price_matches(self.price, item.price)
+            && self.category.map_or(true, |want| {
+                item.account
+                    .as_deref()
+                    .is_some_and(|got| category_matches(want, got, mapping))
+            })
+    }
+}
+
+/// Pair expected lines with parsed lines one-to-one, as a maximum matching
+/// (Kuhn's augmenting paths): greedy first-fit would fail an entry whose only
+/// fit an earlier, more flexible entry took first.
+///
+/// An augmenting path never unpairs an entry, only moves it, so pairing the
+/// unmarked entries before the `known_failure` ones guarantees a marked entry
+/// can never take the parsed line an unmarked one needs.
+fn pair_one_to_one(
+    wants: &[ExpectedLine<'_>],
+    fits: &[Vec<usize>],
+    parsed_len: usize,
+) -> Vec<Option<usize>> {
+    fn augment(
+        want: usize,
+        fits: &[Vec<usize>],
+        owner: &mut [Option<usize>],
+        seen: &mut [bool],
+    ) -> bool {
+        for &line in &fits[want] {
+            if std::mem::replace(&mut seen[line], true) {
+                continue;
+            }
+            if owner[line].map_or(true, |other| augment(other, fits, owner, seen)) {
+                owner[line] = Some(want);
+                return true;
+            }
+        }
+        false
+    }
+    let mut owner: Vec<Option<usize>> = vec![None; parsed_len];
+    let unmarked_first = (0..wants.len())
+        .filter(|&i| !wants[i].known)
+        .chain((0..wants.len()).filter(|&i| wants[i].known));
+    for want in unmarked_first {
+        augment(want, fits, &mut owner, &mut vec![false; parsed_len]);
+    }
+    let mut assigned = vec![None; wants.len()];
+    for (line, want) in owner.iter().enumerate() {
+        if let Some(want) = *want {
+            assigned[want] = Some(line);
+        }
+    }
+    assigned
 }
 
 /// Compare fixture accounts against the parsed item's resolved account.
@@ -497,53 +565,66 @@ pub fn run_cached_corpus_in(
         // than the check-level `known_failures: ["critical_items"]`, which
         // umbrellas the whole block); a marked item that unexpectedly matches is
         // reported so the stale marker gets removed.
+        //
+        // Each expected line must claim a parsed line of its own. Two identical
+        // expectations (a receipt that rings up the same product twice) used to
+        // be satisfied by ONE parsed line, so the second printed line's price
+        // and category were asserted by nothing: a misfiled duplicate passed.
         if let Some(items) = expected.get("critical_items").and_then(Value::as_array) {
             let mut msgs: Vec<String> = Vec::new();
             let mut real_failure = false;
-            for ci in items {
-                assert!(
-                    ci.get("category_optional").is_none(),
-                    "{id}: 'category_optional' is banned; drop the category or add a private_rules.toml rule"
-                );
-                let desc = ci
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let price = ci.get("price").and_then(Value::as_str).unwrap_or_default();
-                let want_cat = ci.get("category").and_then(Value::as_str);
-                // Bare key = every consumer; `_core` = ours only. See the
-                // note on `known_failures` above.
-                let item_known = ci
-                    .get("known_failure")
-                    .or_else(|| ci.get("known_failure_core"))
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let matched: Vec<_> = parsed
-                    .items
-                    .iter()
-                    .filter(|it| item_desc_matches(&it.description, desc))
-                    .collect();
-                let price_ok = matched.iter().any(|it| price_matches(price, it.price));
-                let cat_ok = want_cat.map_or(true, |c| {
-                    matched
-                        .iter()
-                        .filter(|it| price_matches(price, it.price))
-                        .any(|it| {
-                            it.account
-                                .as_deref()
-                                .is_some_and(|k| category_matches(c, k, &mapping))
-                        })
-                });
+            let wants: Vec<ExpectedLine> = items
+                .iter()
+                .map(|ci| {
+                    assert!(
+                        ci.get("category_optional").is_none(),
+                        "{id}: 'category_optional' is banned; drop the category or add a private_rules.toml rule"
+                    );
+                    ExpectedLine {
+                        desc: ci
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                        price: ci.get("price").and_then(Value::as_str).unwrap_or_default(),
+                        category: ci.get("category").and_then(Value::as_str),
+                        // Bare key = every consumer; `_core` = ours only. See
+                        // the note on `known_failures` above.
+                        known: ci
+                            .get("known_failure")
+                            .or_else(|| ci.get("known_failure_core"))
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    }
+                })
+                .collect();
+            let fits: Vec<Vec<usize>> = wants
+                .iter()
+                .map(|want| {
+                    (0..parsed.items.len())
+                        .filter(|&j| want.fits(&parsed.items[j], &mapping))
+                        .collect()
+                })
+                .collect();
+            let assigned = pair_one_to_one(&wants, &fits, parsed.items.len());
+            for (i, ci) in items.iter().enumerate() {
+                let ExpectedLine {
+                    desc,
+                    price,
+                    category: want_cat,
+                    known: item_known,
+                } = wants[i];
                 // An entry's optional `gift_card` metadata is part of the same
                 // entry: the entry-level marker umbrellas it, and a field-level
                 // marker inside the object narrows that. See gift_cards.rs.
                 let gift = gift_cards::item_metadata(ci, &parsed.items, true);
-                let line_failed = matched.is_empty() || !price_ok || !cat_ok;
+                let line_failed = assigned[i].is_none();
                 let item_failed = line_failed || gift.as_ref().is_some_and(|g| g.failed());
                 if item_failed && !item_known {
                     if line_failed {
-                        let got: Vec<_> = matched
+                        let got: Vec<_> = parsed
+                            .items
                             .iter()
+                            .filter(|it| item_desc_matches(&it.description, desc))
                             .map(|it| {
                                 (
                                     it.description.as_str(),
@@ -552,7 +633,12 @@ pub fn run_cached_corpus_in(
                                 )
                             })
                             .collect();
-                        msgs.push(format!("item '{desc}' (price {price}, cat {want_cat:?}) unmatched; candidates {got:?}"));
+                        let claimed = if fits[i].is_empty() {
+                            ""
+                        } else {
+                            "; every line that fits it is claimed by another expected entry"
+                        };
+                        msgs.push(format!("item '{desc}' (price {price}, cat {want_cat:?}) unmatched; candidates {got:?}{claimed}"));
                     }
                     if let Some(g) = &gift {
                         msgs.extend(g.errors.iter().cloned());
@@ -677,4 +763,47 @@ pub fn run_cached_corpus_in(
     }
 
     CorpusResult { ran, failures }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pair_one_to_one, ExpectedLine};
+
+    fn want(known: bool) -> ExpectedLine<'static> {
+        ExpectedLine {
+            desc: "",
+            price: "",
+            category: None,
+            known,
+        }
+    }
+
+    #[test]
+    fn identical_expectations_each_need_their_own_parsed_line() {
+        let wants = [want(false), want(false)];
+        assert_eq!(
+            pair_one_to_one(&wants, &[vec![0], vec![0]], 1),
+            [Some(0), None]
+        );
+    }
+
+    #[test]
+    fn a_flexible_entry_moves_aside_for_one_with_a_single_fit() {
+        // First-fit would give line 0 to the first entry and strand the second.
+        let wants = [want(false), want(false)];
+        assert_eq!(
+            pair_one_to_one(&wants, &[vec![0, 1], vec![0]], 2),
+            [Some(1), Some(0)]
+        );
+    }
+
+    #[test]
+    fn a_marked_entry_never_takes_a_line_an_unmarked_one_needs() {
+        // Listed first, the marked entry would otherwise take the only line.
+        let wants = [want(true), want(false)];
+        assert_eq!(
+            pair_one_to_one(&wants, &[vec![0], vec![0]], 1),
+            [None, Some(0)]
+        );
+    }
 }
