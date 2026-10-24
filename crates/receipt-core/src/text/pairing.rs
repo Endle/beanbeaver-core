@@ -542,6 +542,9 @@ pub(super) struct QuantityContext {
     pub(super) info: Vec<String>,
     /// The subset that parsed as a structured modifier.
     pub(super) modifiers: Vec<QuantityModifier>,
+    /// The price row's own count (`8 @ $2.98  23.84`), when the row is one and
+    /// the name was found above it. See [`searched_item`].
+    pub(super) own_count: Option<QuantityModifier>,
 }
 
 /// What the four walks found.
@@ -604,6 +607,13 @@ pub(super) fn find_description(
         let walk = describe_backward(index, plan, rows);
         found = walk.found;
         qty = walk.qty;
+        // Only a name printed above the count row is the count's item; a name
+        // found by a forward walk may be the next item's.
+        if found.is_some() && plan.is_qty_expr {
+            qty.own_count = parse_quantity_modifier(&plan.desc_part).filter(|modifier| {
+                matches!(modifier.pattern_type, QuantityPatternType::CountAtPrice)
+            });
+        }
     }
     if found.is_none()
         && !plan.prefer_forward_desc
@@ -938,7 +948,16 @@ pub(super) fn searched_item(
         )
     };
 
-    match qty.modifiers.first() {
+    // The price row's own count settles it when its arithmetic does. Foody Mart
+    // prints a multi-unit line as name / deal subtext / `8 @ $2.98  23.84`, and
+    // the walk up from the count row passes the subtext (`(300g)@3.99(1/$2.98)`)
+    // first. That is a shelf price and a deal, not this purchase's quantity, so
+    // it does not reconcile and used to be appended to the name as prose.
+    let own_count = qty
+        .own_count
+        .as_ref()
+        .filter(|modifier| validate_quantity_price(price_cents, modifier));
+    match own_count.or(qty.modifiers.first()) {
         Some(modifier) if validate_quantity_price(price_cents, modifier) => {
             quantity = modifier.quantity;
             if let Some(weight_text) = &modifier.weight_text {
