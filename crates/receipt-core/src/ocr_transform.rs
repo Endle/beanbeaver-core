@@ -238,7 +238,9 @@ impl RawDetectionPage {
                     .fold(f64::INFINITY, f64::min);
                 Detection {
                     confidence: det.confidence,
-                    text: crate::common::normalize_quantity_ocr(&det.text),
+                    text: crate::common::normalize_quantity_ocr(
+                        &crate::common::normalize_amount_ocr(&det.text),
+                    ),
                     center_y,
                     y_min,
                     y_max,
@@ -367,7 +369,19 @@ mod tests {
 
     #[test]
     fn damaged_quantity_annotation_leaves_the_next_items_price_available() {
-        for annotation in ["1 €$2.49", "1 6 $2.49", "0 $2.49", "@ $2.49", "10$2"] {
+        for annotation in [
+            "1 €$2.49",
+            "1 6 $2.49",
+            "0 $2.49",
+            "@ $2.49",
+            "10$2",
+            "18$2.49",
+            "10S2.49",
+            "1 C$2.49",
+            "1 8$2 49",
+            "(500ml)62.99(2/$4.98)",
+            "(500ml)62 99(2/84.98)",
+        ] {
             let doc = transform(page(
                 vec![
                     rect(20.0, 80.0, 220.0, 110.0, "FIRST ITEM", 0.99),
@@ -385,6 +399,49 @@ mod tests {
                 "{annotation}: {}",
                 doc.full_text()
             );
+        }
+    }
+
+    #[test]
+    fn comma_price_cannot_be_claimed_by_a_different_quantity_extension() {
+        for amount in ["4, 99", "4,99", "4. 99"] {
+            let doc = transform(page(
+                vec![
+                    rect(20.0, 120.0, 220.0, 150.0, "1 @ $2.49", 0.99),
+                    rect(20.0, 142.0, 300.0, 172.0, "SECOND ITEM", 0.99),
+                    rect(800.0, 135.0, 900.0, 165.0, amount, 0.99),
+                ],
+                1000,
+                500,
+                0,
+            ));
+            assert!(
+                doc.lines.iter().any(|line| line.text == "SECOND ITEM 4.99"),
+                "{amount}: {}",
+                doc.full_text()
+            );
+        }
+    }
+
+    #[test]
+    fn amount_normalization_preserves_non_money_detections() {
+        for text in [
+            "1,000",
+            "1, 000",
+            "1234",
+            "ITEM 2, 49",
+            "CITY, ON",
+            "1, 9811",
+            "奶茶",
+        ] {
+            assert_eq!(crate::common::normalize_amount_ocr(text), text);
+        }
+        for (text, expected) in [
+            ("$4, 99H", "$4.99H"),
+            ("-4,99", "-4.99"),
+            ("4,99-", "4.99-"),
+        ] {
+            assert_eq!(crate::common::normalize_amount_ocr(text), expected);
         }
     }
 
