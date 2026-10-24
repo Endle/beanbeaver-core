@@ -745,6 +745,33 @@ fn mangled_reg_row_forwards_drifted_price_under_drift() {
 }
 
 #[test]
+fn a_reconciling_count_row_keeps_the_deal_subtext_out_of_the_name() {
+    // Foody Mart 2026-10-14_foody_mart_156_72_recapture: a multi-unit line
+    // prints its extension on the count row, so the walk up to the name
+    // passes the deal subtext first. 8 x 2.98 is the price, so the count is
+    // the quantity and the subtext is not appended as prose.
+    let lines = [
+        "Seven Baskets - Frozen Cl",
+        "(7f1E1A 300g)63.99(1/$2.98)",
+        "8 @$2.98 23.84",
+    ]
+    .map(String::from);
+    let items = extract_text_items(&lines, &HashSet::new()).items;
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0].description, "Seven Baskets - Frozen Cl");
+    assert_eq!(items[0].price, Money::from_cents(2384));
+    assert_eq!(items[0].quantity, 8);
+
+    // A count row that does not come to the price is not trusted as the
+    // quantity: the price may be some other item's.
+    let lines = ["ITEM NAME", "(300g)@3.99(1/$2.98)", "2 @ $2.98 6.10"].map(String::from);
+    let items = extract_text_items(&lines, &HashSet::new()).items;
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0].price, Money::from_cents(610));
+    assert_eq!(items[0].quantity, 1);
+}
+
+#[test]
 fn bare_reg_row_with_charge_prices_unpriced_name_above() {
     // Bestco 2026-09-23_bestco_fresh_84_02_recapture: OCR lost the Chinese
     // sub-line and the "@" before REG, leaving "REG$11.99  21.75". The marker
