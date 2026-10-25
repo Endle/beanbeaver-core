@@ -86,6 +86,13 @@ row geometry, pairing, and emission. Each `engine` owns the order of stages and
 row claims. `fields` separates price tokens, summary amounts, tenders, and dates.
 These are internal modules; the crate boundaries are unchanged.
 
+`categories` keeps its public rule types and classification policy at the module
+root: subtraction, account ranking, and the printed-text → merchant-vocabulary
+→ prefix fallback order. Its private modules separate rule construction
+(`layers`), keyword and brand matching (`matching`), and truncated-tail candidate
+generation (`prefix`). Public functions remain available under `categories`;
+`rules::corpus` continues to own TOML loading.
+
 ### `receipt-image`
 
 Desktop-parity pre-OCR pipeline:
@@ -244,7 +251,8 @@ proper prefixes of keywords. The trimmed original line must contain at least
 22 characters before brand masking. All candidate accounts must agree;
 exact-only keywords count as rivals but cannot emit prefix matches. Surviving
 matches retain normal rule order, subtraction, account ranking and tag union.
-The calibration sweeps are documented beside the constants in `categories.rs`.
+The calibration sweeps are documented beside the constants in
+`categories/prefix.rs`.
 
 `RuleBook::explain` includes prefix recovery and exposes it as non-exact through
 the existing FFI. Its description-only API cannot replay merchant-vocabulary
