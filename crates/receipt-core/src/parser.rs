@@ -575,6 +575,9 @@ pub fn parse_receipt(
             rule_layers,
             vocab,
         );
+        if merchant_match.canonical.as_deref() == Some("FOODY MART") {
+            parsed.description = crate::extraction::normalize_foody_description(parsed.description);
+        }
         parsed.item_number = item_number;
         (parsed, item.department)
     });
@@ -813,6 +816,45 @@ mod tests {
             .iter()
             .all(|w| w.kind == ReceiptWarningKind::PriceAutoCorrected));
         assert_eq!(parsed.warnings.len(), 1);
+    }
+
+    #[test]
+    fn foody_spelling_repairs_preserve_raw_evidence_and_other_merchants() {
+        let rows = "MK - Lastant Noodle Rib w 2.00\nI.SK - Fish Dumplings 3.00\nHX - Sarimp Dumpling W/ F 4.00\nLSJ - Frozen Sliced Sea B ( 5.00\nTOTAL 14.00";
+        let raw = format!("FOODY MART\n{rows}");
+        let parsed = super::parse_receipt(
+            &crate::ocr_document::OcrDocument::from_text(&raw),
+            &default_parser_rule_layers(),
+            "receipt.jpg",
+            &crate::rules::default_known_merchants(),
+            &crate::rules::default_merchant_families(),
+            2026,
+        );
+        assert_eq!(parsed.raw_text, raw);
+        let names: Vec<_> = parsed
+            .items
+            .iter()
+            .map(|i| i.description.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "MK - Instant Noodle Rib w",
+                "LSK - Fish Dumplings",
+                "HX - Shrimp Dumpling W/ F",
+                "LSJ - Frozen Sliced Sea B"
+            ]
+        );
+        let other = parse_text(&format!("EXAMPLE SHOP\n{rows}"));
+        assert!(other.items[0].description.contains("Lastant"));
+        assert!(other.items[1].description.contains("I.SK"));
+        let typed = super::classified_item(
+            "MK - Lastant Noodle Rib w".into(),
+            Money::from_cents(200),
+            1,
+            &default_parser_rule_layers(),
+        );
+        assert_eq!(typed.description, "MK - Lastant Noodle Rib w");
     }
 
     #[test]

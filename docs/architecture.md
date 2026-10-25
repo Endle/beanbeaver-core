@@ -147,6 +147,16 @@ because a copied function adds no dependency; there is now a source-level
 assertion (`ffi_calls_the_composition_rather_than_re_deriving_it`) alongside the
 manifest ones.
 
+When a portrait receipt has no date after the first pass, `scan` retries OCR
+on a square tile at the top of the prepared image. This avoids shrinking a faint
+header to the long receipt's detection scale. Only an unambiguous year-first
+calendar date with a clock time can be recovered, and it must also survive the
+ordinary parser's confidence and deadline checks in the full header context.
+Only that timestamp detection is added to the original page; item and summary
+detections stay from the first pass. Known dates do not trigger a retry. Timings
+include the extra crop, OCR and parsing work. Cached OCR replay cannot recover
+a timestamp absent from its snapshot.
+
 Whole-pipeline diagnostics and tests live here because they need both halves:
 `examples/device_sim.rs`, `tests/public_live_e2e.rs`, `tests/phase5_e2e.rs`.
 

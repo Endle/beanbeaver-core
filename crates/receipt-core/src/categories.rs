@@ -1057,6 +1057,16 @@ mod tests {
     #[test]
     fn public_classifier_categorizes_real_receipt_items() {
         let cases: &[(&str, &str)] = &[
+            ("Asahi - Mitsuya Cider Can", "Expenses:Food:Grocery:Drink"),
+            ("Apple Cider", "Expenses:Food:AlcoholicBeverage"),
+            ("Oyster Mushroom (L)", "Expenses:Food:Grocery:Vegetable"),
+            ("Star Aniseed", "Expenses:Food:Grocery:Seasoning"),
+            ("Star Anise", "Expenses:Food:Grocery:Seasoning"),
+            (
+                "Yang , SK - Pork / Leek Du",
+                "Expenses:Food:Grocery:Frozen:Dumpling",
+            ),
+            ("Pork / Leek", "Expenses:Food:Grocery:Meat"),
             // staple — corn starch is sold beside the flour, but the produce
             // rule's bare "CORN" claimed it until "CORN STARCH" outgrew it on
             // the keyword-length tiebreak.
@@ -1352,9 +1362,8 @@ mod tests {
         // Two rules claim a boxed Panda cookie, and only one of them is wrong
         // in a way a keyword can fix. `panda_cookie_snack` outranks the bakery
         // rule's generic "COOKIE" for the ACCOUNT; the bakery *tag* stays,
-        // because tags accumulate from every match by design and the bundled
-        // corpus deliberately never subtracts (see
-        // `rules::book::tests::bundled_corpus_uses_no_subtraction`).
+        // because the cookie really is a bakery product. The narrowly scoped
+        // subtraction rules for false ingredient names do not apply here.
         //
         // The staple tag is the one that was simply false: the staple rule's
         // "DANDAN" keyword fuzzy-matched "PANDA". It is `exact_only` now, so

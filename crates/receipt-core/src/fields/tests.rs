@@ -1322,3 +1322,34 @@ fn currency_marked_tax_accepts_a_spaced_decimal() {
         assert_eq!(extract_tax(&[input.to_string()]), None, "{input}");
     }
 }
+
+#[test]
+fn split_hst_label_is_tax_only_inside_the_summary() {
+    let lines = [
+        "Sub Total 20.00",
+        "IIST 0.26",
+        "hist595 0.00",
+        "Total after Tax 20.26",
+    ]
+    .map(String::from);
+    assert_eq!(extract_tax(&lines), Some(26));
+    for lines in [
+        vec!["IIST 0.26", "Sub Total 20.00", "Total after Tax 20.26"],
+        vec!["Sub Total 20.00", "Total after Tax 20.26", "IIST 0.26"],
+        vec![
+            "Sub Total 20.00",
+            "IIST PRODUCT 0.26",
+            "Total after Tax 20.26",
+        ],
+        vec![
+            "Sub Total 20.00",
+            "IIST 123456 RT0001",
+            "Total after Tax 20.26",
+        ],
+    ] {
+        assert_eq!(
+            extract_tax(&lines.into_iter().map(String::from).collect::<Vec<_>>()),
+            None
+        );
+    }
+}

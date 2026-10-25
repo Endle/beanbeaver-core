@@ -493,7 +493,7 @@ exact_only = false
 # `keyword_length` for "*ZHy Turkey Noodle Sauce 2" (周黑鸭火鸡面酱) — a sauce FOR
 # noodles, not a noodle. Same shape as VEGETABLE OIL beating VEGETABLE.
 id = "legacy_0019"
-keywords = ["VEGETABLE OIL", "CORN OIL", "SESAME OIL", "SESAMEOIL", "GARLIC", "GINGER", "GREEN ONION", "GREEN ONIONS", "CHILI PEPPER", "RED CHILI PEPPER", "CHILLI", "DRIED CHILLI", "CRUSHED CHILLI", "SPICE", "SEASONING", "SALT", "ROCK SUGAR", "PAPRIKA", "CUMIN", "CORIANDER", "CILANTRO", "TURMERIC", "CINNAMON", "NUTMEG", "OREGANO", "THYME", "ROSEMARY", "BAY LEAF", "CURRY", "CHILI POWDER", "CAYENNE", "SAUCE", "NOODLE SAUCE", "SOY SAUCE", "BEAN SAUCE", "FISH SAUCE", "OYSTER SAUCE", "HOISIN", "WASABI", "SRIRACHA", "HOT SAUCE", "KETCHUP", "MUSTARD", "MAYONNAISE", "MAYO", "RELISH", "BBQ SAUCE", "TERIYAKI", "WORCESTERSHIRE", "PERICARPIUM ZANTHOXYLI", "PERICARPIURN ZANTHOXYLI", "SALSA", "HUMMUS", "GUACAMOLE", "PESTO", "CHINA TIME HONORED BRAND", "YUQUAN FRESH PRESERVED", "SOYBEAN PASTE", "MONOSODIUM", "MSG", "VEGOIL", "PRESERVED VEG"]
+keywords = ["VEGETABLE OIL", "CORN OIL", "SESAME OIL", "SESAMEOIL", "GARLIC", "GINGER", "GREEN ONION", "GREEN ONIONS", "CHILI PEPPER", "RED CHILI PEPPER", "CHILLI", "DRIED CHILLI", "CRUSHED CHILLI", "SPICE", "SEASONING", "SALT", "ROCK SUGAR", "PAPRIKA", "CUMIN", "CORIANDER", "CILANTRO", "TURMERIC", "CINNAMON", "STAR ANISE", "STAR ANISEED", "NUTMEG", "OREGANO", "THYME", "ROSEMARY", "BAY LEAF", "CURRY", "CHILI POWDER", "CAYENNE", "SAUCE", "NOODLE SAUCE", "SOY SAUCE", "BEAN SAUCE", "FISH SAUCE", "OYSTER SAUCE", "HOISIN", "WASABI", "SRIRACHA", "HOT SAUCE", "KETCHUP", "MUSTARD", "MAYONNAISE", "MAYO", "RELISH", "BBQ SAUCE", "TERIYAKI", "WORCESTERSHIRE", "PERICARPIUM ZANTHOXYLI", "PERICARPIURN ZANTHOXYLI", "SALSA", "HUMMUS", "GUACAMOLE", "PESTO", "CHINA TIME HONORED BRAND", "YUQUAN FRESH PRESERVED", "SOYBEAN PASTE", "MONOSODIUM", "MSG", "VEGOIL", "PRESERVED VEG"]
 tags = ["grocery/seasoning"]
 priority = 0
 exact_only = false
@@ -1409,9 +1409,9 @@ id = "panda_cookie_snack"
 #
 # The `grocery/bakery` TAG still accumulates from that rule, as tags do
 # everywhere here (a rotisserie chicken carries both meat and prepared_meal).
-# Only the account is decided by priority. Subtracting the tag would need
-# `remove_tags`, which the bundled corpus deliberately never uses — see
-# `rules::book::tests::bundled_corpus_uses_no_subtraction`.
+# Only the account is decided by priority. This is still a bakery product,
+# so retain that semantic tag. Subtraction is reserved for names that falsely
+# imply an ingredient, such as oyster mushrooms and Mitsuya Cider below.
 keywords = ["PANDA COOKIE"]
 tags = ["grocery/snacks"]
 priority = 20
@@ -1594,3 +1594,32 @@ keywords = ["MARUKAWA"]
 tags = ["grocery/snacks/mint"]
 priority = 1
 exact_only = false
+
+# Mitsuya Cider is a soft drink. Keep the product phrase exact so actual
+# alcoholic ciders retain their existing classification.
+# Product: https://www.asahiinryo.co.jp/products/carbonated/mitsuya_cider/2CKF7.html
+[[rules]]
+id = "mitsuya_cider_soft_drink"
+keywords = ["MITSUYA CIDER"]
+tags = ["grocery/drink"]
+remove_tags = ["alcohol/beverage"]
+priority = 2
+exact_only = true
+
+# The mushroom's species name overlaps OYSTER (priority 40, seafood).
+[[rules]]
+id = "oyster_mushroom_vegetable"
+keywords = ["OYSTER MUSHROOM"]
+tags = ["grocery/vegetable"]
+remove_tags = ["grocery/seafood", "grocery/seafood/shrimp"]
+priority = 50
+exact_only = true
+
+# A fixed-width receipt cuts DUMPLING to DU. Require both fillings and the
+# product prefix; neither PORK nor LEEK alone identifies a dumpling.
+[[rules]]
+id = "pork_leek_dumpling_truncated"
+keywords = ["PORK / LEEK DU"]
+tags = ["grocery/frozen/dumpling"]
+priority = 0
+exact_only = true

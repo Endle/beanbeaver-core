@@ -59,9 +59,10 @@ struct DocumentToml {
 /// Masking alone serves a brand whose name merely collides with a product word
 /// (`Fish Well`). Tags serve one whose name *is* the signal but would be misread
 /// by a keyword — `APPLE GC` is an Apple gift card, and without the mask the
-/// fruit rule's `APPLE` files it under Fruit. Bundled rules may not subtract a
-/// tag (see `bundled_corpus_uses_no_subtraction`), so taking the span away from
-/// the keywords is the only way a bundled rule can express that.
+/// fruit rule's `APPLE` files it under Fruit. Masking the brand span avoids
+/// subtracting a legitimate ingredient tag elsewhere in the description. The
+/// bundled subtraction exceptions are reserved for false product names such as
+/// oyster mushrooms and Mitsuya Cider, not brands.
 ///
 /// A brand with tags is lowered into an ordinary rule (see
 /// [`crate::categories::CategoryRule::brand`]) appended after the document's

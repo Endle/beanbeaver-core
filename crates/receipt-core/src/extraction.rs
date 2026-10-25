@@ -39,6 +39,32 @@ pub(crate) fn normalize_piece_count_ocr(description: String) -> String {
         .into_owned()
 }
 
+/// Repair observed OCR spellings only within the product phrases that
+/// disambiguate them. Kept merchant-scoped by the caller; raw OCR is unchanged.
+pub(crate) fn normalize_foody_description(description: String) -> String {
+    let mut out = description;
+    for (damaged, printed) in [
+        ("MK - Lastant Noodle", "MK - Instant Noodle"),
+        ("MK - Iistant Noodle", "MK - Instant Noodle"),
+        ("I.SK - Fish Dumplings", "LSK - Fish Dumplings"),
+        ("HX - Sarimp Dumpling", "HX - Shrimp Dumpling"),
+    ] {
+        if let Some(tail) = out.strip_prefix(damaged) {
+            if tail.is_empty() || tail.starts_with(char::is_whitespace) {
+                out = format!("{printed}{tail}");
+                break;
+            }
+        }
+    }
+    // The parenthesis is an OCR fragment of the Chinese continuation row,
+    // not part of this already-truncated English product name.
+    if out == "LSJ - Frozen Sliced Sea B (" {
+        out.pop();
+        out = out.trim_end().to_string();
+    }
+    out
+}
+
 /// Costco's manufacturer-coupon line: `<coupon number> / <item number>`, printed
 /// under the item it reduces with a trailing-minus amount (`4.00- H`). Unlike
 /// `TPD/<item>` it carries no letters, so no keyword rule can tag it and every

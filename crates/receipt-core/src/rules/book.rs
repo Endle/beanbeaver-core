@@ -685,12 +685,43 @@ tags = ["grocery/dairy"]
         }
     }
 
-    /// The bundled corpus uses neither operator, so nothing it classifies changes.
+    /// Only named false-ingredient collisions subtract tags. Keep all other
+    /// bundled rules additive, including products that really contain a filling.
     #[test]
-    fn bundled_corpus_uses_no_subtraction() {
-        let rules = RuleBook::bundled().item_rules();
-        assert!(rules
-            .iter()
-            .all(|r| r.remove_tags.is_empty() && r.disables.is_empty()));
+    fn bundled_subtraction_is_limited_to_false_ingredient_names() {
+        for rule in RuleBook::bundled().item_rules() {
+            assert!(rule.disables.is_empty());
+            let expected: &[&str] = match rule.id.as_deref() {
+                Some("mitsuya_cider_soft_drink") => &["alcohol/beverage"],
+                Some("oyster_mushroom_vegetable") => &["grocery/seafood", "grocery/seafood/shrimp"],
+                _ => &[],
+            };
+            assert_eq!(rule.remove_tags, expected, "{:?}", rule.id);
+        }
+        let book = RuleBook::bundled();
+        for (name, forbidden) in [
+            ("Asahi - Mitsuya Cider Can", "alcohol"),
+            ("Oyster Mushroom (L)", "grocery/seafood"),
+        ] {
+            assert!(
+                !book
+                    .explain(name)
+                    .tags
+                    .iter()
+                    .any(|tag| tag.starts_with(forbidden)),
+                "{name}"
+            );
+        }
+        for (name, retained) in [
+            ("Apple Cider", "alcohol/beverage"),
+            ("Fresh Oyster Meat", "grocery/seafood"),
+            ("Shrimp Dumpling", "grocery/seafood/shrimp"),
+            ("Pork / Leek Du", "grocery/meat"),
+        ] {
+            assert!(
+                book.explain(name).tags.iter().any(|tag| tag == retained),
+                "{name}"
+            );
+        }
     }
 }
