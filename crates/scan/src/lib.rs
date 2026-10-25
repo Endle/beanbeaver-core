@@ -19,6 +19,8 @@
 //! [`process_image`] rather than re-implement the composition — a second copy
 //! could drift and the simulator would stop simulating.
 
+mod date_recovery;
+
 use receipt_core::date::Date;
 use std::fmt;
 use std::time::Instant;
@@ -188,9 +190,9 @@ pub fn process_image_with_options(
 
     let t = Instant::now();
     let prepared = resize_and_pad(img);
-    let prep_ms = ms_since(t);
+    let mut prep_ms = ms_since(t);
 
-    let (detections, ocr) = engine.recognize_image_timed(&prepared)?;
+    let (detections, mut ocr) = engine.recognize_image_timed(&prepared)?;
 
     // The contract between the two halves is a coordinate space as much as a
     // type: detections are in *padded-image* pixels, so the parser is handed the
@@ -221,8 +223,43 @@ pub fn process_image_with_options(
     )?;
 
     let t = Instant::now();
-    let processed = process_receipt_request(page, request, options).map_err(ScanError::Rules)?;
-    let parse_ms = ms_since(t);
+    let mut processed =
+        process_receipt_request(page, request, options).map_err(ScanError::Rules)?;
+    let mut parse_ms = ms_since(t);
+
+    // A long receipt shrinks faint header text below the detector's resolution.
+    // Retry only an unknown date, on a square header tile, and bring back only
+    // its corroborated timestamp. The first pass still owns every item/amount.
+    if processed.parsed.date.is_none() && prepared.height() > prepared.width() {
+        let t = Instant::now();
+        let header = image::imageops::crop_imm(&prepared, 0, 0, prepared.width(), prepared.width())
+            .to_image();
+        prep_ms += ms_since(t);
+        let (detections, retry_timing) = engine.recognize_image_timed(&header)?;
+        ocr.detect_ms += retry_timing.detect_ms;
+        ocr.classify_ms += retry_timing.classify_ms;
+        ocr.recognize_ms += retry_timing.recognize_ms;
+        let t = Instant::now();
+        if let Some(timestamp) = date_recovery::header_timestamp(
+            detections,
+            header.width(),
+            header.height(),
+            request,
+            options,
+        )? {
+            let mut raw = processed.detections.clone();
+            raw.push(timestamp);
+            let page = RawDetectionPage::try_new(
+                raw,
+                prepared.width() as i64,
+                prepared.height() as i64,
+                OCR_IMAGE_PADDING as i64,
+            )?;
+            processed =
+                process_receipt_request(page, request, options).map_err(ScanError::Rules)?;
+        }
+        parse_ms += ms_since(t);
+    }
 
     let timings = ScanTimings {
         prep_ms,

@@ -657,7 +657,13 @@ pub(super) fn sum_summary_block_tax_rows(lines: &[String]) -> Option<i64> {
         if line_upper.contains("TAXED") || line_upper.contains("TAXABLE") {
             continue;
         }
-        if !re_tax_tokens().is_match(&line_upper) {
+        // A faint H's two vertical strokes can be recognized as II. Accept
+        // that exact label only inside the subtotal-to-total summary window,
+        // followed immediately by an amount; never infer tax from a gap alone.
+        let split_hst = line_upper
+            .strip_prefix("IIST ")
+            .is_some_and(|amount| crate::money::Money::parse_strict(amount.trim()).is_ok());
+        if !re_tax_tokens().is_match(&line_upper) && !split_hst {
             continue;
         }
         if let Some(amount) = tax_price(line) {
