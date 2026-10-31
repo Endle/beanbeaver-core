@@ -1948,3 +1948,43 @@ fn garbled_weight_rows_are_not_names() {
         ]
     );
 }
+
+#[test]
+fn a_lost_unit_dollar_does_not_shift_equal_priced_counted_items() {
+    // The price column is lifted onto the department banner and count rows.
+    // OCR reads the first count's `$` as `8`. Both adjacent drinks cost 5.18:
+    // the next row's arithmetic must not steal the first drink's own total.
+    let rows = [
+        "88 01-Grocery K 3.99",
+        "Rice Snacks",
+        "Strawberry Milk",
+        "2 @ 82.59 5.18H",
+        "Melon Drink",
+        "2 @ $2.59 5.18H",
+        "Spicy Bean Snack",
+        "(<ONSALE> 9.18",
+        "2 @ $4.59",
+        "Pea Snack 2.59H",
+        "Sub Total 26.12",
+    ]
+    .map(String::from);
+    let outcome = extract_text_items(&rows, &[Money::from_cents(2612)].into());
+    let items: Vec<_> = outcome
+        .items
+        .iter()
+        .map(|item| (item.description.as_str(), item.price))
+        .collect();
+    assert_eq!(
+        items,
+        [
+            ("Rice Snacks", Money::from_cents(399)),
+            ("Strawberry Milk", Money::from_cents(518)),
+            ("Melon Drink", Money::from_cents(518)),
+            ("Spicy Bean Snack", Money::from_cents(918)),
+            ("Pea Snack", Money::from_cents(259)),
+        ]
+    );
+    assert_eq!(outcome.items[1].quantity, 2);
+    assert_eq!(outcome.items[2].quantity, 2);
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+}
