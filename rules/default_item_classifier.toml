@@ -1168,6 +1168,15 @@ priority = 0
 exact_only = false
 
 [[rules]]
+id = "energy_drink_abbreviation"
+# FreshCo prints the product type as "Eng Drk". Require the complete literal
+# phrase rather than making either short token a fuzzy beverage keyword.
+keywords = ["ENG DRK"]
+tags = ["grocery/drink", "grocery/drink/energy_drink"]
+priority = 0
+exact_only = true
+
+[[rules]]
 id = "semantic_tag_0103"
 keywords = ["MONSTER", "MNSTR"]
 tags = ["grocery/drink/energy_drink"]
