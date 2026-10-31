@@ -32,6 +32,8 @@ pub(crate) fn is_incomplete_quantity_ocr(text: &str) -> bool {
 /// `B` is another reading of the `@`, and the rate may come back with a comma
 /// decimal: Foody Mart's faint `1 @ $1.98` has read `1B$1,98`, and unrepaired
 /// it became the name of the next item, taking that item's price.
+/// A missing dollar sign is repaired separately below, only when a multi-unit
+/// row's own trailing total proves the substitution to the cent.
 pub(crate) fn normalize_quantity_ocr(text: &str) -> String {
     static COUNT: OnceLock<Regex> = OnceLock::new();
     let count = COUNT.get_or_init(|| {
@@ -49,7 +51,35 @@ pub(crate) fn normalize_quantity_ocr(text: &str) -> String {
             c.get(4).map_or("", |m| m.as_str())
         );
     }
-    text.to_string()
+    recover_count_unit_dollar(text).unwrap_or_else(|| text.to_string())
+}
+
+/// A count row can independently prove that OCR read its `$` as `8`:
+/// `2 @ 82.59 5.18H` means `2 @ $2.59 5.18H`. Require a separate trailing
+/// total, at least two units, and exact arithmetic before changing the glyph.
+/// Without this repair, text pairing treats the amount as another item's
+/// drifted price, even though grouping kept it on the correct count row.
+fn recover_count_unit_dollar(text: &str) -> Option<String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let caps = RE
+        .get_or_init(|| {
+            Regex::new(r"^\s*(\d+)\s*@\s*8(\d+\.\d{2})\s+\$?(\d+\.\d{2})(?:\s*[HhTtJjGgPp])*\s*$")
+                .unwrap()
+        })
+        .captures(text)?;
+    let quantity: i32 = caps.get(1)?.as_str().parse().ok()?;
+    let unit_token = caps.get(2)?;
+    let unit = crate::money::Money::parse_strict(unit_token.as_str()).ok()?;
+    let total = crate::money::Money::parse_strict(caps.get(3)?.as_str()).ok()?;
+    if quantity < 2
+        || unit <= crate::money::Money::ZERO
+        || unit.checked_mul_int(i64::from(quantity)) != Some(total)
+    {
+        return None;
+    }
+    let mut repaired = text.to_string();
+    repaired.replace_range(unit_token.start() - 1..unit_token.start(), "$");
+    Some(repaired)
 }
 
 /// What a parser warning *is*, as a value rather than as English prose.
@@ -636,4 +666,37 @@ pub struct ReceiptWarning {
     pub kind: ReceiptWarningKind,
     pub message: String,
     pub after_item_index: Option<usize>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_quantity_ocr;
+
+    #[test]
+    fn a_unit_dollar_requires_an_independent_exact_count_total() {
+        for (input, expected) in [
+            ("2 @ 82.59 5.18H", "2 @ $2.59 5.18H"),
+            ("3@81.25 $3.75", "3@$1.25 $3.75"),
+            (" 2 @ 82.99 5.98 h ", " 2 @ $2.99 5.98 h "),
+        ] {
+            assert_eq!(normalize_quantity_ocr(input), expected);
+        }
+        for unchanged in [
+            "2 @ 82.59",                      // no independent total
+            "1 @ 82.59 2.59H",                // one unit only restates the price
+            "2 @ 82.59 5.17H",                // even one cent is a contradiction
+            "2 @ 82.59 165.18",               // a real 82.59 unit price
+            "2 @ $82.59 5.18H",               // an explicit dollar sign
+            "2 @ 2.59 5.18H",                 // no substituted glyph
+            "2 @ 92.59 5.18H",                // another glyph is not evidence
+            "2 @ 80.00 0.00",                 // zero provides no evidence
+            "2 @ 82.59 5.18H 9.18",           // another amount makes it ambiguous
+            "PRODUCT 2 @ 82.59 5.18H",        // prose must not be rewritten
+            "2 @ ８2.59 5.18H",               // not the ASCII glyph we recognize
+            "999999999999 @ 82.59 5.18",      // overflowing quantity
+            "2 @ 892233720368547758.07 5.18", // overflowing product
+        ] {
+            assert_eq!(normalize_quantity_ocr(unchanged), unchanged);
+        }
+    }
 }
