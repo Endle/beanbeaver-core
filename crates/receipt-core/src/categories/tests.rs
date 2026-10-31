@@ -506,6 +506,16 @@ fn semantic_classification_yields_expected_key_and_tags() {
         .iter()
         .any(|x| x == "grocery/drink/energy_drink"));
     assert_eq!(key("Cocomax Coconut Wtr").as_deref(), Some("grocery/drink"));
+    assert_eq!(
+        key("Eng Drk Ultra ViceGu").as_deref(),
+        Some("grocery/drink")
+    );
+    assert!(tags("Eng Drk Ultra ViceGu")
+        .iter()
+        .any(|x| x == "grocery/drink/energy_drink"));
+    for unrelated in ["ENG", "DRK", "ENG DRY", "LENGTH DRK"] {
+        assert_eq!(key(unrelated), None, "{unrelated}");
+    }
 
     // MARUTAI is a project-only override; public rules must not classify it.
     assert_eq!(key("MARUTAI"), None);

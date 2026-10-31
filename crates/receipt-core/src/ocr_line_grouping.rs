@@ -611,10 +611,11 @@ fn is_priced_in_savings_label(text: &str) -> bool {
 /// of the subtotal (FreshCo's `INSTANT SAVINGS`), as opposed to the priced-in
 /// notices above. Anchored at the start so the summary rows that merely contain
 /// the word ("Your Total Savings", "Discounts & Specials", both of which carry a
-/// positive figure) keep claiming their own amounts.
+/// positive figure) keep claiming their own amounts. OCR sometimes joins the
+/// two words; that must not turn a discount into an ordinary price claimant.
 fn is_reduction_label(text: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)^\s*INSTANT\s+SAVINGS\b").unwrap())
+    RE.get_or_init(|| Regex::new(r"(?i)^\s*INSTANT\s*SAVINGS\b").unwrap())
         .is_match(text)
 }
 
@@ -2203,6 +2204,26 @@ mod tests {
             lines.contains(&"Sprite Zero $53.94 HC".to_string()),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn joined_savings_label_keeps_discount_and_next_item_separate() {
+        // OCR can lose the space in the discount label. Its negative amount
+        // sits in MIDDLE, while the next item's RIGHT price overlaps both
+        // labels. Claiming that price drops the item and changes the discount.
+        for label in ["INSTANT SAVINGS", "INSTANTSAVINGS"] {
+            let dets = vec![
+                det_span(label, 40.0, 100.0, 140.0),
+                det_span("-$2.00", 650.0, 110.0, 137.0),
+                det_span("Eggs Large", 40.0, 128.0, 163.0),
+                det_span("$6.49 C", 750.0, 130.0, 163.0),
+            ];
+            let lines = rendered(&dets, 1000.0);
+            assert_eq!(
+                lines,
+                [format!("{label} -$2.00"), "Eggs Large $6.49 C".into()]
+            );
+        }
     }
 
     #[test]
