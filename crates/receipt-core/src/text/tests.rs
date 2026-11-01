@@ -1988,3 +1988,33 @@ fn a_lost_unit_dollar_does_not_shift_equal_priced_counted_items() {
     assert_eq!(outcome.items[2].quantity, 2);
     assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
 }
+
+#[test]
+fn dollar_sign_before_the_price_stays_with_the_price() {
+    // FreshCo prints `<name> $<price> <flags>`. The price match starts at the
+    // digits, so its `$` used to stay on the description (`Eggs Large $`).
+    let rows = [
+        "Eggs Large $9.79 C",
+        "Soft Drink Orange $8.99 HC",
+        "D9 -$1.96",
+    ]
+    .map(String::from);
+    let parsed = extract_text_items(&rows, &HashSet::new());
+    let got: Vec<(&str, Money)> = parsed
+        .items
+        .iter()
+        .map(|item| (item.description.as_str(), item.price))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("Eggs Large", Money::from_cents(979)),
+            ("Soft Drink Orange", Money::from_cents(899)),
+            ("D9", Money::from_cents(-196)),
+        ]
+    );
+    assert!(parsed
+        .items
+        .iter()
+        .all(|item| !item.category_source.ends_with('$')));
+}

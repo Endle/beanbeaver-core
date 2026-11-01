@@ -494,6 +494,15 @@ pub(super) fn inline_item(plan: &PricePlan, price_cents: Money) -> ParsedTextIte
         .replace(&desc_clean, "")
         .trim()
         .to_string();
+    // The price match starts at the amount's digits, so a `$` printed in front
+    // of it stays on the end of the row's text: `Eggs Large $9.79 C` described
+    // the item as `Eggs Large $`. That `$` belongs to the price, which has
+    // already been counted, so it comes off here. A row that is nothing but
+    // `$` keeps it, so the row's text is never emptied.
+    let desc_clean = match desc_clean.strip_suffix('$') {
+        Some(head) if !head.trim().is_empty() => head.trim_end().to_string(),
+        _ => desc_clean,
+    };
     // A leading-sign amount (`-2.99H`, `-$1.96`) starts at its digits, so the
     // sign it was read with is still on the end of the row's text: a refund's
     // `Suntory Pepsi Cola Zero P -2.99H` described the item as `... P -`. The
