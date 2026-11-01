@@ -395,7 +395,7 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0015"
-keywords = ["BREAD", "BAGEL", "CROISSANT", "MUFFIN", "DONUT", "DOUGHNUT", "PASTRY", "CAKE", "PIE", "COOKIE", "COOKIES", "BAGUETTE", "BUN", "BUNS", "TOAST", "ENGLISH MUFFIN", "TORTILLA", "PITA", "NAAN", "FLATBREAD", "WAFFLE", "PANCAKE", "PORTUGUESE TART", "EGG TART"]
+keywords = ["BREAD", "BAGEL", "CROISSANT", "MUFFIN", "DONUT", "DOUGHNUT", "PASTRY", "CAKE", "PIE", "COOKIE", "COOKIES", "BAGUETTE", "BUN", "BUNS", "TOAST", "ENGLISH MUFFIN", "TORTILLA", "PITA", "NAAN", "FLATBREAD", "WAFFLE", "PANCAKE", "PORTUGUESE TART", "EGG TART", "PANETTONE"]
 tags = ["grocery/bakery"]
 priority = 0
 exact_only = false
