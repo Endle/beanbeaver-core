@@ -474,10 +474,14 @@ pub fn extract_merchant_details(lines: &[String]) -> MerchantDetails {
     if out.store_number.is_none() {
         // The printed header is "Term Tran Store Oper <date>", but a slanted
         // photo splits it across OCR rows, so match either neighbour pair:
-        // "Tran Store 01/02/26" over "Term Oper" lost "STORE OPER" entirely.
+        // "Tran Store 01/02/26" over "Term Oper" lost "STORE OPER" entirely,
+        // and the opposite slant gives "Term Store" over "Tran Oper 01/02/26".
         for (index, line) in lines.iter().enumerate() {
             let upper = line.to_ascii_uppercase();
-            if !upper.contains("STORE OPER") && !upper.contains("TRAN STORE") {
+            if !["STORE OPER", "TRAN STORE", "TERM STORE"]
+                .iter()
+                .any(|pair| upper.contains(pair))
+            {
                 continue;
             }
             for row in lines
@@ -1039,6 +1043,14 @@ mod tests {
     fn freshco_footer_header_split_across_rows_still_finds_store() {
         let found = extract_merchant_details(&lines(
             "APPROVED - THANK YOU\nTran Store 01/02/26\nTerin Oper\n1234 5678 101 12:00:00",
+        ));
+        assert_eq!(found.store_number.as_deref(), Some("5678"));
+    }
+
+    #[test]
+    fn freshco_footer_header_split_the_other_way_still_finds_store() {
+        let found = extract_merchant_details(&lines(
+            "APPROVED - THANK YOU\nTerm Store\nTran Oper 01/02/26\n1234 5678 101 12:00:00",
         ));
         assert_eq!(found.store_number.as_deref(), Some("5678"));
     }
