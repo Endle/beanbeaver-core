@@ -22,6 +22,15 @@ implemented here.
   row: identical products share a number, so a fallback that always ran made
   them permanently ambiguous — both real two-pack receipts in the corpus were
   `unresolved: ["association"]` on clean OCR until this was measured.
+- Costco Gift of Membership (`GOM GS ONT`: GOM, then the tier, then the
+  province). It has no item number. Costco is the issuer. The row under it
+  prints `GI <digits> ACTIVATED`, and that reference is kept under the label
+  `GI`. It is not treated as a `PC` reference. The card is redeemed for a
+  membership, so no count, denomination or face value is read. The reference
+  row is also kept out of the item: line grouping types `GI` and `PC`
+  reference rows alike (`common::activation_reference`), so a reference row
+  that overlaps the card's price cannot claim it and merge into the card's
+  name.
 - Explicit pack notation such as `DOORDASH2X50`: two cards, denomination 5000
   cents, and derived total face value 10000 cents. The paid price stays on the
   item. A price of 40000 cents on `LCBO CARD` does not establish loaded value.
@@ -35,8 +44,9 @@ implemented here.
   `association`. The same block for an ordinary card payment says `PURCHASE`
   and is ignored. The slip names no issuer, so `issuer` stays absent.
 
-A `PC` reference is preserved under that label. It is not an individual card
-identity and is not linked to redemption identifiers.
+A `PC` or `GI` reference is preserved under its printed label. Neither is
+treated as an individual card identity, and neither is linked to redemption
+identifiers.
 
 ## Data contract
 

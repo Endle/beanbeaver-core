@@ -768,14 +768,18 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0030"
-keywords = ["SHAMPOO", "CONDITIONER", "BODY WASH", "SOAP", "HAND SOAP", "LOTION", "MOISTURIZER", "SUNSCREEN", "DEODORANT", "ANTIPERSPIRANT", "RAZOR", "SHAVING", "COTTON", "COTTON BALL", "Q-TIP", "SWAB", "BAND-AID", "BANDAGE", "FIRST AID", "FEMININE", "TAMPON", "PAD", "PANTY LINER"]
+# DOVE is the soap and body wash brand. Costco prints its body wash as
+# "DOVE 2PK BW". The same name is also a chocolate brand. On a line that names
+# the chocolate, the snacks rule's longer CHOCOLATE keyword outranks DOVE at
+# equal priority.
+keywords = ["SHAMPOO", "CONDITIONER", "BODY WASH", "SOAP", "HAND SOAP", "LOTION", "MOISTURIZER", "SUNSCREEN", "DEODORANT", "ANTIPERSPIRANT", "RAZOR", "SHAVING", "COTTON", "COTTON BALL", "Q-TIP", "SWAB", "BAND-AID", "BANDAGE", "FIRST AID", "FEMININE", "TAMPON", "PAD", "PANTY LINER", "DOVE"]
 tags = ["personal_care"]
 priority = 0
 exact_only = false
 
 [[rules]]
 id = "legacy_0031"
-keywords = ["TOOTHPASTE", "TOOTHBRUSH", "MOUTHWASH", "DENTAL FLOSS", "FLOSS", "SONICARE", "COLGATE", "PRONAMEL", "SENSODYNE"]
+keywords = ["TOOTHPASTE", "TOOTHBRUSH", "MOUTHWASH", "DENTAL FLOSS", "FLOSS", "SONICARE", "COLGATE", "PRONAMEL", "SENSODYNE", "LISTERINE"]
 tags = ["personal_care/tooth"]
 priority = 0
 exact_only = false
@@ -1305,6 +1309,18 @@ id = "lottery_ticket"
 # Exact only — LOTTO is one letter from LOTTE, a snack brand.
 keywords = ["LOTTO", "LOTTERY", "6/49"]
 tags = ["entertainment/lottery"]
+priority = 0
+exact_only = true
+
+[[rules]]
+id = "costco_gift_of_membership"
+# Costco prints a Gift of Membership as "GOM GS ONT": GOM, then the tier
+# (GS = Gold Star), then the province. It has no item number. The row under it
+# is the activation reference, "GI <digits> ACTIVATED", which gift-card
+# extraction reads. Exact only, because three letters have no safe fuzzy
+# matches.
+keywords = ["GOM"]
+tags = ["membership"]
 priority = 0
 exact_only = true
 

@@ -376,6 +376,13 @@ fn program(description: &str) -> Option<&'static str> {
     // it would claim TUBER, and Costco prints the card as `373 UBER CARDS`.
     static UBER: OnceLock<Regex> = OnceLock::new();
     let uber = UBER.get_or_init(|| Regex::new(r"(?i)\bUBER\b").unwrap());
+    // A Costco Gift of Membership prints as `GOM <tier> <province>`
+    // (`GOM GS ONT`), with no item number. Costco issues it, so the issuer
+    // is Costco. The card is redeemed for a membership, so it has no
+    // balance, and no face value is read for it. Matched as a word because
+    // a three-letter token is too short to be safe as a substring.
+    static GOM: OnceLock<Regex> = OnceLock::new();
+    let gom = GOM.get_or_init(|| Regex::new(r"^\s*(?:\d+\s+)?GOM\b").unwrap());
     let d = compact(description);
     if d.contains("DOORDASH") {
         Some("DoorDash")
@@ -383,6 +390,8 @@ fn program(description: &str) -> Option<&'static str> {
         Some("LCBO")
     } else if uber.is_match(description) {
         Some("Uber")
+    } else if gom.is_match(description) {
+        Some("Costco")
     } else {
         None
     }
@@ -482,11 +491,19 @@ pub(crate) fn attach_purchases(doc: &OcrDocument, merchant: &str, items: &mut [P
             })
             .unwrap_or(rows.len());
         let mut refs = Vec::new();
+        let mut gi_reference = false;
         let mut activated = false;
         let mut unread_reference = false;
         let mut negative_activation = false;
         for row in &rows[pos..end] {
             let upper = row.text.to_ascii_uppercase();
+            // A Gift of Membership's reference is printed as `GI <digits>`.
+            // Keep that label. Do not assume it means the same as `PC`.
+            if let Some(("GI", reference)) = crate::common::activation_reference(row.text) {
+                gi_reference = true;
+                refs.push(reference.to_string());
+                evidence(&mut out.evidence, "reference", row);
+            }
             if upper.starts_with("PC ") || upper.starts_with("PC:") || upper == "PC" {
                 out.reference_label = Some("PC".into());
                 evidence(&mut out.evidence, "reference", row);
@@ -518,7 +535,7 @@ pub(crate) fn attach_purchases(doc: &OcrDocument, merchant: &str, items: &mut [P
             "reference",
         );
         if !refs.is_empty() {
-            out.reference_label = Some("PC".into());
+            out.reference_label = Some(if gi_reference { "GI" } else { "PC" }.into());
         }
         if negative_activation {
             unresolved(&mut out.unresolved_fields, "activation");

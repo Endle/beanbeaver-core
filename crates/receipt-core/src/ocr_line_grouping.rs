@@ -269,17 +269,15 @@ fn is_points_label(text: &str) -> bool {
         .is_match(text)
 }
 
-/// True for gift-card activation code rows: a "PC" prefix followed by nothing
-/// but a long digit run (e.g. Costco's "PC 339919953764897" printed between a
-/// gift-card label and its amount). The prefix is required: a bare digit run
+/// True for gift-card activation code rows. The row is a `PC` or `GI` prefix,
+/// then a long digit run, then optionally `ACTIVATED`. Costco prints
+/// "PC 339919953764897" between a gift-card label and its amount, and prints
+/// `GI <digits> ACTIVATED` under a Gift of Membership. See
+/// [`crate::common::activation_reference`]. The prefix is required: a bare digit run
 /// can be a UPC row that legitimately carries its multi-line item's price
 /// (Loblaw prints beer as "COORS LIGHT..." over "05716323055  13.99").
 fn is_code_stub_label(text: &str) -> bool {
-    let Some(rest) = text.trim().strip_prefix("PC") else {
-        return false;
-    };
-    let rest = rest.trim();
-    rest.len() >= 9 && rest.chars().all(|ch| ch.is_ascii_digit())
+    crate::common::activation_reference(text).is_some()
 }
 
 /// A standalone product code, as opposed to a code followed by a description
@@ -1972,6 +1970,46 @@ mod tests {
         assert!(rendered.contains(&"TAX 5.13".to_string()), "{rendered:?}");
         assert!(
             rendered.contains(&"***TOTAL 578.44".to_string()),
+            "{rendered:?}"
+        );
+    }
+
+    #[test]
+    fn a_gift_of_membership_reference_does_not_claim_the_cards_price() {
+        // Costco 2026-11-08 (real pixel geometry, width 872; synthetic serial).
+        // The 73.45 leans down onto the `GI <serial> ACTIVATED` row printed
+        // under `GOM GS ONT`. When the reference row could claim it, the two
+        // rows became one line, and the item was named
+        // `GI <serial> ACTIVATED GOM GS ONT`.
+        let dets = vec![
+            det_box("1346909 KS ORG 2% 4L", 195.0, 570.0, 611.0, 668.0),
+            det_box("10.29", 656.0, 757.0, 628.0, 672.0),
+            det_box("GOM GS ONT", 342.0, 534.0, 658.0, 706.0),
+            det_box("73.45", 655.0, 758.0, 667.0, 715.0),
+            det_box("GI 6000000000000001 ACTIVATED", 102.0, 665.0, 695.0, 750.0),
+            det_box("295371 LISTERINE TZ", 213.0, 573.0, 738.0, 791.0),
+            det_box("15.99", 659.0, 758.0, 754.0, 794.0),
+        ];
+        let lines = group_detections_into_lines(&dets, 872.0);
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|&i| dets[i].text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect();
+        assert!(
+            rendered.contains(&"GOM GS ONT 73.45".to_string()),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.contains(&"GI 6000000000000001 ACTIVATED".to_string()),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.contains(&"295371 LISTERINE TZ 15.99".to_string()),
             "{rendered:?}"
         );
     }

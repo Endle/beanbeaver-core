@@ -235,6 +235,13 @@ display = "Entertainment"
 path = "entertainment/lottery"
 display = "Lottery"
 
+# A root of its own: a membership is not a product the store sells off the
+# shelf. Costco sells it as a Gift of Membership card (`GOM GS ONT`), a Gold
+# Star membership with the HST built into the price.
+[[tags]]
+path = "membership"
+display = "Membership"
+
 # ------------------------------------------------------------------ accounts
 #
 # Tag path -> beancount account. Overridable: an override document supplying its
@@ -281,6 +288,7 @@ display = "Lottery"
 "health/pharmacy" = "Expenses:Health:Pharmacy"
 "shopping/clothing" = "Expenses:Shopping:Clothing"
 "entertainment/lottery" = "Expenses:Entertainment:Lottery"
+"membership" = "Expenses:Membership"
 # No rule references this one today. Kept rather than dropped: now that
 # [accounts] is a user-facing table, an unused default is a starting point, not
 # dead code — and LCBO CARD declares plain `gift_card`, not this path, so keeping
