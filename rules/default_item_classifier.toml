@@ -62,7 +62,10 @@
 #           OCR confusion pair, it matched the "OREC" that "STORE COUPONS"
 #           leaves when spaces are dropped, and filed a No Frills coupon line
 #           as Snacks. Oreo is printed in full.
-exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD", "ORANGE", "POCKY", "SMOOTHIE", "FRESH SMOOTH TO", "BLACK TEA", "BLACK TIGER", "BLACK TIE", "OKAR", "FACE CREAM", "EYE CREAM", "DAY CREAM", "ORION", "FANT", "OREO"]
+#   TDR     (staple, noodle_brands) is 汤达人's three-letter code on Foody Mart
+#           and Asia Food Mart. At three letters, its fuzzy neighbourhood is
+#           the same as TPD's, so it matches as `\bTDR\b` and nothing else.
+exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD", "ORANGE", "POCKY", "SMOOTHIE", "FRESH SMOOTH TO", "BLACK TEA", "BLACK TIGER", "BLACK TIE", "OKAR", "FACE CREAM", "EYE CREAM", "DAY CREAM", "ORION", "FANT", "OREO", "TDR"]
 
 # BRANDS — text that names the maker, blanked out before any keyword is matched.
 #
@@ -448,7 +451,13 @@ id = "legacy_0017"
 # Pctato as POTATO. With C/O an OCR confusion pair, "SWEET POTATO" (11) took it
 # from NOODLE (6) for Vegetable, and a correctly printed one would always have
 # gone that way. Corpus: sunny_foodmart 2026-03-10 $25.44.
-keywords =["RICE", "PASTA", "NOODLE", "NOODLES", "DRIED NOOD", "SPAGHETTI", "MACARONI", "PENNE", "FLOUR", "SUGAR", "OIL", "OLIVE OIL", "CANOLA OIL", "VINEGAR", "OATMEAL", "OATS", "CEREAL", "QUINOA", "COUSCOUS", "BARLEY", "MILLET", "LENTIL", "LENTILS", "CHICKPEA", "BEAN", "BEANS", "BLACK BEAN", "KIDNEY BEAN", "PINTO BEAN", "INSTANT NOODLE", "INSTANT NOODLES", "INSTANT NOO", "LONGKOU", "VERMICELLI", "SWEET POTATO VERMICELLI", "RAMEN", "DANDAN", "CORN STARCH", "CORNSTARCH", "SHODOSHIMA", "SHISO & SEAFOOD", "SWEET POTATO NOODLE"]
+#
+# "CHINKIANG" is Chinkiang (镇江) vinegar. On Asia Food Mart it prints as "Gold
+# Plum Chinkiang Vineg": the 25-column print cuts VINEGAR, and the brand's PLUM
+# (4) filed the bottle under Fruit. The 9-letter name wins on `keyword_length`
+# at equal priority. It goes with VINEGAR, which is already in this rule.
+# Corpus: asia_food_mart 2026-10-28 $124.78.
+keywords =["RICE", "PASTA", "NOODLE", "NOODLES", "DRIED NOOD", "SPAGHETTI", "MACARONI", "PENNE", "FLOUR", "SUGAR", "OIL", "OLIVE OIL", "CANOLA OIL", "VINEGAR", "OATMEAL", "OATS", "CEREAL", "QUINOA", "COUSCOUS", "BARLEY", "MILLET", "LENTIL", "LENTILS", "CHICKPEA", "BEAN", "BEANS", "BLACK BEAN", "KIDNEY BEAN", "PINTO BEAN", "INSTANT NOODLE", "INSTANT NOODLES", "INSTANT NOO", "LONGKOU", "VERMICELLI", "SWEET POTATO VERMICELLI", "RAMEN", "DANDAN", "CORN STARCH", "CORNSTARCH", "SHODOSHIMA", "SHISO & SEAFOOD", "SWEET POTATO NOODLE", "CHINKIANG"]
 tags = ["grocery/staple"]
 priority = 0
 exact_only = false
@@ -536,7 +545,16 @@ id = "legacy_0021"
 # a beef-flavoured vegetarian snack that BEEF (4) filed as Meat — the BUTTER
 # FLAVORED argument again. Keyed on the brand rather than "BEEF FLAVOR", which
 # would also take a beef-flavour instant noodle away from NOODLE (6).
-keywords = ["BUTTER FLAVORED", "BUTTER FLAVOURED", "POTATO CHIPS", "CHIP", "CHIPS", "POPCORN", "PRETZEL", "NUTS", "ALMONDS", "CASHEWS", "PEANUTS", "WALNUTS", "PISTACHIOS", "TRAIL MIX", "GRANOLA BAR", "PROTEIN BAR", "ENERGY BAR", "CANDY", "CHOCOLATE", "GUMMY", "GUMMIES", "SKITTLES", "M&M", "SNICKERS", "TWIX", "KITKAT", "REESE", "OREO", "GOLDFISH", "CHEETOS", "DORITOS", "PRINGLES", "LAYS", "RUFFLES", "TOSTITOS", "CHEEZ-IT", "RITZ", "SENBEI", "RICE CRACKER", "SACHIMA", "EGG FLAVOR", "EGG FLAVOU", "GRILLING BAMBOO", "BISCUIT", "ORION", "WEI LONG", "WEILONG", "ZHENXIANG"]
+#
+# "PEA SNACK" is 上好佳荷蘭豆, a puffed pea snack, which the produce rule's
+# PEA (3) filed as Vegetable. The phrase wins on `keyword_length` at equal
+# priority. OCR reads it "Pea Snaok", and C/O is an OCR confusion pair.
+# "SEAWEED" is the same receipt's "*HEW Seaweed Flower" (海知味海带花), a kelp
+# snack that matched nothing. Every other seaweed line in the corpus is a snack:
+# the Fish Cracker Seawee lines (already Snacks at priority 80), "Potato Puffed
+# Food Seawee" and T&T's "TKN BIG ROLL GRILLED SEAWEED". Corpus:
+# asia_food_mart 2026-10-28 $124.78.
+keywords = ["BUTTER FLAVORED", "BUTTER FLAVOURED", "POTATO CHIPS", "CHIP", "CHIPS", "POPCORN", "PRETZEL", "NUTS", "ALMONDS", "CASHEWS", "PEANUTS", "WALNUTS", "PISTACHIOS", "TRAIL MIX", "GRANOLA BAR", "PROTEIN BAR", "ENERGY BAR", "CANDY", "CHOCOLATE", "GUMMY", "GUMMIES", "SKITTLES", "M&M", "SNICKERS", "TWIX", "KITKAT", "REESE", "OREO", "GOLDFISH", "CHEETOS", "DORITOS", "PRINGLES", "LAYS", "RUFFLES", "TOSTITOS", "CHEEZ-IT", "RITZ", "SENBEI", "RICE CRACKER", "SACHIMA", "EGG FLAVOR", "EGG FLAVOU", "GRILLING BAMBOO", "BISCUIT", "ORION", "WEI LONG", "WEILONG", "ZHENXIANG", "PEA SNACK", "SEAWEED"]
 tags = ["grocery/snacks"]
 priority = 0
 exact_only = false
@@ -607,8 +625,14 @@ exact_only = false
 # "Nongfuspring - Orange Pee(l)" is a bottled tea, not fruit — ORANGE would
 # otherwise win at priority 0; "Heytea Kale Plant Beverag(e)" is a juice, not
 # a KALE vegetable.
+#
+# "LIZIYUAN" (李子园) makes only sweetened milk drinks, and names them by
+# flavour: Asia Food Mart's "Liziyuan Melon Sweet Drin" and "Liziyuan
+# Strawberry Milk" were both filed as Fruit on MELON and STRAWBERRY. They are
+# drinks, like the Want Want Milk Drink on the same receipt. Corpus:
+# asia_food_mart 2026-10-28 $124.78.
 id = "beverage_brands"
-keywords = ["NONGFU", "HEYTEA"]
+keywords = ["NONGFU", "HEYTEA", "LIZIYUAN"]
 tags = ["grocery/drink"]
 priority = 1
 exact_only = false
@@ -627,7 +651,15 @@ id = "noodle_brands"
 # "INDOMIE" is the same case: Bestco prints "Indomie Mi Goreng Fried N", cut
 # off before NOODLE, and nothing else on the line is a keyword. Corpus:
 # bestco_fresh 2026-09-26 $108.89.
-keywords = ["NISSIN", "PROSPER UNITY", "INDOMIE"]
+#
+# "NONG SHIM" (农心) is "*Nong Shim Spicy Instant R" (辛拉面, Shin Ramyun) on
+# Asia Food Mart: the print cuts it before RAMEN or NOODLE, and nothing else on
+# the line is a keyword. "TDR" (汤达人) is the same receipt's "*TDR Korean
+# Style Spicy Be", cut before its noodle the same way. Foody Mart's "TDR -
+# Instant Pork Bone N" was taken by PORK, and "TDR -Instant Noodles Bee"
+# already books here. TDR is exact-only (see `exact_only_keywords`). Corpus:
+# asia_food_mart 2026-10-28 $124.78, foody_mart 2026-03-18 $97.05.
+keywords = ["NISSIN", "PROSPER UNITY", "INDOMIE", "NONG SHIM", "NONGSHIM", "TDR"]
 tags = ["grocery/staple"]
 priority = 1
 exact_only = false
