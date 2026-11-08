@@ -189,6 +189,32 @@ fn uber_cards_are_a_purchase_program() {
     );
     assert!(items[3].gift_card.is_none());
 }
+/// Costco Gift of Membership: `GOM GS ONT` has no item number, and the row
+/// under it prints a `GI` reference with `ACTIVATED`. The reference keeps its
+/// own label. The membership is not a balance, so no face value is read. A
+/// product that only contains the letters GOM is not a membership.
+#[test]
+fn a_gift_of_membership_keeps_its_gi_reference() {
+    let doc = OcrDocument::from_text("1346909 KS ORG 2% 4L 10.29\nGOM GS ONT 73.45\nGI 6000000000000001 ACTIVATED\n295371 LISTERINE TZ 15.99\n123 GOMASIO 4.99\nSUBTOTAL 104.72");
+    let mut items = vec![
+        item("1346909 KS ORG 2% 4L"),
+        item("GOM GS ONT"),
+        item("295371 LISTERINE TZ"),
+        item("123 GOMASIO"),
+    ];
+    attach_purchases(&doc, "COSTCO", &mut items);
+    let gift = items[1].gift_card.as_ref().unwrap();
+    assert_eq!(gift.issuer.as_deref(), Some("Costco"));
+    assert_eq!(gift.reference_label.as_deref(), Some("GI"));
+    assert_eq!(gift.reference.as_deref(), Some("6000000000000001"));
+    assert_eq!(gift.activation, GiftCardActivation::Activated);
+    assert_eq!(gift.card_count, None);
+    assert_eq!(gift.total_face_value_cents, None);
+    assert!(gift.unresolved_fields.is_empty());
+    assert!(items[0].gift_card.is_none());
+    assert!(items[2].gift_card.is_none());
+    assert!(items[3].gift_card.is_none());
+}
 /// What `parse_receipt` actually emits for two identical packs — the item
 /// number populated on both, and stripped from one description but not the
 /// other (`costco_biz_20260125`); or the same number on both with one OCR

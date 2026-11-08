@@ -12,6 +12,32 @@ pub(crate) fn normalize_amount_ocr(text: &str) -> String {
         .into_owned()
 }
 
+/// A Costco gift-card activation reference row, as `(label, reference)`.
+///
+/// Costco prints the reference under the card it activates. Retail packs use
+/// `PC <digits>`. A Gift of Membership uses `GI <digits>`, with `ACTIVATED`
+/// on the same row: `GOM GS ONT` / `GI 6000000000000001 ACTIVATED`.
+/// `ACTIVATED` can be a separate detection or part of the reference row.
+///
+/// The row is an annotation. It has no price and is not part of the product
+/// name. On a leaning photo it overlaps the card's price. If it claims that
+/// price, it also merges with the card's name, and the serial lands in the
+/// item description. Grouping, the text path and gift-card extraction all
+/// read the row through this function, so they always agree.
+///
+/// The label must be uppercase and must be the whole first word. The
+/// reference must be at least nine digits. Nothing else may follow except
+/// `ACTIVATED`. Together these keep a product name like `PC MANGO CHUNKS`
+/// and a UPC row out.
+pub(crate) fn activation_reference(text: &str) -> Option<(&'static str, &str)> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let caps = RE
+        .get_or_init(|| Regex::new(r"^\s*(PC|GI)\s*(\d{9,})(?:\s+ACTIVATED)?\s*$").unwrap())
+        .captures(text)?;
+    let label = if &caps[1] == "PC" { "PC" } else { "GI" };
+    Some((label, caps.get(2)?.as_str()))
+}
+
 /// A damaged quantity/rate annotation with no reliable quantity or product name.
 /// It must neither claim another row's price nor become a product itself.
 /// OCR can fuse a single-unit count with an `@` read as 0/6/8, or read `$` as S.
@@ -724,7 +750,36 @@ pub struct ReceiptWarning {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_quantity_ocr;
+    use super::{activation_reference, normalize_quantity_ocr};
+
+    #[test]
+    fn activation_references_keep_their_printed_label() {
+        assert_eq!(
+            activation_reference("PC 339900000000001"),
+            Some(("PC", "339900000000001"))
+        );
+        assert_eq!(
+            activation_reference("PC339900000000001"),
+            Some(("PC", "339900000000001"))
+        );
+        assert_eq!(
+            activation_reference(" GI 6000000000000001 ACTIVATED "),
+            Some(("GI", "6000000000000001"))
+        );
+        for not_a_reference in [
+            "PC MANGO CHUNKS",                          // a product name
+            "PC 12345678",                              // too short for a reference
+            "gi 6000000000000001",                      // the label is uppercase
+            "GI 6000000000000001 ACTIVATED GOM GS ONT", // a merged product row
+            "05716323055",                              // a UPC row with no label
+        ] {
+            assert_eq!(
+                activation_reference(not_a_reference),
+                None,
+                "{not_a_reference}"
+            );
+        }
+    }
 
     #[test]
     fn a_unit_dollar_requires_an_independent_exact_count_total() {

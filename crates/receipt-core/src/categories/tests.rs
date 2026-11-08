@@ -95,6 +95,10 @@ fn public_classifier_categorizes_real_receipt_items() {
         // Sensodyne brand name, no generic "TOOTHPASTE" token on the line
         // (Costco 2026-07-29).
         ("5592654 PRONAMEL", "Expenses:PersonalCare:Tooth"),
+        // Mouthwash brand, no generic token on the line (Costco 2026-11-08).
+        ("295371 LISTERINE TZ", "Expenses:PersonalCare:Tooth"),
+        // Costco Gift of Membership (Gold Star, Ontario).
+        ("GOM GS ONT", "Expenses:Membership"),
         // gift card: denomination glued to the brand, matched mid-token
         ("399 DOORDASH2X50", "Expenses:Food:Restaurant:GiftCard"),
         // snacks — a boxed Panda cookie is packaged, not fresh bakery. The
@@ -200,6 +204,10 @@ fn public_classifier_categorizes_real_receipt_items() {
         ("LYSDL BATH P 059631882930", "Expenses:Home:HouseholdSupply"),
         // personal care
         ("443404 MARC ANTHONY", "Expenses:PersonalCare"),
+        // Dove body wash, abbreviated BW (Costco 2026-11-08)...
+        ("2058241 DOVE 2PK BW", "Expenses:PersonalCare"),
+        // ...while Dove chocolate stays a snack on the longer keyword.
+        ("DOVE DARK CHOCOLATE", "Expenses:Food:Grocery:Snacks"),
     ];
 
     // Build the bundled layers once; classify to a key then resolve to an
