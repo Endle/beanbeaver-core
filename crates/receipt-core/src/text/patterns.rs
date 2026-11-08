@@ -338,9 +338,18 @@ pub(crate) fn re_section_aisle_prefix() -> &'static Regex {
 /// stray dot between the two glyphs (`8.8 20-Hot Food A`). The dotted form is
 /// only taken with the `NN-` department number after it, so `8.8 OZ ...`
 /// stays an item.
+///
+/// OCR can also lose the space between the marker and the department number:
+/// `&&16-BBQ` and `88.01-Glocery KEW` (`&& 01-Grocery 雜貨`, Asia Food Mart
+/// 2026-10-28). That form also needs the `NN-` number and is taken only when a
+/// word of at least three letters follows it. `88.01` alone is a price, and
+/// `88.01-H` is a discount with a tax flag.
 pub(crate) fn re_dept_marker_prefix() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^(?:[&8]{2}\.?\s|[&8]\.[&8]\s+\d{2}\s*-)").unwrap())
+    RE.get_or_init(|| {
+        Regex::new(r"^(?:[&8]{2}\.?\s|[&8]{2}\.?\d{2}\s*-\s*[A-Z]{3}|[&8]\.[&8]\s+\d{2}\s*-)")
+            .unwrap()
+    })
 }
 
 pub(crate) fn re_total_ocr_variants() -> &'static Regex {

@@ -1806,6 +1806,59 @@ fn dotted_department_banner_donates_its_price_to_the_item_below() {
 }
 
 #[test]
+fn spaceless_department_banner_donates_its_price_to_the_item_below() {
+    // Asia Food Mart 2026-10-28: `&& 01-Grocery 雜貨` lost the space after its
+    // marker and read `88.01-Glocery KEW`, with the first item's price drifted
+    // up onto it. Not taken for a banner, it became an item of that name, and
+    // nothing established the drift, so further down an `<ON SALE>` subtext
+    // row took the next item's price and that item's name was lost.
+    let observed = text_items(
+        &[
+            "88.01-Glocery KEW 3.99",
+            "*Nong Shim Spicy Instant R",
+            "{NSALE>",
+            "Want Want Milk Drink 6.99H",
+            "*KSF Pork Bone Soup Noodle 6.99",
+            "(N SALE> 2.99",
+            "Cui Hong Instant Chilli P",
+            "(2) 6.99",
+            "Wei Long Fengchi Kelp Sou",
+            "Sub Total 20.96",
+        ],
+        2096,
+    );
+    assert_eq!(
+        observed,
+        vec![
+            (
+                "*Nong Shim Spicy Instant R".to_string(),
+                Money::from_cents(399)
+            ),
+            ("Want Want Milk Drink".to_string(), Money::from_cents(699)),
+            (
+                "*KSF Pork Bone Soup Noodle".to_string(),
+                Money::from_cents(699)
+            ),
+            (
+                "Cui Hong Instant Chilli P".to_string(),
+                Money::from_cents(299)
+            ),
+            (
+                "Wei Long Fengchi Kelp Sou (2)".to_string(),
+                Money::from_cents(699)
+            ),
+        ]
+    );
+    let banner = super::patterns::re_dept_marker_prefix();
+    assert!(banner.is_match("&&16-BBQMNM"));
+    // The spaceless form needs `NN-` and a word: a bare price, a discount with
+    // its tax flag, and a dotted price are not banners.
+    for not_a_banner in ["88.01 3.99", "88.01-H", "88.01-", "8801 TOFU 2.99"] {
+        assert!(!banner.is_match(not_a_banner), "{not_a_banner}");
+    }
+}
+
+#[test]
 fn reg_subtext_over_a_reconciling_weight_row_prices_the_name_above() {
     // Bestco 2026-02-13, read live: the REG marker row carries the beef's own
     // 15.08 (1.51 × 9.99), and the name above passes for the priced Pork

@@ -32,8 +32,9 @@ pub(crate) fn is_incomplete_quantity_ocr(text: &str) -> bool {
 /// `B` is another reading of the `@`, and the rate may come back with a comma
 /// decimal: Foody Mart's faint `1 @ $1.98` has read `1B$1,98`, and unrepaired
 /// it became the name of the next item, taking that item's price.
-/// A missing dollar sign is repaired separately below, only when a multi-unit
-/// row's own trailing total proves the substitution to the cent.
+/// A missing dollar sign, and a weight row's misread `@`, are repaired
+/// separately below, only when the row's own trailing total proves the
+/// substitution to the cent.
 pub(crate) fn normalize_quantity_ocr(text: &str) -> String {
     static COUNT: OnceLock<Regex> = OnceLock::new();
     let count = COUNT.get_or_init(|| {
@@ -51,7 +52,9 @@ pub(crate) fn normalize_quantity_ocr(text: &str) -> String {
             c.get(4).map_or("", |m| m.as_str())
         );
     }
-    recover_count_unit_dollar(text).unwrap_or_else(|| text.to_string())
+    recover_count_unit_dollar(text)
+        .or_else(|| recover_weight_rate_at(text))
+        .unwrap_or_else(|| text.to_string())
 }
 
 /// A count row can independently prove that OCR read its `$` as `8`:
@@ -59,18 +62,28 @@ pub(crate) fn normalize_quantity_ocr(text: &str) -> String {
 /// total, at least two units, and exact arithmetic before changing the glyph.
 /// Without this repair, text pairing treats the amount as another item's
 /// drifted price, even though grouping kept it on the correct count row.
+///
+/// The `@` can be lost at the same time, read as a `0` or `6` fused onto a
+/// one-digit count: Asia Food Mart 2026-10-28 printed `2 @ $2.59 5.18H` and
+/// OCR read `20 82.59 5.18H`. Unrepaired, that row became the name of the item
+/// above it. The same arithmetic decides it. 2 × 2.59 is 5.18, while a count
+/// of 20 would cost 51.80. The fused form is rewritten whole, as `2 @ $2.59`,
+/// because the count-row patterns need the `@` back as well.
 fn recover_count_unit_dollar(text: &str) -> Option<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let caps = RE
         .get_or_init(|| {
-            Regex::new(r"^\s*(\d+)\s*@\s*8(\d+\.\d{2})\s+\$?(\d+\.\d{2})(?:\s*[HhTtJjGgPp])*\s*$")
-                .unwrap()
+            Regex::new(
+                r"^\s*(?:(\d+)\s*@|(\d)[06])\s*8(\d+\.\d{2})\s+\$?(\d+\.\d{2})(?:\s*[HhTtJjGgPp])*\s*$",
+            )
+            .unwrap()
         })
         .captures(text)?;
-    let quantity: i32 = caps.get(1)?.as_str().parse().ok()?;
-    let unit_token = caps.get(2)?;
+    let quantity_token = caps.get(1).or_else(|| caps.get(2))?;
+    let quantity: i32 = quantity_token.as_str().parse().ok()?;
+    let unit_token = caps.get(3)?;
     let unit = crate::money::Money::parse_strict(unit_token.as_str()).ok()?;
-    let total = crate::money::Money::parse_strict(caps.get(3)?.as_str()).ok()?;
+    let total = crate::money::Money::parse_strict(caps.get(4)?.as_str()).ok()?;
     if quantity < 2
         || unit <= crate::money::Money::ZERO
         || unit.checked_mul_int(i64::from(quantity)) != Some(total)
@@ -78,7 +91,48 @@ fn recover_count_unit_dollar(text: &str) -> Option<String> {
         return None;
     }
     let mut repaired = text.to_string();
-    repaired.replace_range(unit_token.start() - 1..unit_token.start(), "$");
+    if caps.get(1).is_some() {
+        repaired.replace_range(unit_token.start() - 1..unit_token.start(), "$");
+    } else {
+        repaired.replace_range(quantity_token.end()..unit_token.start(), " @ $");
+    }
+    Some(repaired)
+}
+
+/// A weight row can prove that OCR misread its `@`, the way a count row proves
+/// a lost `$`. Asia Food Mart 2026-10-28 printed `1.37 lb @ $0.99/lb 1.36`
+/// and OCR read the `@` as `e`. No weight-row pattern took that row, so it
+/// became the name of the item above it (`Fresh Carrot` was lost). Count rows
+/// already read `e`, `€` and `©` as the `@` (see [`normalize_quantity_ocr`]).
+/// A weight row takes them only when weight × rate, rounded half up, is
+/// exactly the row's own trailing total: 1.37 × 0.99 = 1.3563, so 1.36.
+fn recover_weight_rate_at(text: &str) -> Option<String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let caps = RE
+        .get_or_init(|| {
+            Regex::new(&format!(
+                r"(?i)^\s*(\d+)\.(\d{{1,3}})\s*{WEIGHT_UNIT_CLASS}\s*([e€©])\s*\$(\d+\.\d{{2}})\s*/\s*\S{{1,3}}\s+\$?(\d+\.\d{{2}})(?:\s*[HTJGP])*\s*$"
+            ))
+            .unwrap()
+        })
+        .captures(text)?;
+    let whole: i64 = caps.get(1)?.as_str().parse().ok()?;
+    let fraction = caps.get(2)?.as_str();
+    let thousandths = whole
+        .checked_mul(1000)?
+        .checked_add(format!("{fraction:0<3}").parse::<i64>().ok()?)?;
+    let rate = crate::money::Money::parse_strict(caps.get(4)?.as_str()).ok()?;
+    let total = crate::money::Money::parse_strict(caps.get(5)?.as_str()).ok()?;
+    if thousandths <= 0 || rate <= crate::money::Money::ZERO {
+        return None;
+    }
+    let own_total = thousandths.checked_mul(rate.cents())?.checked_add(500)? / 1000;
+    if own_total != total.cents() {
+        return None;
+    }
+    let glyph = caps.get(3)?;
+    let mut repaired = text.to_string();
+    repaired.replace_range(glyph.range(), "@");
     Some(repaired)
 }
 
@@ -695,6 +749,48 @@ mod tests {
             "2 @ ８2.59 5.18H",               // not the ASCII glyph we recognize
             "999999999999 @ 82.59 5.18",      // overflowing quantity
             "2 @ 892233720368547758.07 5.18", // overflowing product
+        ] {
+            assert_eq!(normalize_quantity_ocr(unchanged), unchanged);
+        }
+    }
+
+    #[test]
+    fn an_at_fused_onto_the_count_is_restored_only_by_exact_arithmetic() {
+        for (input, expected) in [
+            ("20 82.59 5.18H", "2 @ $2.59 5.18H"),
+            ("26 82.59 5.18H", "2 @ $2.59 5.18H"),
+            ("30 81.25 $3.75", "3 @ $1.25 $3.75"),
+        ] {
+            assert_eq!(normalize_quantity_ocr(input), expected);
+        }
+        for unchanged in [
+            "20 82.59",        // no independent total
+            "10 82.59 2.59H",  // one unit only restates the price
+            "20 82.59 5.17H",  // even one cent is a contradiction
+            "20 82.59 51.80",  // twenty units would cost 51.80, not this
+            "120 82.59 5.18H", // the count is one digit, then the fused glyph
+            "20 92.59 5.18H",  // only `8` is read as the lost `$`
+        ] {
+            assert_eq!(normalize_quantity_ocr(unchanged), unchanged);
+        }
+    }
+
+    #[test]
+    fn a_weight_rows_misread_at_is_restored_only_by_exact_arithmetic() {
+        for (input, expected) in [
+            ("1.37 1b e $0.99/1b 1.36", "1.37 1b @ $0.99/1b 1.36"),
+            ("1.84 lb € $1.29/lb 2.37H", "1.84 lb @ $1.29/lb 2.37H"),
+            ("0.5 kg © $4.40/kg 2.20", "0.5 kg @ $4.40/kg 2.20"),
+        ] {
+            assert_eq!(normalize_quantity_ocr(input), expected);
+        }
+        for unchanged in [
+            "1.37 1b e $0.99/1b",      // no independent total
+            "1.37 1b e $0.99/1b 1.35", // 1.3563 rounds to 1.36, not 1.35
+            "1.37 1b e $0.99/1b 2.99", // another item's drifted price
+            "1.37 1b x $0.99/1b 1.36", // `x` is not a reading of `@`
+            "1.37 1b @ $0.99/1b 1.36", // already readable
+            "Fresh 1.37 1b e $0.99/1b 1.36",
         ] {
             assert_eq!(normalize_quantity_ocr(unchanged), unchanged);
         }
