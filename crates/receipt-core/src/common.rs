@@ -83,24 +83,28 @@ pub(crate) fn normalize_quantity_ocr(text: &str) -> String {
         .unwrap_or_else(|| text.to_string())
 }
 
-/// A count row can independently prove that OCR read its `$` as `8`:
+/// A count row can independently prove that OCR read its `$` as `8` or `9`:
 /// `2 @ 82.59 5.18H` means `2 @ $2.59 5.18H`. Require a separate trailing
 /// total, at least two units, and exact arithmetic before changing the glyph.
 /// Without this repair, text pairing treats the amount as another item's
 /// drifted price, even though grouping kept it on the correct count row.
 ///
-/// The `@` can be lost at the same time, read as a `0` or `6` fused onto a
-/// one-digit count: Asia Food Mart 2026-10-28 printed `2 @ $2.59 5.18H` and
-/// OCR read `20 82.59 5.18H`. Unrepaired, that row became the name of the item
-/// above it. The same arithmetic decides it. 2 × 2.59 is 5.18, while a count
-/// of 20 would cost 51.80. The fused form is rewritten whole, as `2 @ $2.59`,
-/// because the count-row patterns need the `@` back as well.
+/// The `@` can be lost at the same time. It may be read as a `0` or `6` fused
+/// onto a one-digit count: Asia Food Mart 2026-10-28 printed `2 @ $2.59 5.18H`
+/// and OCR read `20 82.59 5.18H`. It may also be read as a separate `0`, `6`,
+/// `8` or `9`: a second photo of the same receipt read `2 @ $2.99 5.98` as
+/// `2 6 92.99 5.98` and `2 @ $4.59 9.18` as `2 9 84.59 9.18`. Unrepaired,
+/// each row became the name of the item above it. The same arithmetic decides
+/// all of them. 2 × 2.59 is 5.18, while a count of 20 would cost 51.80, and a
+/// unit of 92.99 would cost 185.98. A misread `@` is rewritten whole, as
+/// `2 @ $2.59`, because the count-row patterns need the `@` back as well.
+/// After a misread `@`, the `$` may also have survived intact.
 fn recover_count_unit_dollar(text: &str) -> Option<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let caps = RE
         .get_or_init(|| {
             Regex::new(
-                r"^\s*(?:(\d+)\s*@|(\d)[06])\s*8(\d+\.\d{2})\s+\$?(\d+\.\d{2})(?:\s*[HhTtJjGgPp])*\s*$",
+                r"^\s*(?:(\d+)\s*@\s*[89]|(\d)(?:[06]|\s+[0689])\s*[$89])(\d+\.\d{2})\s+\$?(\d+\.\d{2})(?:\s*[HhTtJjGgPp])*\s*$",
             )
             .unwrap()
         })
@@ -130,14 +134,18 @@ fn recover_count_unit_dollar(text: &str) -> Option<String> {
 /// and OCR read the `@` as `e`. No weight-row pattern took that row, so it
 /// became the name of the item above it (`Fresh Carrot` was lost). Count rows
 /// already read `e`, `€` and `©` as the `@` (see [`normalize_quantity_ocr`]).
-/// A weight row takes them only when weight × rate, rounded half up, is
+/// The `@` can also come back as a digit, the same `0`, `6`, `8` or `9` a
+/// count row's `@` becomes: a second photo of that receipt read
+/// `1.09 lb @ $2.39/lb 2.61` as `1.09 1b 9 $2.39/1b 2.61`, and `Baby Yu Choy`
+/// was lost the same way.
+/// A weight row takes any of them only when weight × rate, rounded half up, is
 /// exactly the row's own trailing total: 1.37 × 0.99 = 1.3563, so 1.36.
 fn recover_weight_rate_at(text: &str) -> Option<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let caps = RE
         .get_or_init(|| {
             Regex::new(&format!(
-                r"(?i)^\s*(\d+)\.(\d{{1,3}})\s*{WEIGHT_UNIT_CLASS}\s*([e€©])\s*\$(\d+\.\d{{2}})\s*/\s*\S{{1,3}}\s+\$?(\d+\.\d{{2}})(?:\s*[HTJGP])*\s*$"
+                r"(?i)^\s*(\d+)\.(\d{{1,3}})\s*{WEIGHT_UNIT_CLASS}\s*([e€©0689])\s*\$(\d+\.\d{{2}})\s*/\s*\S{{1,3}}\s+\$?(\d+\.\d{{2}})(?:\s*[HTJGP])*\s*$"
             ))
             .unwrap()
         })
@@ -785,6 +793,7 @@ mod tests {
     fn a_unit_dollar_requires_an_independent_exact_count_total() {
         for (input, expected) in [
             ("2 @ 82.59 5.18H", "2 @ $2.59 5.18H"),
+            ("2 @ 92.59 5.18H", "2 @ $2.59 5.18H"),
             ("3@81.25 $3.75", "3@$1.25 $3.75"),
             (" 2 @ 82.99 5.98 h ", " 2 @ $2.99 5.98 h "),
         ] {
@@ -797,7 +806,7 @@ mod tests {
             "2 @ 82.59 165.18",               // a real 82.59 unit price
             "2 @ $82.59 5.18H",               // an explicit dollar sign
             "2 @ 2.59 5.18H",                 // no substituted glyph
-            "2 @ 92.59 5.18H",                // another glyph is not evidence
+            "2 @ 72.59 5.18H",                // `7` is not a reading of `$`
             "2 @ 80.00 0.00",                 // zero provides no evidence
             "2 @ 82.59 5.18H 9.18",           // another amount makes it ambiguous
             "PRODUCT 2 @ 82.59 5.18H",        // prose must not be rewritten
@@ -824,7 +833,34 @@ mod tests {
             "20 82.59 5.17H",  // even one cent is a contradiction
             "20 82.59 51.80",  // twenty units would cost 51.80, not this
             "120 82.59 5.18H", // the count is one digit, then the fused glyph
-            "20 92.59 5.18H",  // only `8` is read as the lost `$`
+            "20 72.59 5.18H",  // `7` is not a reading of `$`
+        ] {
+            assert_eq!(normalize_quantity_ocr(unchanged), unchanged);
+        }
+    }
+
+    #[test]
+    fn an_at_read_as_a_separate_digit_is_restored_only_by_exact_arithmetic() {
+        for (input, expected) in [
+            ("2 6 92.99 5.98", "2 @ $2.99 5.98"),
+            ("2 9 84.59 9.18", "2 @ $4.59 9.18"),
+            ("2 0 82.59 5.18H", "2 @ $2.59 5.18H"),
+            ("2 8 82.59 5.18H", "2 @ $2.59 5.18H"),
+            ("2 9 $4.59 9.18", "2 @ $4.59 9.18"),
+            ("20 92.59 5.18H", "2 @ $2.59 5.18H"),
+            ("20 $2.59 5.18H", "2 @ $2.59 5.18H"),
+        ] {
+            assert_eq!(normalize_quantity_ocr(input), expected);
+        }
+        for unchanged in [
+            "2 6 92.99",         // no independent total
+            "2 6 92.99 5.97",    // even one cent is a contradiction
+            "2 6 92.99 185.98",  // the arithmetic reads 2.99, which this total denies
+            "1 6 92.99 2.99",    // one unit only restates the price
+            "2 7 82.59 5.18H",   // `7` is not a reading of `@`
+            "2 6 72.59 5.18H",   // `7` is not a reading of `$`
+            "12 6 82.59 5.18H",  // the count is one digit
+            "2 6 82.59 5.18H 1", // trailing text is not a tax flag
         ] {
             assert_eq!(normalize_quantity_ocr(unchanged), unchanged);
         }
@@ -836,6 +872,10 @@ mod tests {
             ("1.37 1b e $0.99/1b 1.36", "1.37 1b @ $0.99/1b 1.36"),
             ("1.84 lb € $1.29/lb 2.37H", "1.84 lb @ $1.29/lb 2.37H"),
             ("0.5 kg © $4.40/kg 2.20", "0.5 kg @ $4.40/kg 2.20"),
+            ("1.09 1b 9 $2.39/1b 2.61", "1.09 1b @ $2.39/1b 2.61"),
+            ("1.37 1b 0 $0.99/1b 1.36", "1.37 1b @ $0.99/1b 1.36"),
+            ("1.25 lb 6 $0.99/lb 1.24", "1.25 lb @ $0.99/lb 1.24"),
+            ("1.84 lb 8 $1.29/lb 2.37", "1.84 lb @ $1.29/lb 2.37"),
         ] {
             assert_eq!(normalize_quantity_ocr(input), expected);
         }
@@ -844,6 +884,8 @@ mod tests {
             "1.37 1b e $0.99/1b 1.35", // 1.3563 rounds to 1.36, not 1.35
             "1.37 1b e $0.99/1b 2.99", // another item's drifted price
             "1.37 1b x $0.99/1b 1.36", // `x` is not a reading of `@`
+            "1.09 1b 7 $2.39/1b 2.61", // neither is `7`
+            "1.09 1b 9 $2.39/1b 2.60", // 2.6051 rounds to 2.61, not 2.60
             "1.37 1b @ $0.99/1b 1.36", // already readable
             "Fresh 1.37 1b e $0.99/1b 1.36",
         ] {
