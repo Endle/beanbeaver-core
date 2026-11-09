@@ -454,10 +454,54 @@ fn date_hint_survives_ocr_damage_to_the_datetime_suffix() {
 #[test]
 fn date_hint_does_not_fire_inside_a_longer_word() {
     // `\bDATE` still needs a boundary before the prefix, so "UPDATE" is not
-    // date context and the year-first reading stays gated.
+    // date context and the year-first reading stays gated. The day-first
+    // reading left over, 2002-08-26, is outside the two-digit-year horizon,
+    // so no date is read at all.
     let lines = vec!["UPDATED: 26/08/02".to_string()];
-    let parsed = extract_date(&lines, "", 2026).expect("date should parse");
-    assert_ne!(parsed.ymd(), (2026, 8, 2));
+    assert_eq!(extract_date(&lines, "", 2026), None);
+}
+
+#[test]
+fn a_dollar_amount_is_never_a_date() {
+    // A weight row's unit price, its `lb` read as `1b` or `16`, has the shape
+    // of a month/day/year date.
+    for line in [
+        "1.84 1b @ $1.29/1b 2.37",
+        "1.84 lb @ $1.29/16 2.37",
+        "2 @ $12.25/24 24.50",
+    ] {
+        assert_eq!(extract_date(&[line.to_string()], "", 2026), None, "{line}");
+    }
+    // A real date elsewhere on the receipt is still found.
+    let lines = vec![
+        "2026/10/28 16:11".to_string(),
+        "1.84 1b @ $1.29/1b 2.37".to_string(),
+    ];
+    assert_eq!(
+        extract_date(&lines, "", 2026).map(|d| d.to_string()),
+        Some("2026-10-28".into())
+    );
+}
+
+#[test]
+fn a_two_digit_year_a_decade_from_today_is_a_misread() {
+    // An `&& 03-Meat` department banner read as `8.8. 03-Meat`: decimal
+    // spacing joins it into `8.8.03`, which reads as 2003-08-08.
+    assert_eq!(extract_date(&["8.8. 03-Meat".to_string()], "", 2026), None);
+    for (line, expected) in [
+        ("01/29/17", Some("2017-01-29")), // nine years: still a date
+        ("01/29/16", None),               // ten years: the horizon
+        ("10/28/24", Some("2024-10-28")),
+        ("12/31/99", None),                 // 1999
+        ("2001/01/29", Some("2001-01-29")), // a four-digit year states its century
+        ("Jan 29, 2001", Some("2001-01-29")),
+    ] {
+        assert_eq!(
+            extract_date(&[line.to_string()], "", 2026).map(|d| d.to_string()),
+            expected.map(str::to_string),
+            "{line}"
+        );
+    }
 }
 
 #[test]

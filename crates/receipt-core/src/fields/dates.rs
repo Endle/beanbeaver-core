@@ -195,6 +195,24 @@ pub(super) fn numeric_date_candidates(
 
     candidates
 }
+/// How far from today, in years, a two-digit year may place a receipt.
+///
+/// A two-digit year prints no century, so a reading this far away is a
+/// misread, not an old receipt. It is the same distance at which
+/// [`year_score`] already gives a candidate no credit at all. Before this
+/// cutoff, such a candidate still won whenever it was the only one. On an
+/// Asia Food Mart photo whose date row produced no OCR detection, the weight
+/// row's `$1.29/1b` read as 2001-01-29. The banner `&& 03-Meat`, read as
+/// `8.8. 03-Meat`, was the runner-up at 2003-08-08. With both rejected, the
+/// receipt reports no date, which callers flag as a placeholder.
+///
+/// Four-digit years state their century, so they are not limited.
+pub(super) const TWO_DIGIT_YEAR_HORIZON: i32 = 10;
+
+pub(super) fn is_two_digit_year_kind(kind: &str) -> bool {
+    matches!(kind, "ymd2" | "mdy2" | "dmy2")
+}
+
 pub(super) fn year_score(candidate_year: i32, current_year: i32) -> i32 {
     10 - (candidate_year - current_year).abs().min(10)
 }
@@ -271,7 +289,17 @@ pub fn extract_date(lines: &[String], full_text: &str, current_year: i32) -> Opt
             let part2 = captures.get(3).map(|m| m.as_str()).unwrap_or("");
             let part3 = captures.get(4).map(|m| m.as_str()).unwrap_or("");
             let start = captures.get(2).map(|m| m.start()).unwrap_or(0);
+            if captures.get(1).is_some_and(|m| m.as_str() == "$") {
+                // A dollar amount is never a date. A weight row's unit price
+                // `$1.29/lb`, with the `lb` read as `1b`, matched as 1/29/(20)01.
+                continue;
+            }
             for (candidate_date, kind) in numeric_date_candidates(part1, part2, part3) {
+                if is_two_digit_year_kind(kind)
+                    && (candidate_date.year() - current_year).abs() >= TWO_DIGIT_YEAR_HORIZON
+                {
+                    continue;
+                }
                 if kind == "ymd2" {
                     let year_token = match part1.parse::<i32>() {
                         Ok(value) => value,
