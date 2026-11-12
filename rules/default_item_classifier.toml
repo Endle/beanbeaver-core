@@ -554,7 +554,14 @@ id = "legacy_0021"
 # the Fish Cracker Seawee lines (already Snacks at priority 80), "Potato Puffed
 # Food Seawee" and T&T's "TKN BIG ROLL GRILLED SEAWEED". Corpus:
 # asia_food_mart 2026-10-28 $124.78.
-keywords = ["BUTTER FLAVORED", "BUTTER FLAVOURED", "POTATO CHIPS", "CHIP", "CHIPS", "POPCORN", "PRETZEL", "NUTS", "ALMONDS", "CASHEWS", "PEANUTS", "WALNUTS", "PISTACHIOS", "TRAIL MIX", "GRANOLA BAR", "PROTEIN BAR", "ENERGY BAR", "CANDY", "CHOCOLATE", "GUMMY", "GUMMIES", "SKITTLES", "M&M", "SNICKERS", "TWIX", "KITKAT", "REESE", "OREO", "GOLDFISH", "CHEETOS", "DORITOS", "PRINGLES", "LAYS", "RUFFLES", "TOSTITOS", "CHEEZ-IT", "RITZ", "SENBEI", "RICE CRACKER", "SACHIMA", "EGG FLAVOR", "EGG FLAVOU", "GRILLING BAMBOO", "BISCUIT", "ORION", "WEI LONG", "WEILONG", "ZHENXIANG", "PEA SNACK", "SEAWEED"]
+#
+# "LINDOR" and "GODIVA" are chocolate brands. Costco prints them with no
+# CHOCOLATE token ("145866 LINDOR BALLS", "1480774 GODIVA ASST"), so both
+# matched no rule. The receipt's own HST agrees they are confectionery, not
+# zero-rated groceries: its H-flagged lines, net of their coupons, sum to
+# tax / 0.13, and that set holds both chocolates. Corpus: costco 2026-11-11
+# $536.86.
+keywords = ["BUTTER FLAVORED", "BUTTER FLAVOURED", "POTATO CHIPS", "CHIP", "CHIPS", "POPCORN", "PRETZEL", "NUTS", "ALMONDS", "CASHEWS", "PEANUTS", "WALNUTS", "PISTACHIOS", "TRAIL MIX", "GRANOLA BAR", "PROTEIN BAR", "ENERGY BAR", "CANDY", "CHOCOLATE", "LINDOR", "GODIVA", "GUMMY", "GUMMIES", "SKITTLES", "M&M", "SNICKERS", "TWIX", "KITKAT", "REESE", "OREO", "GOLDFISH", "CHEETOS", "DORITOS", "PRINGLES", "LAYS", "RUFFLES", "TOSTITOS", "CHEEZ-IT", "RITZ", "SENBEI", "RICE CRACKER", "SACHIMA", "EGG FLAVOR", "EGG FLAVOU", "GRILLING BAMBOO", "BISCUIT", "ORION", "WEI LONG", "WEILONG", "ZHENXIANG", "PEA SNACK", "SEAWEED"]
 tags = ["grocery/snacks"]
 priority = 0
 exact_only = false
@@ -1635,6 +1642,17 @@ exact_only = true
 id = "potato_cracker_snack"
 keywords = ["POTATO CRA"]
 tags = ["grocery/snacks"]
+priority = 0
+exact_only = true
+
+# A throw blanket. Costco prints the brand and the noun, "2620482 ROOTS THROW",
+# and OCR read it "RO0TS THROW". Keyed on THROW, not ROOTS: Roots is also a
+# clothing brand, and other throws carry other brands. Exact only, so a 5-letter
+# fuzzy keyword stays out of unrelated lines. Corpus: costco 2026-11-11 $536.86.
+[[rules]]
+id = "household_throw_blanket"
+keywords = ["THROW"]
+tags = ["household/supply"]
 priority = 0
 exact_only = true
 

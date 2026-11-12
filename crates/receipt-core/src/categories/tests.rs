@@ -106,6 +106,10 @@ fn public_classifier_categorizes_real_receipt_items() {
         // keyword-length tiebreak until this rule was given a priority
         // (Costco 2026-08-05).
         ("969786 PANDA COOKIE", "Expenses:Food:Grocery:Snacks"),
+        // snacks — chocolate brands printed with no CHOCOLATE token
+        // (Costco 2026-11-11).
+        ("145866 LINDOR BALLS", "Expenses:Food:Grocery:Snacks"),
+        ("1480774 GODIVA ASST", "Expenses:Food:Grocery:Snacks"),
         // dairy (incl. milk/chocolate tiebreak + single-char noise)
         ("Natrel - 2% Partly Skimme", "Expenses:Food:Grocery:Dairy"),
         ("Milk Chocolate 1%", "Expenses:Food:Grocery:Dairy"),
@@ -202,6 +206,8 @@ fn public_classifier_categorizes_real_receipt_items() {
         ("LYSOL BATH P 059631882930", "Expenses:Home:HouseholdSupply"),
         ("LYS0L BATH P 059631882930", "Expenses:Home:HouseholdSupply"),
         ("LYSDL BATH P 059631882930", "Expenses:Home:HouseholdSupply"),
+        // a throw blanket; OCR reads the brand's O as 0 (Costco 2026-11-11)
+        ("2620482 RO0TS THROW", "Expenses:Home:HouseholdSupply"),
         // personal care
         ("443404 MARC ANTHONY", "Expenses:PersonalCare"),
         // Dove body wash, abbreviated BW (Costco 2026-11-08)...
