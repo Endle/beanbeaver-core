@@ -289,16 +289,19 @@ mod tests {
                 canonical: "COSTCO".to_string(),
                 aliases: vec!["COSTCO WHOLESALE".to_string(), "COSICO".to_string()],
                 corroborators: vec!["WHOLESALE".to_string()],
+                header_aliases: vec![],
             },
             MerchantFamily {
                 canonical: "FRESHCO".to_string(),
                 aliases: vec!["FRESHCO".to_string()],
                 corroborators: vec![],
+                header_aliases: vec![],
             },
             MerchantFamily {
                 canonical: "FOODY MART".to_string(),
                 aliases: vec!["FOODY MART".to_string()],
                 corroborators: vec![],
+                header_aliases: vec![],
             },
         ]
     }

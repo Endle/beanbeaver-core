@@ -41,6 +41,12 @@ pub struct MerchantFamily {
     /// header match to be auto-applied. Empty means a fuzzy match for this
     /// family can never exceed `Suggested`.
     pub corroborators: Vec<String>,
+    /// Spellings that name this family only when they are the *whole* OCR'd
+    /// header, never as a substring elsewhere in the text. This is for a
+    /// stacked logo whose name line OCR dropped, leaving its second line as
+    /// the header (Costco's `WHOLESALE`). The same word in an `aliases` entry
+    /// would also claim a receipt that only mentions it.
+    pub header_aliases: Vec<String>,
 }
 
 /// How much to trust `MerchantMatch::canonical`.
@@ -187,10 +193,32 @@ pub fn resolve(
         }
     }
 
-    // Step 3: fuzzy match of the header against each family, using a
+    // Step 3: the whole header is a family's header alias. Costco's logo
+    // stacks COSTCO over WHOLESALE. When the detection floor drops a faint
+    // COSTCO (`aSTCO` at 0.59), WHOLESALE becomes the header, and no COSTCO
+    // survives anywhere for steps 1-2 to find. Whole-header equality keeps a
+    // `WHOLESALE CLUB` header, or the word in a receipt's body, from matching.
+    let raw_norm = normalize(&raw);
+    if !raw_norm.is_empty() {
+        let header_family = families.iter().find(|family| {
+            family
+                .header_aliases
+                .iter()
+                .any(|alias| normalize(alias) == raw_norm)
+        });
+        if let Some(family) = header_family {
+            return MerchantMatch {
+                raw,
+                canonical: Some(family.canonical.clone()),
+                status: MerchantMatchStatus::Corrected,
+                score: 1.0,
+            };
+        }
+    }
+
+    // Step 4: fuzzy match of the header against each family, using a
     // confusion-weighted distance. Auto-apply only when corroborated; otherwise
     // offer as a suggestion.
-    let raw_norm = normalize(&raw);
     if !raw_norm.is_empty() {
         let mut best: Option<(f64, &MerchantFamily)> = None;
         for family in families {
@@ -223,7 +251,7 @@ pub fn resolve(
         }
     }
 
-    // Step 4: nothing matched — keep the raw OCR text.
+    // Step 5: nothing matched — keep the raw OCR text.
     MerchantMatch {
         raw,
         canonical: None,
@@ -277,13 +305,55 @@ mod tests {
                 canonical: "COSTCO".to_string(),
                 aliases: vec!["COSTCO WHOLESALE".to_string(), "COSICO".to_string()],
                 corroborators: vec!["WHOLESALE".to_string()],
+                header_aliases: vec!["WHOLESALE".to_string()],
             },
             MerchantFamily {
                 canonical: "FRESHCO".to_string(),
                 aliases: vec!["FRESHCO".to_string()],
                 corroborators: vec![],
+                header_aliases: vec![],
             },
         ]
+    }
+
+    #[test]
+    fn logo_second_line_as_whole_header_is_corrected() {
+        // The detection floor dropped a faint COSTCO, so the logo's second
+        // line is the header and COSTCO appears nowhere in the text.
+        let m = resolve(
+            "WHOLESALE",
+            "WHOLESALE\nSPRINGFIELD #000\n1 EXAMPLE DRIVE\nTOTAL 10.00",
+            &["COSTCO".to_string()],
+            &families(),
+        );
+        assert_eq!(m.status, MerchantMatchStatus::Corrected);
+        assert_eq!(m.display(), "COSTCO");
+        assert_eq!(m.raw, "WHOLESALE");
+        // OCR splits the word; normalization ignores the space.
+        let split = resolve("WHOL ESALE", "WHOL ESALE\nTOTAL 10.00", &[], &families());
+        assert_eq!(split.display(), "COSTCO");
+    }
+
+    #[test]
+    fn header_alias_needs_the_whole_header() {
+        // Another chain's banner that contains the word is not Costco.
+        let club = resolve(
+            "WHOLESALE CLUB",
+            "WHOLESALE CLUB\nTOTAL 10.00",
+            &[],
+            &families(),
+        );
+        assert_ne!(club.canonical.as_deref(), Some("COSTCO"));
+        assert_eq!(club.display(), "WHOLESALE CLUB");
+        // The word in a receipt's body does not override its own header.
+        let body = resolve(
+            "SHOPRITE",
+            "SHOPRITE\nWHOLESALE PRICES DAILY\nTOTAL 10.00",
+            &[],
+            &families(),
+        );
+        assert_eq!(body.status, MerchantMatchStatus::Unknown);
+        assert_eq!(body.display(), "SHOPRITE");
     }
 
     #[test]
@@ -321,6 +391,7 @@ mod tests {
             canonical: "SHOPPERS DRUG MART".to_string(),
             aliases: vec![],
             corroborators: vec![],
+            header_aliases: vec![],
         }];
         let m = resolve(
             "QQORI",
@@ -363,6 +434,7 @@ mod tests {
             canonical: "PHARMASAVE".to_string(),
             aliases: vec!["PHARMASAVE".to_string()],
             corroborators: vec![],
+            header_aliases: vec![],
         }];
         let m = resolve(
             "GRAND GENESIS",
