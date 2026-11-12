@@ -440,6 +440,8 @@ struct MerchantFamilyToml {
     aliases: Vec<String>,
     #[serde(default)]
     corroborators: Vec<String>,
+    #[serde(default)]
+    header_aliases: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -460,6 +462,7 @@ pub fn default_merchant_families() -> Vec<MerchantFamily> {
             canonical: family.canonical,
             aliases: family.aliases,
             corroborators: family.corroborators,
+            header_aliases: family.header_aliases,
         })
         .collect()
 }

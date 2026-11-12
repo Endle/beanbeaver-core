@@ -13,6 +13,10 @@
 #                 non-authoritative suggestion, never silently substituted. This
 #                 is what stops look-alikes (e.g. "COSTLESS" -> "COSTCO") from
 #                 being confidently rewritten.
+#   header_aliases spellings that name the family only when they are the WHOLE
+#                 OCR'd header (letters and digits compared, spacing ignored),
+#                 never as a substring elsewhere. For a stacked logo whose name
+#                 line OCR lost, leaving its second line as the header.
 
 [[families]]
 canonical = "REAL CANADIAN SUPERSTORE"
@@ -25,6 +29,15 @@ aliases = ["REAL CANADIAN", "RCSS"]
 canonical = "COSTCO"
 aliases = ["COSTCO WHOLESALE", "COSICO"]
 corroborators = ["WHOLESALE"]
+# The logo stacks COSTCO over WHOLESALE, and the stylized COSTCO is the line OCR
+# reads worst. When it falls under the 0.7 detection floor (`aSTCO` at 0.59,
+# `COsTCO` at 0.69) or is not detected at all, WHOLESALE is the header and
+# COSTCO appears nowhere in the text. The merchant then stays "WHOLESALE", and
+# so does everything keyed to COSTCO: the payee, the merchant vocabulary, and
+# the gift-card purchase path. Header-only, because a bare alias would also
+# claim another chain whose banner contains the word (Wholesale Club). Corpus:
+# costco 2026-04-26 $173.15, 2026-07-29 $214.56 recapture, 2026-11-11 $536.86.
+header_aliases = ["WHOLESALE"]
 
 # FreshCo's banner is often OCR'd with a trailing confusable ("FRESHCC"), but the
 # correct spelling reliably reappears in the store address/footer, so the exact
