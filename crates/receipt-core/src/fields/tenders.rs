@@ -317,6 +317,8 @@ pub fn extract_tenders(lines: &[String]) -> Vec<TenderLine> {
         });
     }
 
+    drop_slip_echoes(lines, &mut tenders);
+
     if tenders.is_empty() {
         tenders.extend(tender_from_authorization_block(lines));
     }
@@ -325,6 +327,66 @@ pub fn extract_tenders(lines: &[String]) -> Vec<TenderLine> {
     }
 
     tenders
+}
+
+/// The card terminal's own slip row: `ACCT: MASTERCARD CAD$ 12.34`, or
+/// `Account: VISA CAD$ 12.34` on the Loblaw family, in whatever case OCR
+/// returns (`ACcount:`, `ACCOUnt:`).
+fn re_slip_account_label() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)^\s*ACC(?:OUN)?T\b").unwrap())
+}
+
+/// Drop a terminal-slip tender that repeats a payment the summary block
+/// already itemized.
+///
+/// Shoppers Drug Mart prints the payment twice: `MASTERCARD 12.34` under the
+/// TOTAL, then the card slip's `ACCT: MASTERCARD CAD$ 12.34` at the foot of
+/// the receipt. Both classify as a card with an amount, so the receipt
+/// reported two payments of 12.34 against a total of 12.34, and the tender
+/// identity raised a mismatch on a receipt it had read perfectly. The other
+/// Shoppers receipt in the corpus escaped only because line grouping happened
+/// to move its slip amount onto the `Card Type:` row.
+///
+/// **The slip row is often the only tender there is, so it cannot simply be
+/// rejected.** No Frills, Loblaws and Food Basics print their summary payment
+/// as `CREDIT TN <amount>`, which is not a tender label, and Costco's
+/// self-checkout prints `ACCT: MASTERCARD` with the charge on the next row;
+/// on all of them the slip row is the whole payment block. So it is dropped
+/// only when another, non-slip tender of the same kind and amount exists,
+/// and matched one to one: two cards paying equal halves each print their
+/// own summary line and their own slip, and both payments must survive.
+///
+/// A slip amount that disagrees with every summary tender is kept. That is a
+/// misread on one side or the other, and saying so is the tender identity's
+/// job, not this function's.
+fn drop_slip_echoes(lines: &[String], tenders: &mut Vec<TenderLine>) {
+    let is_slip: Vec<bool> = tenders
+        .iter()
+        .map(|t| re_slip_account_label().is_match(&lines[t.source_line_index]))
+        .collect();
+    let mut unmatched: Vec<(&'static str, i64)> = tenders
+        .iter()
+        .zip(&is_slip)
+        .filter(|(_, slip)| !**slip)
+        .map(|(t, _)| (t.kind, t.amount_cents))
+        .collect();
+    let mut slip = is_slip.into_iter();
+    tenders.retain(|t| {
+        if !slip.next().unwrap_or(false) {
+            return true;
+        }
+        match unmatched
+            .iter()
+            .position(|&(kind, amount)| kind == t.kind && amount == t.amount_cents)
+        {
+            Some(pos) => {
+                unmatched.swap_remove(pos);
+                false
+            }
+            None => true,
+        }
+    });
 }
 
 /// A sale header can echo a payment already itemized elsewhere. Use it only
