@@ -183,6 +183,79 @@ fn apply_department(item: &mut ParsedReceiptItem, tag_path: &str, rule_layers: &
     item.tag_path = Some(tag_path.to_string());
 }
 
+/// Restore a line OCR damaged from an undamaged copy of it on the same receipt.
+///
+/// Only a line no rule recognised is repaired, only from a copy a rule did, and
+/// only when the repaired text then classifies — by the same rules, the same
+/// way a scan classifies — exactly as that copy does. The text repair is
+/// [`crate::repeated_lines::repair`]; its doc says what counts as one damaged
+/// glyph. When two copies would repair a line equally well but differently,
+/// the line is left alone rather than picking one.
+///
+/// Discounts are never repaired or used: a repeated reduction is not a
+/// product, and the line it reduces carries its own name.
+fn repair_damaged_repeats(
+    items: &mut [ParsedReceiptItem],
+    rule_layers: &ParserRuleLayers,
+    vocab: Option<&crate::merchant_vocab::MerchantVocab>,
+) {
+    let recognised: Vec<usize> = (0..items.len())
+        .filter(|&i| {
+            !items[i].tags.is_empty()
+                && items[i].price > Money::ZERO
+                && items[i].gift_card.is_none()
+        })
+        .collect();
+    let mut repairs = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        if !item.tags.is_empty() || item.price <= Money::ZERO {
+            continue;
+        }
+        // Costs are sums of the confusion tiers (0.1, 0.3, ...), so compare them
+        // rounded: summed in a different order, two equal repairs can differ
+        // in the last bit, and a tie must not be broken by float noise.
+        let mut best: Option<(i64, String, usize)> = None;
+        let mut tied = false;
+        for &copy in &recognised {
+            let Some((text, cost)) =
+                crate::repeated_lines::repair(&item.description, &items[copy].description)
+            else {
+                continue;
+            };
+            let rank = (cost * 1_000.0).round() as i64;
+            match &best {
+                Some((best_rank, best_text, _)) if rank >= *best_rank => {
+                    tied |= rank == *best_rank && text != *best_text;
+                }
+                _ => {
+                    best = Some((rank, text, copy));
+                    tied = false;
+                }
+            }
+        }
+        let Some((_, text, copy)) = best.filter(|_| !tied) else {
+            continue;
+        };
+        let (classification, _) =
+            categories::classify_receipt_description(&text, &rule_layers.category_rules, vocab);
+        let donor = &items[copy];
+        if classification.tags.is_empty()
+            || classification.tag_path != donor.tag_path
+            || classification.account != donor.account
+        {
+            continue;
+        }
+        repairs.push((index, text, classification));
+    }
+    for (index, text, classification) in repairs {
+        let item = &mut items[index];
+        item.description = text;
+        item.tag_path = classification.tag_path;
+        item.account = classification.account;
+        item.tags = classification.tags;
+    }
+}
+
 /// Build one item the way a scan does: classify `description` with the rules in
 /// force and take the account that classification resolves to.
 ///
@@ -585,19 +658,11 @@ pub fn parse_receipt(
     // Sign-correct unsigned line-item discounts (e.g. FreshCo "INSTANT
     // SAVINGS $5.00"), covering both the spatial and text paths at their
     // single merge point.
-    let mut items: Vec<ParsedReceiptItem> = items
+    let (mut items, departments): (Vec<ParsedReceiptItem>, Vec<_>) = items
         .into_iter()
         .map(|(mut item, department)| {
             if !item.price.is_negative() && is_unsigned_discount_line(&item.description) {
                 item.price = -item.price;
-            }
-            // Last resort: a line no rule recognised takes the department banner
-            // it was printed under (`23-FROZEN`). Never a discount — `Member
-            // Pricing` under a banner is a reduction, not a product.
-            if item.tags.is_empty() && item.price > Money::ZERO {
-                if let Some(tag_path) = department {
-                    apply_department(&mut item, tag_path, rule_layers);
-                }
             }
             // A coupon names no product, so it nets against nothing: give it
             // exactly what the `TPD/<item>` keyword rule gives a code-only
@@ -614,9 +679,25 @@ pub fn parse_receipt(
                 );
                 item.tags = vec!["discount".to_string()];
             }
-            item
+            (item, department)
         })
-        .collect();
+        .unzip();
+
+    // A product rung up twice whose one copy OCR damaged takes back what the
+    // other copy says — before the department banner, which is weaker evidence
+    // than the receipt's own undamaged spelling of the same line.
+    repair_damaged_repeats(&mut items, rule_layers, vocab);
+
+    // Last resort: a line no rule recognised takes the department banner it
+    // was printed under (`23-FROZEN`). Never a discount — `Member Pricing`
+    // under a banner is a reduction, not a product.
+    for (item, department) in items.iter_mut().zip(departments) {
+        if item.tags.is_empty() && item.price > Money::ZERO {
+            if let Some(tag_path) = department {
+                apply_department(item, tag_path, rule_layers);
+            }
+        }
+    }
 
     // A tax the summary block could not state coherently was derived from
     // `SUBTOTAL + TAX = TOTAL` (see `fields::reconcile_tax`). Say so: the
@@ -1175,6 +1256,60 @@ mod tests {
                 .tags
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_damaged_repeat_is_restored_from_its_clean_copy() {
+        // Foody Mart 2026-11-08 $62.48: one tofu rung up twice, a pen stroke
+        // across the first copy's `m`. Unrepaired it booked to FIXME.
+        let parsed = parse_text(
+            "EXAMPLE MARKET\n\
+             Sunrise - Fresh Shooth To 1.98\n\
+             Sunrise - Fresh Smooth To 1.98\n\
+             TOTAL 3.96",
+        );
+        assert_eq!(parsed.items.len(), 2);
+        for item in &parsed.items {
+            assert_eq!(item.description, "Sunrise - Fresh Smooth To");
+            assert_eq!(
+                item.account.as_deref(),
+                Some("Expenses:Food:Grocery:Vegetable")
+            );
+        }
+        assert!(!parsed
+            .warnings
+            .iter()
+            .any(|w| w.kind == ReceiptWarningKind::UncategorizedItem));
+    }
+
+    #[test]
+    fn two_different_repairs_of_equal_cost_leave_the_line_alone() {
+        // `Meet` is one letter from `Meat` and one from `Beet`. Either repair
+        // is as good as the other, so neither is made.
+        let parsed = parse_text(
+            "EXAMPLE MARKET\n\
+             Meat 8.07\n\
+             Meet 10.43\n\
+             Beet 1.99\n\
+             TOTAL 20.49",
+        );
+        let meet = parsed
+            .items
+            .iter()
+            .find(|item| item.price == Money::from_cents(1043))
+            .unwrap();
+        assert_eq!(meet.description, "Meet");
+        assert!(meet.tags.is_empty());
+
+        // Without the second candidate, the repair is made.
+        let parsed = parse_text("EXAMPLE MARKET\nMeat 8.07\nMeet 10.43\nTOTAL 18.50");
+        let meet = parsed
+            .items
+            .iter()
+            .find(|item| item.price == Money::from_cents(1043))
+            .unwrap();
+        assert_eq!(meet.description, "Meat");
+        assert_eq!(meet.account.as_deref(), Some("Expenses:Food:Grocery:Meat"));
     }
 
     /// Parse plain text through the real pipeline: no bbox data, so the text
