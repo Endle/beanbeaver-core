@@ -531,6 +531,32 @@ fn subtotal_tolerates_canadian_tire_surtotal_ocr_typo() {
 }
 
 #[test]
+fn subtotal_tolerates_a_damaged_or_missing_t() {
+    // Foody Mart 2026-11-08 $62.48: a pen stroke through the T of `Sub Total`
+    // read `Sub rotal`. Unrecognised, the row left no summary window, and the
+    // tax fell back to the `hst5%` bucket's 0.00 instead of the HST's 0.39.
+    let lines: Vec<String> = [
+        "Item Count: 14",
+        "Sub rotal 62.09",
+        "HST 0.39",
+        "hst5% 0.00",
+        "Total after Tax 62.48",
+    ]
+    .map(String::from)
+    .to_vec();
+    assert_eq!(extract_subtotal(&lines), Some(6_209));
+    assert_eq!(extract_tax(&lines), Some(39));
+
+    assert_eq!(
+        extract_subtotal(&["SUB OTAL 62.09".to_string()]),
+        Some(6_209)
+    );
+    // SUB and OTAL both still have to be there.
+    assert_eq!(extract_subtotal(&["SUB ROTAI 62.09".to_string()]), None);
+    assert_eq!(extract_subtotal(&["SUBWAY TOTAL 62.09".to_string()]), None);
+}
+
+#[test]
 fn bare_total_takes_tax_row_amount_when_it_exceeds_the_subtotal() {
     // Costco 2026-07-08_costco_112_95: up-leaned line grouping left the
     // TOTAL row bare and put the grand total on the TAX row (and the tax

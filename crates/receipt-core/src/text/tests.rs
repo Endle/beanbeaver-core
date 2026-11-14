@@ -2133,3 +2133,21 @@ fn contentless_paren_row_is_not_appended_as_a_size_tag() {
     let parsed = extract_text_items(&lines, &[Money::from_cents(392)].into());
     assert_eq!(parsed.items[0].description, "Oyster Mushroom (L)");
 }
+
+#[test]
+fn a_subtotal_row_with_a_damaged_label_is_not_an_item() {
+    // Foody Mart 2026-11-08 $62.48, second capture: `Sub rotal 62.09` (a pen
+    // stroke through the T) was booked as an item, doubling the items to 124.18.
+    let lines = [
+        "Napa Round",
+        "2.72 1b @ $0.98/1b 2.67",
+        "Israel Clementina in Bag",
+        "2.31 1b @ $1.99/1b 4.60",
+        "Item Count: 2",
+        "Sub rotal 7.27",
+    ]
+    .map(String::from);
+    let parsed = extract_text_items(&lines, &[Money::from_cents(727)].into());
+    let prices: Vec<Money> = parsed.items.iter().map(|item| item.price).collect();
+    assert_eq!(prices, [Money::from_cents(267), Money::from_cents(460)]);
+}
