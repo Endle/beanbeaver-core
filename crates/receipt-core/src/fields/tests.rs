@@ -1236,6 +1236,90 @@ fn a_survey_footer_read_as_vin_is_not_a_gift_card_tender() {
 }
 
 #[test]
+fn a_card_slip_echoing_the_summary_tender_is_one_payment() {
+    // Shoppers Drug Mart prints the payment under the TOTAL and again on the
+    // terminal slip. Both rows classify as a card with an amount; before, the
+    // receipt reported two payments of 12.34 against a total of 12.34.
+    let lines = vec![
+        "TOTAL: $12.34".to_string(),
+        "MASTERCARD 12.34".to_string(),
+        "TYPE: PURCHASE".to_string(),
+        "ACCT: MASTERCARD CAD$ 12.34".to_string(),
+        "Card Type: CREDIT".to_string(),
+    ];
+    let tenders = extract_tenders(&lines);
+    assert_eq!(tenders.len(), 1);
+    assert_eq!(tenders[0].raw_label, "MASTERCARD");
+    assert_eq!(tenders[0].amount_cents, 1_234);
+    assert!(tenders_reconcile(&lines, &tenders, 1_234));
+}
+
+#[test]
+fn a_card_slip_with_no_summary_tender_is_the_payment() {
+    // The Loblaw family prints its summary payment as `CREDIT TN`, which is
+    // not a tender label, so the slip row is the whole payment block and
+    // must survive, in whatever case OCR reads it.
+    for slip in ["Account: MASTERCARD CAD$ 12.34", "ACcount: VISA CAD$ 12.34"] {
+        let lines = vec![
+            "TOTAL 12.34".to_string(),
+            "CREDIT TN 12.34".to_string(),
+            slip.to_string(),
+        ];
+        let tenders = extract_tenders(&lines);
+        assert_eq!(tenders.len(), 1, "{slip}");
+        assert_eq!(tenders[0].amount_cents, 1_234);
+    }
+}
+
+#[test]
+fn a_card_slip_echo_leaves_a_split_tender_whole() {
+    // Gift card plus card: only the card has a terminal slip, and the gift
+    // card's portion must not be mistaken for the slip's twin.
+    let lines = vec![
+        "TOTAL 30.00".to_string(),
+        "GIFT CARD 10.00".to_string(),
+        "VISA 20.00".to_string(),
+        "ACCT: VISA CAD$ 20.00".to_string(),
+    ];
+    let tenders = extract_tenders(&lines);
+    let got: Vec<_> = tenders.iter().map(|t| (t.kind, t.amount_cents)).collect();
+    assert_eq!(got, vec![("gift_card", 1_000), ("card", 2_000)]);
+    assert!(tenders_reconcile(&lines, &tenders, 3_000));
+}
+
+#[test]
+fn two_equal_card_payments_each_keep_their_own_slip_match() {
+    // Matching is one to one: two summary lines and two slips are two
+    // payments, not one.
+    let lines = vec![
+        "TOTAL 20.00".to_string(),
+        "MASTERCARD 10.00".to_string(),
+        "MASTERCARD 10.00".to_string(),
+        "ACCT: MASTERCARD CAD$ 10.00".to_string(),
+        "ACCT: MASTERCARD CAD$ 10.00".to_string(),
+    ];
+    let tenders = extract_tenders(&lines);
+    assert_eq!(tenders.len(), 2);
+    assert!(tenders
+        .iter()
+        .all(|t| t.raw_label == "MASTERCARD" && t.amount_cents == 1_000));
+}
+
+#[test]
+fn a_card_slip_that_disagrees_with_the_summary_is_kept() {
+    // One of the two amounts is misread. Dropping either would hide that;
+    // the tender identity is what reports it.
+    let lines = vec![
+        "TOTAL 12.34".to_string(),
+        "MASTERCARD 12.84".to_string(),
+        "ACCT: MASTERCARD CAD$ 12.34".to_string(),
+    ];
+    let tenders = extract_tenders(&lines);
+    assert_eq!(tenders.len(), 2);
+    assert!(!tenders_reconcile(&lines, &tenders, 1_234));
+}
+
+#[test]
 fn a_real_comma_decimal_point_still_parses() {
     // The repair this guard sits inside must keep working: OCR reads a
     // price's decimal point as a comma often enough to be worth repairing.
