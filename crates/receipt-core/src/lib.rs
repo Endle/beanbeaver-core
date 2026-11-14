@@ -40,6 +40,7 @@ pub mod ocr_transform;
 pub(crate) mod parse_helpers;
 pub mod parser;
 pub mod process;
+pub(crate) mod repeated_lines;
 pub mod rules;
 pub(crate) mod spatial;
 pub(crate) mod text;

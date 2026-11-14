@@ -105,8 +105,8 @@ pub(super) fn orphan_qty_pairing(
 /// "<item name>". Skip qty rows; never leap over a priced row, which is another
 /// item's territory.
 pub(super) fn orphan_description_row(index: usize, rows: Lines<'_>) -> Option<usize> {
-    for j in (index + 1)..rows.all.len().min(index + 4) {
-        let candidate = rows.all[j].trim();
+    for (j, row) in rows.all.iter().enumerate().skip(index + 1).take(3) {
+        let candidate = row.trim();
         if candidate.is_empty() || looks_like_quantity_expression(candidate) {
             continue;
         }
@@ -273,14 +273,21 @@ pub(super) fn plan_price_line(
     // Pepsi's refund as an item called `() -`.
     let contentless_paren =
         desc_part.trim_start().starts_with('(') && !desc_part.chars().any(char::is_alphanumeric);
+    // The same subtitle with its `(` lost alongside the CJK glyphs: one token
+    // closed by `)` and opened by nothing (`AA4)`). It is a paren row by every
+    // test below, and like a contentless one it never names the item: Foody
+    // Mart's `Meat Corner - AA Beef Pla` / `AA4)  13.01` / `1.63 lb @ $7.98/lb`
+    // booked 13.01 of beef as an item called `AA4)`.
+    let unopened_paren_tail = re_unopened_paren_tail().is_match(desc_part.trim());
+    let paren_row = desc_part.trim_start().starts_with('(') || unopened_paren_tail;
     let drift_paren_forward = (rows.drift || contentless_paren)
-        && desc_part.trim_start().starts_with('(')
+        && paren_row
         && nearest_desc_above_consumed(rows.all, rows.used, index)
         && !next_weight_row_owns_price;
     if drift_paren_forward {
         prefer_forward_desc = true;
     }
-    if contentless_paren && !drift_paren_forward {
+    if (contentless_paren || unopened_paren_tail) && !drift_paren_forward {
         force_backward = true;
     }
     if has_reg_marker
@@ -296,7 +303,7 @@ pub(super) fn plan_price_line(
     // item's subtext, not a name: Bestco's "*Yongda Black Angus Beef B" /
     // "(N4#REG13.99  15.08" / "1.51 lb @ $9.99/lb" (1.51 × 9.99 = 15.08) must
     // walk back to the beef rather than book 15.08 as "(N4#REG13.99".
-    if next_weight_row_owns_price && desc_part.trim_start().starts_with('(') {
+    if next_weight_row_owns_price && paren_row {
         force_backward = true;
     }
 
@@ -388,7 +395,11 @@ pub(super) fn plan_price_line(
         prefer_forward_desc,
         skip_if_no_forward_desc,
         force_backward,
-        weak_inline_desc,
+        // A weak parenthetical is appended because it says something — `(1kg)`,
+        // `(L)`. One with no letter or digit left in it says nothing, and was
+        // appended as debris: `Ginger Pack` / `( ()  4.30` became the item
+        // `Ginger Pack ( ()`. It still forces the walk back, above.
+        weak_inline_desc: weak_inline_desc && !contentless_paren,
         drift_paren_forward,
         is_priced_section_header,
         is_qty_expr,
@@ -448,8 +459,8 @@ pub(super) fn section_header_price_is_repeated(
     price_cents: Money,
     rows: Lines<'_>,
 ) -> bool {
-    for j in (index + 1)..rows.all.len().min(index + 4) {
-        let next_line = rows.all[j].trim();
+    for row in rows.all.iter().skip(index + 1).take(3) {
+        let next_line = row.trim();
         if next_line.is_empty() {
             continue;
         }
@@ -843,6 +854,7 @@ pub(super) fn describe_backward(index: usize, plan: &PricePlan, rows: Lines<'_>)
             || re_price_info_line().is_match(prev_line)
             || re_parenthetical_closed().is_match(prev_line)
             || (prev_line.starts_with('(') && !prev_line.contains(')'))
+            || re_unopened_paren_tail().is_match(prev_line)
             || re_onsale_parenthetical().is_match(prev_line)
             || re_parenthetical_multibuy().is_match(prev_line)
             || (prev_line.len() <= 3 && !is_three_letter_name(prev_line))

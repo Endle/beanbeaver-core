@@ -267,7 +267,7 @@ id = "legacy_0006"
 # cultivar and Sunvine is a watermelon brand, so either token alone identifies
 # the fruit; both are longer than "SUGAR" and win on `keyword_length` at equal
 # priority, the same tiebreak "CORN STARCH" and "WINTER MELON" rely on.
-keywords = ["APPLE", "BANANA", "ORANGE", "BERRY", "BERRIES", "STRAWBERRY", "BLUEBERRY", "RASPBERRY", "BLACKBERRY", "GRAPE", "GRAPES", "MANGO", "PINEAPPLE", "WATERMELON", "MELON", "CANTALOUPE", "PEACH", "PEAR", "PLUM", "CHERRY", "CHERRIES", "KIWI", "LEMON", "LIME", "GRAPEFRUIT", "AVOCADO", "COCONUT", "PAPAYA", "POMEGRANATE", "FIG", "DATE", "APRICOT", "NECTARINE", "TANGERINE", "MANDARIN", "CLEMENTINE", "POMELO", "DRAGONFRUIT", "LYCHEE", "DURIAN", "JACKFRUIT", "PERSIMMON", "CRAISINS", "WATERMLN", "WTRMLN", "SUGAR BABY", "SUNVINE"]
+keywords = ["APPLE", "BANANA", "ORANGE", "BERRY", "BERRIES", "STRAWBERRY", "BLUEBERRY", "RASPBERRY", "BLACKBERRY", "GRAPE", "GRAPES", "MANGO", "PINEAPPLE", "WATERMELON", "MELON", "CANTALOUPE", "PEACH", "PEAR", "PLUM", "CHERRY", "CHERRIES", "KIWI", "LEMON", "LIME", "GRAPEFRUIT", "AVOCADO", "COCONUT", "PAPAYA", "POMEGRANATE", "FIG", "DATE", "APRICOT", "NECTARINE", "TANGERINE", "MANDARIN", "CLEMENTINE", "CLEMENTINA", "POMELO", "DRAGONFRUIT", "LYCHEE", "DURIAN", "JACKFRUIT", "PERSIMMON", "CRAISINS", "WATERMLN", "WTRMLN", "SUGAR BABY", "SUNVINE"]
 tags = ["grocery/fruit"]
 priority = 0
 exact_only = false
@@ -847,6 +847,17 @@ id = "milk_bites_snack"
 # fruit and MILK is dairy, priority 0 each — so this outranks them for the
 # account. It does not remove their tags; bundled rules never do.
 keywords = ["MILK BITES"]
+tags = ["grocery/snacks"]
+priority = 80
+exact_only = false
+
+[[rules]]
+id = "calbee_snack"
+# Calbee makes snacks, and Jagabee (じゃがビー, 卡樂B 薯條) is its potato-stick
+# line. Foody Mart prints "Calbee - Jagabee Potato C" — the vegetable rule's
+# POTATO, priority 0, filed a $2.98 bag of chips under Vegetable. Corpus: foody
+# 2026-11-08 $62.48.
+keywords = ["CALBEE", "JAGABEE"]
 tags = ["grocery/snacks"]
 priority = 80
 exact_only = false

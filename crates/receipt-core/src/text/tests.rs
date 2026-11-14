@@ -2071,3 +2071,65 @@ fn dollar_sign_before_the_price_stays_with_the_price() {
         .iter()
         .all(|item| !item.category_source.ends_with('$')));
 }
+
+#[test]
+fn unopened_paren_tail_never_names_the_item_its_price_leaned_onto() {
+    // Foody Mart 2026-11-08 $62.48, meat counter. OCR kept only `AA4)` of the
+    // first item's subtitle (肉薈坊AA牛五花卷) — its `(` went with the CJK
+    // glyphs — and the lifted 13.01 grouped onto that row. Read as the row's
+    // own description, it booked $13.01 of beef as an item called `AA4)`.
+    let lines = [
+        "&& 03-Meat",
+        "Meat Corner - AA Beef Pla",
+        "AA4) 13.01",
+        "1.63 1b @ $7.98/1b",
+        "Meat Corner - AA Beef Pla",
+        "(AA)",
+        "1.35 1b @ $7.98/1b 10.77",
+        "Sub Total 23.78",
+    ]
+    .map(String::from);
+    let parsed = extract_text_items(&lines, &[Money::from_cents(2378)].into());
+    let observed: Vec<(String, Money)> = parsed
+        .items
+        .into_iter()
+        .map(|item| (item.description, item.price))
+        .collect();
+    assert_eq!(observed.len(), 2, "{observed:?}");
+    for (description, _) in &observed {
+        assert!(
+            description.starts_with("Meat Corner - AA Beef Pla"),
+            "{observed:?}"
+        );
+    }
+    assert_eq!(observed[0].1, Money::from_cents(1301), "{observed:?}");
+    assert_eq!(observed[1].1, Money::from_cents(1077), "{observed:?}");
+}
+
+#[test]
+fn contentless_paren_row_is_not_appended_as_a_size_tag() {
+    // Same receipt: `Ginger Pack`'s subtitle (生薑(黃綢)) read as `( ()`, and
+    // the lifted 4.30 landed on it. Walking back to the name was right; gluing
+    // the empty parens on as if they were `(1kg)` was not.
+    let lines = [
+        "Soya Bean",
+        "0.51 1b @ $1.39/1b 0.71",
+        "Ginger Pack",
+        "( () 4.30",
+        "1.54 1b @ $2.79/1b",
+        "Sub Total 5.01",
+    ]
+    .map(String::from);
+    let parsed = extract_text_items(&lines, &[Money::from_cents(501)].into());
+    let ginger = parsed
+        .items
+        .iter()
+        .find(|item| item.price == Money::from_cents(430))
+        .expect("4.30 is paired");
+    assert_eq!(ginger.description, "Ginger Pack");
+
+    // A parenthetical with something in it is still a size tag.
+    let lines = ["Oyster Mushroom", "(L) 3.92", "Sub Total 3.92"].map(String::from);
+    let parsed = extract_text_items(&lines, &[Money::from_cents(392)].into());
+    assert_eq!(parsed.items[0].description, "Oyster Mushroom (L)");
+}
