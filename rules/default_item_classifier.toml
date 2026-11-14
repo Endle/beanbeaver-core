@@ -65,7 +65,9 @@
 #   TDR     (staple, noodle_brands) is 汤达人's three-letter code on Foody Mart
 #           and Asia Food Mart. At three letters, its fuzzy neighbourhood is
 #           the same as TPD's, so it matches as `\bTDR\b` and nothing else.
-exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD", "ORANGE", "POCKY", "SMOOTHIE", "FRESH SMOOTH TO", "BLACK TEA", "BLACK TIGER", "BLACK TIE", "OKAR", "FACE CREAM", "EYE CREAM", "DAY CREAM", "ORION", "FANT", "OREO", "TDR"]
+#   MOCHI IC (ice cream, legacy_0011) is a truncation whose rule wins on
+#           priority 1, so it must never fuzz onto a line that merely says MOCHI.
+exact_only_keywords = ["DANDAN", "GINGER", "PRESERVED VEG", "JCE", "CRAN", "TPD", "ORANGE", "POCKY", "SMOOTHIE", "FRESH SMOOTH TO", "BLACK TEA", "BLACK TIGER", "BLACK TIE", "OKAR", "FACE CREAM", "EYE CREAM", "DAY CREAM", "ORION", "FANT", "OREO", "TDR", "MOCHI IC"]
 
 # BRANDS — text that names the maker, blanked out before any keyword is matched.
 #
@@ -353,7 +355,14 @@ id = "legacy_0010"
 # "Fish Dunplings", and with DUMPLING missed, FISH (seafood/fish) filed it as
 # fish. It has no English neighbour to collide with. Corpus: foody_mart
 # 2026-10-14 $156.72 (recapture).
-keywords = ["DUMPLING", "GYOZA", "POTSTICKER", "WONTON", "BAO", "XIAOLONGBAO", "SHRIMP WONTON", "DUNPLING"]
+#
+# "PORK AND LEEK" is the dumpling filling standing in for the product: Foody
+# Mart's 25-column print cuts "Tc Foods - Pork And Leek Dumplings" (天上掉餡餅
+# 鮮肉韭菜水餃, under `&& 06-Frozen`) before the noun, and PORK (meat, 4) then
+# beat LEEK (vegetable, 4) on rule index. Pork and leek is the canonical dumpling
+# filling, so the 13-char compound wins on `keyword_length` and files the line
+# where the department put it. Corpus: foody_mart 2026-11-04 $110.13 (two).
+keywords = ["DUMPLING", "GYOZA", "POTSTICKER", "WONTON", "BAO", "XIAOLONGBAO", "SHRIMP WONTON", "DUNPLING", "PORK AND LEEK"]
 tags = ["grocery/frozen/dumpling"]
 priority = 0
 exact_only = false
@@ -367,7 +376,14 @@ id = "legacy_0011"
 # flavour, the product is the ice cream, so this rule must win the account
 # outright rather than by length. The flavour's tag still accumulates, as tags
 # do everywhere here; only the account is decided by priority.
-keywords = ["ICE CREAM", "ICECREAM", "GELATO", "FROZEN YOGURT", "SORBET", "POPSICLE"]
+#
+# "MOCHI IC" is Foody Mart's truncation of "Mochi Ice Cream" ("Lotte - Japanese
+# Mochi Ic", 樂天雪見草莓味麻糬冰淇淋), which matched nothing. Not MOCHI alone:
+# a plain mochi is a rice cake, not a frozen dessert. Exact-only (see the list
+# at the top) because this rule's priority 1 wins outright, so a fuzzy hit would
+# take the account from whatever the line really is. Corpus: foody_mart
+# 2026-11-04 $110.13.
+keywords = ["ICE CREAM", "ICECREAM", "GELATO", "FROZEN YOGURT", "SORBET", "POPSICLE", "MOCHI IC"]
 tags = ["grocery/frozen/icecream"]
 priority = 1
 exact_only = false
