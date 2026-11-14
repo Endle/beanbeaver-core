@@ -381,6 +381,11 @@ mod tests {
             "1 8$2 49",
             "(500ml)62.99(2/$4.98)",
             "(500ml)62 99(2/84.98)",
+            // The `@` read as a separate digit AND the `$` as a digit glued to
+            // the rate (Foody Mart 2026-11-04: `1 @ $2.59` read `1 0 32.59`).
+            "1 0 32.49",
+            "1 0 82.49",
+            "1 6 92.49",
         ] {
             let doc = transform(page(
                 vec![
