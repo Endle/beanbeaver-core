@@ -43,12 +43,26 @@ pub(crate) fn activation_reference(text: &str) -> Option<(&'static str, &str)> {
 /// OCR can fuse a single-unit count with an `@` read as 0/6/8, or read `$` as S.
 /// Recognize the whole annotation without inventing its missing quantity.
 /// Multi-unit numeric prefixes remain ambiguous: `20$0.10` can carry a price.
+///
+/// The `@` and the `$` can both be lost on one row. Foody Mart 2026-11-04 read
+/// `1 @ $2.59` as `1 0 32.59`: the `@` came back as a separate `0`, and the `$`
+/// as a `3` glued to the rate. Neither repair here holds alone. The `@` repairs
+/// need the literal `$`, and the lost-`$` repair in [`normalize_quantity_ocr`]
+/// needs a trailing total to check against. So the row stayed a priced row,
+/// claimed the next item's lifted price, and became that item's name three times
+/// on that receipt. It is recognised here only as a whole: a single unit, the
+/// `@` glyph standing alone, a `3`, `8` or `9` for the `$`, and a rate with two
+/// decimals. The rate is not read, because the `3` might belong to it.
 pub(crate) fn is_incomplete_quantity_ocr(text: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
+    static LOST_AT_AND_DOLLAR: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(r"^\s*(?:(?:[@06e€©]|1\s*[068])\s*\$|1[068]\s*S|1\s+C\s*\$)\s*\d+(?:[., ]\s*\d{0,2})?\s*$").unwrap()
     })
     .is_match(text)
+        || LOST_AT_AND_DOLLAR
+            .get_or_init(|| Regex::new(r"^\s*1\s+[068]\s+[389]\d+[.,]\d{2}\s*$").unwrap())
+            .is_match(text)
 }
 
 /// Read OCR substitutions only inside a complete quantity/rate expression.
@@ -758,7 +772,24 @@ pub struct ReceiptWarning {
 
 #[cfg(test)]
 mod tests {
-    use super::{activation_reference, normalize_quantity_ocr};
+    use super::{activation_reference, is_incomplete_quantity_ocr, normalize_quantity_ocr};
+
+    #[test]
+    fn a_lost_at_and_dollar_is_recognised_only_as_a_whole_single_unit_row() {
+        for damaged in ["1 0 32.59", "1 0 34.99", " 1 8 81.98 ", "1 6 92,49"] {
+            assert!(is_incomplete_quantity_ocr(damaged), "{damaged}");
+        }
+        for other in [
+            "2 0 32.59",      // two units: the count could be real
+            "10 32.59",       // a count of ten, not `1 @`
+            "1 0 42.59",      // 4 is not a reading of `$`
+            "1 0 32.5",       // no two-decimal rate
+            "1 0 32.59 2.59", // carries a total: the lost-`$` repair's job
+            "1 0 32.59 Tofu", // text after the rate
+        ] {
+            assert!(!is_incomplete_quantity_ocr(other), "{other}");
+        }
+    }
 
     #[test]
     fn activation_references_keep_their_printed_label() {
