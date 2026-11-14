@@ -208,6 +208,18 @@ pub(crate) fn re_parenthetical_closed() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^\([^)]*\)$").unwrap())
 }
 
+/// The tail of a parenthesised Chinese subtitle whose opening paren OCR
+/// dropped together with the CJK glyphs: one token, closed by `)`, with no
+/// `(` anywhere — `AA4)` under Foody Mart's `Meat Corner - AA Beef Pla`
+/// (肉薈坊AA牛五花卷). Across the private corpus every OCR detection of this
+/// shape is subtitle or size debris (`AA4H)`, `GEER)`, `HA1)`, `200g)`); the
+/// only real text that ends in an unopened `)` is a footer sentence, which
+/// has spaces in it.
+pub(crate) fn re_unopened_paren_tail() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^[^\s()]+\)$").unwrap())
+}
+
 pub(crate) fn re_parenthetical_multibuy() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^\(\d+\s*/\s*for\s+\$[\d.]+\)").unwrap())
@@ -415,4 +427,25 @@ pub(crate) fn re_size_paren_residue() -> &'static Regex {
     // size-bearing names like "POTATO 10LB" intact.
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"(?i)\s+\d+(?:\.\d+)?\s*(?:KG|G|LB|L|ML|OZ)\)\s*$").unwrap())
+}
+
+#[cfg(test)]
+mod unopened_paren_tail_tests {
+    use super::re_unopened_paren_tail;
+
+    #[test]
+    fn one_token_closed_by_nothing_it_opened() {
+        for debris in ["AA4)", "AA4H)", "GEER)", "HA1)", "200g)"] {
+            assert!(re_unopened_paren_tail().is_match(debris), "{debris}");
+        }
+        for text in [
+            "Meat Corner - AA Beef Pla",
+            "(AA)",
+            "Oyster Mushroom (L)",
+            "produce, meat fruits & bakery goods.)",
+            "))",
+        ] {
+            assert!(!re_unopened_paren_tail().is_match(text), "{text}");
+        }
+    }
 }
