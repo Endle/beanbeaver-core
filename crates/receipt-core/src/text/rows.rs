@@ -206,7 +206,7 @@ pub(super) fn looks_like_summary_line(text: &str) -> bool {
     if re_summary_patterns().is_match(&upper) {
         return true;
     }
-    if upper.contains("SUBTOTAL") || upper.contains("SUB TOTAL") || upper.contains("TOTAL") {
+    if upper.contains("TOTAL") || crate::fields::re_subtotal_label().is_match(&upper) {
         return true;
     }
     if re_total_ocr_variants().is_match(&upper) {

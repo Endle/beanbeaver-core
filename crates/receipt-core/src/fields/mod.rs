@@ -4,7 +4,8 @@ mod dates;
 mod prices;
 mod tenders;
 pub(crate) use amounts::{
-    extract_subtotal, extract_summary_reconciled, extract_total, printed_negative, SummaryRow,
+    extract_subtotal, extract_summary_reconciled, extract_total, printed_negative,
+    re_subtotal_label, SummaryRow,
 };
 pub(crate) use dates::extract_date;
 pub(crate) use tenders::{

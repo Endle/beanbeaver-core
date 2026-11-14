@@ -757,13 +757,17 @@ pub fn extract_tax(lines: &[String]) -> Option<i64> {
     }
     None
 }
-pub(super) fn re_subtotal_label() -> &'static Regex {
+pub(crate) fn re_subtotal_label() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // The inner 'O' in SUBTOTAL is the most common OCR victim — accept the
     // usual O-confusables (0/C/Q/D/G). Costco receipts have been observed as
     // SUBTCTAL. The 'B' is the next one to go: its lower bowl breaking leaves an
     // 'R', which is how Canadian Tire's dot-matrix print reads as SURTOTAL.
-    RE.get_or_init(|| Regex::new(r"SU[BR]\s*T[OCQDG0]TAL").unwrap())
+    // The 'T' after the gap may be damaged or gone altogether: a pen stroke
+    // through it on Foody Mart 2026-11-08 $62.48 read `Sub rotal`, and the
+    // unrecognised row became a 62.09 item and left no summary window to find
+    // the HST in. SUB before and OTAL after still anchor the label.
+    RE.get_or_init(|| Regex::new(r"SU[BR]\s*[A-Z0-9]?[OCQDG0]TAL").unwrap())
 }
 pub fn extract_subtotal(lines: &[String]) -> Option<i64> {
     for (idx, line) in lines.iter().enumerate() {
