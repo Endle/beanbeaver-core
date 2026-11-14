@@ -105,8 +105,8 @@ pub(super) fn orphan_qty_pairing(
 /// "<item name>". Skip qty rows; never leap over a priced row, which is another
 /// item's territory.
 pub(super) fn orphan_description_row(index: usize, rows: Lines<'_>) -> Option<usize> {
-    for j in (index + 1)..rows.all.len().min(index + 4) {
-        let candidate = rows.all[j].trim();
+    for (j, row) in rows.all.iter().enumerate().skip(index + 1).take(3) {
+        let candidate = row.trim();
         if candidate.is_empty() || looks_like_quantity_expression(candidate) {
             continue;
         }
@@ -459,8 +459,8 @@ pub(super) fn section_header_price_is_repeated(
     price_cents: Money,
     rows: Lines<'_>,
 ) -> bool {
-    for j in (index + 1)..rows.all.len().min(index + 4) {
-        let next_line = rows.all[j].trim();
+    for row in rows.all.iter().skip(index + 1).take(3) {
+        let next_line = row.trim();
         if next_line.is_empty() {
             continue;
         }
