@@ -309,7 +309,7 @@ pub(super) fn plan_price_line(
 
     // A leading barcode is noise, except where it IS the description: a
     // coupon line is nothing but its coupon number and the item it reduces.
-    if !desc_part.is_empty() && !crate::extraction::is_coupon_reference_line(&desc_part) {
+    if !desc_part.is_empty() && !crate::common::is_coupon_reference_line(&desc_part) {
         desc_part = Regex::new(r"^\d{8,}\s*")
             .unwrap()
             .replace(&desc_part, "")

@@ -280,6 +280,63 @@ pub(crate) const WEIGHT_UNIT_CLASS: &str = r"(?:[lI1][bk6]|k[g9])";
 /// noise, never meaning.
 pub(crate) const WEIGHT_UNIT_AT_SEP: &str = r"[\s'`,.\-]*";
 
+// Lives here, not in `text`, because grouping reads it too: a trailing-minus
+// amount still carries its flag (`6.00-H`), and `ocr_line_grouping` must see it
+// as negative.
+//
+// Canadian grocery receipts mark items with one or more trailing single-letter
+// tax flags right after the price: H (HST), G (GST), P (PST), T (TAX),
+// C (combined / container deposit eligible), F (food / non-taxable),
+// J (sometimes used for joint promos). Receipts routinely combine them, e.g.
+// "$1.79 HC" or "$8.99 HCF". The price-detection regexes in `text` allow 0-3 of
+// these letters in any case. Some merchants (e.g. Sunny Foodmart) suffix a
+// category digit — "$3.88 Tx1" — so an optional 'x' and up to two trailing
+// digits are tolerated, but only after at least one tax letter (so a bare
+// trailing number like "9.99 5" is not silently swallowed as a flag).
+// Some merchants print a '*' immediately before the tax letter(s) — e.g.
+// FreshCo's "$25.96*HC" — so an optional leading asterisk is tolerated; without
+// it the whole price token fails to parse and the line is silently dropped.
+// T&T prints its flags as separate space-separated letters — "W $12.81 G F"
+// arrives as ONE OCR token — so the group repeats over whitespace rather than
+// matching a single contiguous run. `*` (not `+`) keeps the whole class
+// optional, which is what every call site assumed when this was `?`.
+// Shoppers uses S in the same trailing column. It may be OCR'd as `5`; that
+// digit is repaired only with stronger row context in `normalize_tax_code_ocr`,
+// rather than admitted here as a generic flag.
+pub(crate) const TAX_FLAG_CLASS: &str = r"(?:\*?[BbCcFfGgHhJjPpSsTtXx]{1,3}\d{0,2}\s*)*";
+
+/// Costco's manufacturer-coupon line: `<coupon number> / <item number>`, printed
+/// under the item it reduces with a trailing-minus amount (`4.00- H`). Unlike
+/// `TPD/<item>` it carries no letters, so no keyword rule can tag it and every
+/// "is this row descriptive" filter rejects it — the shape is the only evidence
+/// there is. Callers that admit or tag a row on it also require a negative
+/// amount.
+///
+/// One character of the two numbers may be anything alphanumeric. Costco
+/// receipts are handled and written on, and a pen stroke across a digit reads
+/// back as a letter (`000012A456`); nothing in a glyph table predicts which,
+/// so the tolerance is a count rather than a confusion class. One is enough to
+/// survive a stroke and still demands that the rest of the row be numeric, which
+/// is what keeps dates, URLs and Foody's `(2/$3.50)` deal subtext out.
+///
+/// Lives here because three layers ask it: grouping (a coupon row never claims a
+/// positive amount), both item extractors, and the parser's discount tagging.
+pub(crate) fn is_coupon_reference_line(text: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let Some(numbers) = RE
+        .get_or_init(|| Regex::new(r"^([0-9A-Za-z]{6,})\s*/\s*([0-9A-Za-z]{4,})$").unwrap())
+        .captures(text.trim())
+    else {
+        return false;
+    };
+    numbers[1]
+        .chars()
+        .chain(numbers[2].chars())
+        .filter(|c| !c.is_ascii_digit())
+        .count()
+        <= 1
+}
+
 const GENERIC_PRICED_ITEM_LABELS: &[&str] = &["MEAT", "BAKERY"];
 const SECTION_HEADERS: &[&str] = &[
     "MEAT", "SEAFOOD", "PRODUCE", "DELI", "GROCERY", "BAKERY", "FROZEN", "FOOD",

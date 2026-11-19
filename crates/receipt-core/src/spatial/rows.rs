@@ -523,7 +523,7 @@ pub(super) fn is_valid_item_line(line: &ParsedLine, total_line_y: Option<f64>) -
             .chars()
             .any(|ch| ch.is_ascii_alphabetic());
     // A coupon line has no letters to lose: `<coupon> / <item>` and a minus.
-    let coupon = trailing_minus && crate::extraction::is_coupon_reference_line(&line.left_text);
+    let coupon = trailing_minus && crate::common::is_coupon_reference_line(&line.left_text);
     if !is_costco_discount
         && !signed_adjustment
         && !coupon

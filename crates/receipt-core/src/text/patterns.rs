@@ -4,27 +4,9 @@ use regex::Regex;
 use std::sync::OnceLock;
 
 use crate::common::{WEIGHT_UNIT_AT_SEP, WEIGHT_UNIT_CLASS};
-
-// Canadian grocery receipts mark items with one or more trailing single-letter
-// tax flags right after the price: H (HST), G (GST), P (PST), T (TAX),
-// C (combined / container deposit eligible), F (food / non-taxable),
-// J (sometimes used for joint promos). Receipts routinely combine them, e.g.
-// "$1.79 HC" or "$8.99 HCF". The price-detection regexes below allow 0-3 of
-// these letters in any case. Some merchants (e.g. Sunny Foodmart) suffix a
-// category digit — "$3.88 Tx1" — so an optional 'x' and up to two trailing
-// digits are tolerated, but only after at least one tax letter (so a bare
-// trailing number like "9.99 5" is not silently swallowed as a flag).
-// Some merchants print a '*' immediately before the tax letter(s) — e.g.
-// FreshCo's "$25.96*HC" — so an optional leading asterisk is tolerated; without
-// it the whole price token fails to parse and the line is silently dropped.
-// T&T prints its flags as separate space-separated letters — "W $12.81 G F"
-// arrives as ONE OCR token — so the group repeats over whitespace rather than
-// matching a single contiguous run. `*` (not `+`) keeps the whole class
-// optional, which is what every call site assumed when this was `?`.
-// Shoppers uses S in the same trailing column. It may be OCR'd as `5`; that
-// digit is repaired only with stronger row context in `normalize_tax_code_ocr`,
-// rather than admitted here as a generic flag.
-pub(crate) const TAX_FLAG_CLASS: &str = r"(?:\*?[BbCcFfGgHhJjPpSsTtXx]{1,3}\d{0,2}\s*)*";
+// Defined in `common` (grouping reads it too); re-exported for the `text`
+// modules that glob-import this one.
+pub(crate) use crate::common::TAX_FLAG_CLASS;
 
 // When the parser sees a bare standalone-price line (e.g. `$8.95` on its own)
 // it walks back up to 5 lines looking for the description that goes with it.
