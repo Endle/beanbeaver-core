@@ -226,7 +226,56 @@ fn is_bob_marker_text(text: &str) -> bool {
         .join(" ");
     let has_bottom_banner = banner_words.contains("BOTTOM OF BAS");
     let has_bob_count_marker = upper.contains("BOB COUNT") && has_xstar_run(&upper, 4);
-    has_bottom_banner || has_bob_count_marker
+    has_bottom_banner || has_bob_count_marker || is_damaged_framed_banner(&upper)
+}
+
+/// The two Costco bottom-of-basket banners, letters only.
+const BOB_BANNER_PHRASES: [&str; 2] = ["BOTTOMOFBASKET", "BOBCOUNT"];
+
+/// A bottom-of-basket banner whose words OCR damaged by one edit.
+///
+/// The damage concentrates where the words meet the asterisk frame, because
+/// the recognizer reads the frame as a run of `x` and lets the run swallow or
+/// absorb the letter beside it. Fresh OCR of the private corpus has four such
+/// renderings that the literal checks above miss: `xxxxxxxxxxxOB Count 1xxxx`
+/// and `*xxxxxxxxxxOB Count` (the `B` swallowed), `*xxxxxxx**xottom of
+/// Basketxxxx` (read as `x`), and `*xxxxxxxxxxBotton of Basketxxxx` (`M` read
+/// as `N`). An unrecognized banner is an ordinary row, so on a receipt whose
+/// price column leans it claims the price of the item below it and every
+/// following row inherits its neighbour's amount.
+///
+/// Requires the frame: without it, "within one edit of BOB COUNT" is weak
+/// evidence. The frame and every non-letter are stripped first, so neither the
+/// count printed inside the banner nor the frame's length counts as an edit.
+/// One weighted edit is the budget `department` uses for a printed header.
+fn is_damaged_framed_banner(upper: &str) -> bool {
+    if !has_xstar_run(upper, 4) {
+        return false;
+    }
+    let core: Vec<char> = upper
+        .trim_matches(|c: char| c == 'X' || c == '*' || c.is_whitespace())
+        .chars()
+        .filter(char::is_ascii_alphabetic)
+        .collect();
+    BOB_BANNER_PHRASES.iter().any(|phrase| {
+        let phrase: Vec<char> = phrase.chars().collect();
+        crate::ocr_confusion::weighted_distance(&core, &phrase) <= 1.0
+    })
+}
+
+/// A piece of banner frame and nothing else: an `x`/`*` run with at most the
+/// banner's one- or two-digit count — the tail `5 xxxxxxxxxxxxxx` when OCR
+/// splits `xxxxOB Count 5 xxxxxxxxxxxxxx` into two detections. On its own this
+/// shape is not evidence of anything (Bestco prints rules of asterisks), so
+/// [`filter_bob_markers`] only counts it as banner when it shares a row with
+/// one. More than two digits is a masked card number, `XXXXXXXXXXXX1234`.
+fn is_banner_frame_fragment(text: &str) -> bool {
+    let upper = text.to_uppercase();
+    has_xstar_run(&upper, 4)
+        && upper
+            .chars()
+            .all(|c| c == 'X' || c == '*' || c.is_ascii_digit() || c.is_whitespace())
+        && upper.chars().filter(char::is_ascii_digit).count() <= 2
 }
 
 /// Matches the `[X*]{4,}` clause: a run of `min_len`+ consecutive `X`/`*`.
@@ -323,26 +372,37 @@ fn text_is_wordlike(text: &str) -> bool {
 }
 
 /// Drop Costco BOB markers that overlap real item rows. Returns kept indices.
+///
+/// A banner OCR split in two goes as a whole: its frame-only tail
+/// ([`is_banner_frame_fragment`]) counts as marker when it shares the banner's
+/// row. Otherwise dropping the head leaves the tail behind, and grouping glues
+/// `5 xxxxxxxxxxxxxx` into the item row the banner overlapped.
 pub fn filter_bob_markers(detections: &[Detection]) -> Vec<usize> {
-    if detections.is_empty() {
-        return Vec::new();
-    }
-    let mut kept: Vec<usize> = Vec::new();
-    for (index, det) in detections.iter().enumerate() {
-        if !is_bob_marker_text(&det.text) {
-            kept.push(index);
-            continue;
-        }
-        let overlaps_non_marker = detections.iter().enumerate().any(|(other_index, other)| {
-            other_index != index
-                && !is_bob_marker_text(&other.text)
-                && boxes_overlap_y(det, other, 0.25)
-        });
-        if !overlaps_non_marker {
-            kept.push(index);
-        }
-    }
-    kept
+    let banner: Vec<bool> = detections
+        .iter()
+        .map(|det| is_bob_marker_text(&det.text))
+        .collect();
+    let marker: Vec<bool> = detections
+        .iter()
+        .enumerate()
+        .map(|(index, det)| {
+            banner[index]
+                || (is_banner_frame_fragment(&det.text)
+                    && detections.iter().enumerate().any(|(other_index, other)| {
+                        banner[other_index] && boxes_overlap_y(det, other, 0.5)
+                    }))
+        })
+        .collect();
+    (0..detections.len())
+        .filter(|&index| {
+            !marker[index]
+                || !detections.iter().enumerate().any(|(other_index, other)| {
+                    other_index != index
+                        && !marker[other_index]
+                        && boxes_overlap_y(&detections[index], other, 0.25)
+                })
+        })
+        .collect()
 }
 
 fn bbox_x_extent(bbox: &[(f64, f64)]) -> (f64, f64, f64) {
@@ -1518,6 +1578,53 @@ mod tests {
         assert!(is_bob_marker_text("*xBOB Count XXXX"));
         assert!(!is_bob_marker_text("BOB Count 3"));
         assert!(!is_bob_marker_text("MILK"));
+    }
+
+    #[test]
+    fn bob_marker_survives_one_edit_where_the_words_meet_the_frame() {
+        // Real Costco banner renderings that the literal checks miss.
+        for banner in [
+            "xxxxxxxxxxxOB Count 1xxxxxxxxxxxxxx",
+            "*xxxxxxxxxxOB Count",
+            "*xxxxxxx**xottom of Basketxxxxxxxxxxx",
+            "*xxxxxxxxxxBotton of Basketxxxxxxxxxxx",
+            "*xxxxxxxxx*BOBCount",
+        ] {
+            assert!(is_bob_marker_text(banner), "{banner}");
+        }
+        // The frame is required, and one edit is the whole budget.
+        for row in [
+            "OB Count 1",
+            "xxxxxxxxxxOB Cnt 1xxxxxxxx",
+            "****ACCOUNT****",
+            "xxxx DISCOUNT xxxx",
+            "XXXXXXXXXXXX1234",
+            "***START OF PRE-SCANNED ITEMS*********",
+            "**** TOTAL",
+            "**********************",
+        ] {
+            assert!(!is_bob_marker_text(row), "{row}");
+        }
+    }
+
+    #[test]
+    fn a_split_banner_is_dropped_with_its_frame_tail() {
+        // OCR split `*xxxxOB Count 5 xxxx…` in two, level with an item row.
+        let dets = vec![
+            det("*xxxxxxxxxxOB Count", 200.0, 100.0, 300.0),
+            det("5 xxxxxxxxxxxxxx", 480.0, 100.0, 200.0),
+            det("1234567 TOILET 2PK", 250.0, 112.0, 300.0),
+            det("19.99", 700.0, 112.0, 80.0),
+        ];
+        assert_eq!(filter_bob_markers(&dets), vec![2, 3]);
+        // A frame-shaped detection with no banner on its row is not touched:
+        // a separator rule, or a masked card number beside its amount.
+        let dets = vec![
+            det("xxxxxxxxxxxxxx", 300.0, 100.0, 500.0),
+            det("12 xxxxxxxxxxxxxx", 300.0, 200.0, 500.0),
+            det("12.00", 700.0, 200.0, 80.0),
+        ];
+        assert_eq!(filter_bob_markers(&dets), vec![0, 1, 2]);
     }
 
     #[test]

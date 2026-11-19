@@ -669,7 +669,7 @@ pub fn parse_receipt(
             // discount, through the same tag-to-account mapping.
             if item.price.is_negative()
                 && item.tags.is_empty()
-                && crate::extraction::is_coupon_reference_line(&item.description)
+                && crate::common::is_coupon_reference_line(&item.description)
             {
                 item.tag_path = Some("discount".to_string());
                 item.account = categories::resolve_account_target(
@@ -835,8 +835,8 @@ pub fn parse_receipt(
 #[cfg(test)]
 mod tests {
     use super::is_unsigned_discount_line;
+    use crate::common::is_coupon_reference_line;
     use crate::common::ReceiptWarningKind;
-    use crate::extraction::is_coupon_reference_line;
     use crate::money::Money;
     use crate::rules::default_parser_rule_layers;
 
@@ -1401,14 +1401,21 @@ mod tests {
     /// Costco prints a manufacturer coupon as `<coupon number> / <item number>`
     /// under the item it reduces: no `TPD/`, and no letters at all. Both
     /// extraction paths used to drop it as non-descriptive, leaving the items
-    /// over the subtotal by exactly the coupon.
+    /// over the subtotal by exactly the coupon. The second spelling has one
+    /// digit obscured, as a pen stroke across the paper leaves it.
     #[test]
     fn costco_coupon_reference_line_is_a_discount_on_both_paths() {
+        for reference in ["0000123456 / 1234567", "000012A456 / 1234567"] {
+            costco_coupon_is_a_discount_on_both_paths(reference);
+        }
+    }
+
+    fn costco_coupon_is_a_discount_on_both_paths(reference: &str) {
         use crate::ocr_document::{Bbox, OcrDocument, OcrLine, OcrWord};
         let rows = [
             ("COSTCO", ""),
             ("1234567 SENSODYNE", "19.99 H"),
-            ("0000123456 / 1234567", "4.00- H"),
+            (reference, "4.00- H"),
             ("430 XL EGGS", "9.69"),
             ("SUBTOTAL", "25.68"),
             ("TAX", "2.08"),
@@ -1459,10 +1466,7 @@ mod tests {
             );
             assert_eq!(parsed.items.len(), 3, "{path}: {:#?}", parsed.items);
             let coupon = &parsed.items[1];
-            assert!(
-                coupon.description.contains("0000123456 / 1234567"),
-                "{path}: {coupon:?}"
-            );
+            assert!(coupon.description.contains(reference), "{path}: {coupon:?}");
             assert_eq!(coupon.price, Money::from_decimal_str("-4.00"), "{path}");
             assert_eq!(coupon.tags, vec!["discount"], "{path}");
             assert_eq!(
@@ -1594,6 +1598,19 @@ mod tests {
         assert!(!is_coupon_reference_line("123 / 45"));
         assert!(!is_coupon_reference_line("2087683 TPD/969786"));
         assert!(!is_coupon_reference_line("1234567 SENSODYNE"));
+        // One obscured character, in either number, is still a coupon; the
+        // receipt keeps what OCR read rather than a guessed digit.
+        assert!(is_coupon_reference_line("000012A456 / 1234567"));
+        assert!(is_coupon_reference_line("0000123456 / 12345O7"));
+        // Two are not, and neither is punctuation, which is how a date or a
+        // deal subtext (`(2/$3.50)`) would get in.
+        assert!(!is_coupon_reference_line("0000A2A456 / 1234567"));
+        assert!(!is_coupon_reference_line("000012A456 / 12345O7"));
+        assert!(!is_coupon_reference_line("0000-23456 / 1234567"));
+        assert!(!is_coupon_reference_line("(#33@2.592/$3.50)"));
+        assert!(!is_coupon_reference_line("2026/05/2409:55:12"));
+        // Still a single reference: a code-and-word row before the slash is not.
+        assert!(!is_coupon_reference_line("STPD/1234567"));
     }
 
     /// Every finding of the kind, so a test can't pass on the wrong shape.

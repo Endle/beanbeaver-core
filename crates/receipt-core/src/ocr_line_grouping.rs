@@ -122,7 +122,8 @@ enum AmountClaim {
     /// quantity breakdowns, and already-priced-in savings notices.
     Never,
     /// Reduction row: the amount that belongs to it is *negative*, so a positive
-    /// (tax-coded) price overlapping it belongs to a neighbour instead.
+    /// (tax-coded) price overlapping it belongs to a neighbour instead —
+    /// FreshCo's `INSTANT SAVINGS` and Costco's `<coupon> / <item>` rows.
     NegativeOnly,
     /// Loyalty row: what belongs to it is a points figure (`125 PTS`), never
     /// money, so a price overlapping it is the neighbouring item's.
@@ -191,6 +192,12 @@ fn is_points_amount(text: &str) -> bool {
 /// True for a negative amount, in either of the two conventions receipts use:
 /// a leading sign (`-$6.00`, `$-6.00`) or a trailing one (`6.00-`, common on
 /// older POS printers).
+///
+/// A trailing sign may still carry the row's tax flag — Costco prints `6.00-H`
+/// and `10.00- H` as one token. Without reading past the flag those were
+/// positive here, which no claim depended on until Costco's coupon rows were
+/// typed [`AmountClaim::NegativeOnly`]: every flagged coupon then refused its
+/// own amount.
 fn is_negative_amount(text: &str) -> bool {
     let trimmed = text.trim();
     // A run of dashes is a rule separator, not an amount, so require a digit
@@ -203,7 +210,13 @@ fn is_negative_amount(text: &str) -> bool {
         .trim_end_matches([' ', ')'])
         .strip_suffix('-')
         .is_some_and(|head| head.trim_end().ends_with(|c: char| c.is_ascii_digit()));
-    leading || trailing
+    static FLAGGED: OnceLock<Regex> = OnceLock::new();
+    let flagged = FLAGGED
+        .get_or_init(|| {
+            Regex::new(&format!(r"\d\s*-\s*{}\s*$", crate::common::TAX_FLAG_CLASS)).unwrap()
+        })
+        .is_match(trimmed);
+    leading || trailing || flagged
 }
 
 /// The claim a LEFT-column label may make on the right column. Everything not
@@ -216,6 +229,14 @@ fn is_negative_amount(text: &str) -> bool {
 /// The vocabulary here is Sobeys/FreshCo's (`INSTANT SAVINGS`, `YOU SAVED`);
 /// other chains word it differently (Costco prints `TPD/<sku>`), which is why
 /// this wants to move into the merchant rules data rather than grow inline.
+///
+/// Costco's coupon row is typed by shape, not vocabulary, because it has none:
+/// `<coupon> / <item>` is the whole row. It is typed because Costco blocks
+/// alternate item, coupon, item, so on a leaning price column an untyped coupon
+/// row takes the next item's price and the shift runs to the end of the block.
+/// Typed, the coupon declines that price and the block re-aligns within a row.
+/// costco/2026-11-11_costco_536_86_recapture lost three lines and mispriced two
+/// to that run, begun by a banner OCR had damaged past recognition.
 fn amount_claim(text: &str) -> AmountClaim {
     if is_approval_code_label(text) {
         return AmountClaim::ReferenceOnly;
@@ -231,7 +252,7 @@ fn amount_claim(text: &str) -> AmountClaim {
     {
         return AmountClaim::Never;
     }
-    if is_reduction_label(text) {
+    if is_reduction_label(text) || crate::common::is_coupon_reference_line(text) {
         return AmountClaim::NegativeOnly;
     }
     if is_points_label(text) {
@@ -2215,6 +2236,130 @@ mod tests {
                     .join(" ")
             })
             .collect()
+    }
+
+    #[test]
+    fn a_trailing_minus_is_read_past_the_tax_flag() {
+        for negative in [
+            "6.00-", "6.00-H", "10.00- H", "5.00- HH", "4.00 -H", "-$2.00",
+        ] {
+            assert!(is_negative_amount(negative), "{negative}");
+        }
+        for positive in ["6.99", "29.99 H", "$17.98 HC", "H", "--------"] {
+            assert!(!is_negative_amount(positive), "{positive}");
+        }
+    }
+
+    #[test]
+    fn coupon_rows_claim_only_negative_amounts() {
+        for coupon in ["0000123456 / 1234567", "000012A456 / 1234567"] {
+            assert_eq!(amount_claim(coupon), AmountClaim::NegativeOnly, "{coupon}");
+        }
+        assert_eq!(amount_claim("1234567 LINDOR BALLS"), AmountClaim::Any);
+    }
+
+    /// costco/2026-11-11_costco_536_86_recapture: the detections grouping
+    /// receives, real quads (de-padded, image width 680; coupon numbers
+    /// synthetic). The price column rides ~20px above its labels, so each price
+    /// overlaps the row above its own, and a banner OCR damaged past recognition
+    /// starts a shift by taking 9.49. Whether the shift then *propagates* depends
+    /// on page-level row statistics, so `first_price` exists to pick the slice
+    /// that reproduces it: without THROW's own 29.99 above it, this block shifts
+    /// exactly as the whole page did.
+    fn costco_coupon_block(first_price: bool, banner: bool) -> Vec<Detection> {
+        let quad = |text: &str, bbox: [(f64, f64); 4]| {
+            let ys = bbox.map(|p| p.1);
+            let (y_min, y_max) = (
+                ys.iter().cloned().fold(f64::MAX, f64::min),
+                ys.iter().cloned().fold(f64::MIN, f64::max),
+            );
+            Detection {
+                confidence: 0.99,
+                text: text.to_string(),
+                center_y: (y_min + y_max) / 2.0,
+                y_min,
+                y_max,
+                min_x: bbox.map(|p| p.0).iter().cloned().fold(f64::MAX, f64::min),
+                bbox: bbox.to_vec(),
+            }
+        };
+        #[rustfmt::skip]
+        let rows: [(&str, [(f64, f64); 4]); 19] = [
+            ("29.99 H", [(534.0, 502.0), (674.0, 493.0), (677.0, 533.0), (536.0, 543.0)]),
+            ("2620482 RO0TS THROW", [(127.0, 505.0), (446.0, 508.0), (446.0, 547.0), (127.0, 543.0)]),
+            ("10.00- H", [(537.0, 538.0), (676.0, 528.0), (679.0, 569.0), (540.0, 580.0)]),
+            ("0000123456 / 2620482", [(78.0, 542.0), (414.0, 542.0), (414.0, 581.0), (78.0, 581.0)]),
+            ("xxxxxxxxxxxOB Count 1xxxxxxxxxxxxxx", [(41.0, 581.0), (661.0, 570.0), (662.0, 613.0), (42.0, 624.0)]),
+            ("9.49", [(550.0, 610.0), (629.0, 606.0), (630.0, 646.0), (552.0, 650.0)]),
+            ("1355285 IOG0 VAN 2KG", [(131.0, 613.0), (465.0, 617.0), (465.0, 655.0), (131.0, 651.0)]),
+            ("2.00-", [(550.0, 646.0), (644.0, 640.0), (646.0, 682.0), (552.0, 687.0)]),
+            ("0000234567 / 1355285", [(78.0, 647.0), (417.0, 653.0), (416.0, 692.0), (78.0, 686.0)]),
+            ("29.99 H", [(537.0, 683.0), (680.0, 673.0), (683.0, 716.0), (539.0, 727.0)]),
+            ("145866 LINDOR BALLS", [(148.0, 687.0), (467.0, 690.0), (466.0, 728.0), (148.0, 725.0)]),
+            ("6.00-H", [(551.0, 722.0), (679.0, 712.0), (682.0, 751.0), (554.0, 761.0)]),
+            ("0000345678 / 145866", [(78.0, 722.0), (404.0, 726.0), (403.0, 766.0), (78.0, 762.0)]),
+            ("6.99", [(552.0, 758.0), (628.0, 752.0), (631.0, 793.0), (554.0, 799.0)]),
+            ("3028018 GREEN ONIONS", [(131.0, 762.0), (467.0, 762.0), (467.0, 801.0), (131.0, 801.0)]),
+            ("29.99 H", [(538.0, 794.0), (682.0, 786.0), (684.0, 827.0), (540.0, 834.0)]),
+            ("145866 LINDOR BALLS", [(149.0, 798.0), (469.0, 798.0), (469.0, 837.0), (149.0, 837.0)]),
+            ("6.00-H", [(551.0, 833.0), (680.0, 822.0), (682.0, 863.0), (554.0, 873.0)]),
+            ("0000345678 / 145866", [(81.0, 835.0), (403.0, 837.0), (403.0, 875.0), (80.0, 872.0)]),
+        ];
+        rows.iter()
+            .enumerate()
+            .filter(|(i, (text, _))| {
+                (first_price || *i != 0) && (banner || !text.contains("OB Count"))
+            })
+            .map(|(_, (text, bbox))| quad(text, *bbox))
+            .collect()
+    }
+
+    #[test]
+    fn a_coupon_row_stops_a_shifted_price_column() {
+        let lines = rendered(&costco_coupon_block(false, true), 680.0);
+        // The precondition, so this cannot pass vacuously: the banner took 9.49
+        // and IOGO the coupon's 2.00- below it.
+        assert!(
+            lines.contains(&"xxxxxxxxxxxOB Count 1xxxxxxxxxxxxxx 9.49".to_string()),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&"1355285 IOG0 VAN 2KG 2.00-".to_string()),
+            "{lines:?}"
+        );
+        // Untyped, that coupon took LINDOR's 29.99 and every row below took its
+        // neighbour's amount. Typed, it declines, and the block re-aligns.
+        assert_eq!(
+            lines[lines.len() - 6..],
+            [
+                "0000234567 / 1355285",
+                "145866 LINDOR BALLS 29.99 H",
+                "0000345678 / 145866 6.00-H",
+                "3028018 GREEN ONIONS 6.99",
+                "145866 LINDOR BALLS 29.99 H",
+                "0000345678 / 145866 6.00-H",
+            ],
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_costco_coupon_block_without_its_banner_pairs_every_row() {
+        let lines = rendered(&costco_coupon_block(true, false), 680.0);
+        assert_eq!(
+            lines,
+            [
+                "2620482 RO0TS THROW 29.99 H",
+                "0000123456 / 2620482 10.00- H",
+                "1355285 IOG0 VAN 2KG 9.49",
+                "0000234567 / 1355285 2.00-",
+                "145866 LINDOR BALLS 29.99 H",
+                "0000345678 / 145866 6.00-H",
+                "3028018 GREEN ONIONS 6.99",
+                "145866 LINDOR BALLS 29.99 H",
+                "0000345678 / 145866 6.00-H",
+            ]
+        );
     }
 
     #[test]
