@@ -1755,6 +1755,16 @@ tags = ["household/supply"]
 priority = 1
 exact_only = false
 
+# A water pitcher. Dollarama prints "PLASTIC PITCHER <UPC>". Exact only: a
+# 7-letter fuzzy keyword could land on unrelated lines. Corpus: dollarama
+# 2026-11-22 $3.11.
+[[rules]]
+id = "household_pitcher"
+keywords = ["PITCHER"]
+tags = ["household/supply"]
+priority = 1
+exact_only = true
+
 [[rules]]
 id = "marukawa_lemon_gum"
 keywords = ["MARUKAWA"]
