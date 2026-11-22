@@ -1080,6 +1080,19 @@ fn a_bare_master_label_is_a_card_tender() {
 }
 
 #[test]
+fn naster_with_its_own_amount_is_the_master_tender() {
+    // T&T's `Master` with the M read as N (2026-11-16 T&T $23.16).
+    let lines = vec!["TOTAL $23.16".to_string(), "Naster $23.16".to_string()];
+    let tenders = extract_tenders(&lines);
+    assert_eq!(tenders.len(), 1, "{tenders:?}");
+    assert_eq!(tenders[0].kind, "card");
+    assert_eq!(tenders[0].amount_cents, 2_316);
+    // One OCR spelling, so it must carry its amount on its own row.
+    assert_eq!(classify_tender_line("NASTER"), None);
+    assert_eq!(classify_tender_line("NASTER CHEF SAUCE 3.99"), None);
+}
+
+#[test]
 fn a_bare_credit_card_label_is_a_card_tender() {
     // Foody Mart's payment row, alone or grouped with its amount.
     for lines in [

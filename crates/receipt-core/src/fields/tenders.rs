@@ -155,8 +155,10 @@ pub(crate) fn classify_tender_line(line_upper: &str) -> Option<&'static str> {
 ///   17 corpus receipts carry the line; none produced a tender.
 /// - Foody Mart prints `Credit Card` (44 receipts; likewise none), and
 ///   `Credit Card Refund` on a refund, where the amount is money returned.
-/// - The exact OCR spelling `Gredit Cand` needs a complete same-row amount.
-///   No fuzzy matching or amount from an adjacent row is allowed for it.
+/// - The exact OCR spellings `Gredit Cand` and `Naster` (T&T's `Master` with
+///   its M read as N) need a complete same-row amount. No fuzzy matching or
+///   amount from an adjacent row is allowed for them: `M`/`N` is deliberately
+///   not a pair in `ocr_confusion`, so this is one spelling, not a rule.
 ///
 /// Anchored at both ends rather than `contains`, because a row that goes on
 /// to say more is something else: `MASTER CHEF SAUCE 3.99` is a product, and
@@ -165,7 +167,7 @@ pub(crate) fn classify_tender_line(line_upper: &str) -> Option<&'static str> {
 pub(super) fn re_bare_card_label() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^\s*(?:(?:MASTER|CREDIT\s+CARD\.?(?:\s+REFUND)?)(?:\s*\$?\s*[\d.,]+)?|GREDIT\s+CAND\s+\$?\s*\d+\.\d{2})\s*$")
+        Regex::new(r"^\s*(?:(?:MASTER|CREDIT\s+CARD\.?(?:\s+REFUND)?)(?:\s*\$?\s*[\d.,]+)?|(?:GREDIT\s+CAND|NASTER)\s+\$?\s*\d+\.\d{2})\s*$")
             .unwrap()
     })
 }
