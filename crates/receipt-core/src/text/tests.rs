@@ -1586,6 +1586,63 @@ fn only_a_sale_marker_behind_a_price_is_stripped() {
 }
 
 #[test]
+fn show_through_behind_a_price_does_not_unprice_the_item() {
+    // Longo's prints marketing copy on the back of the roll; read through the
+    // paper it is mirrored, and the OCR groups it onto the item row it sits
+    // beside. Before the strip the second item vanished and its 10.99 became
+    // a subtotal gap.
+    let lines: Vec<String> = [
+        "DAIRY",
+        "BEATRICE 2% MILK 4LT $6.49",
+        "ORGANIC MEAD 2% MILK $10.99 yibelp lliwow",
+        "MISC",
+        "Items Subtotal $17.48",
+    ]
+    .map(String::from)
+    .into();
+    let crate::extraction::ExtractionOutcome { items, .. } =
+        extract_text_items(&lines, &HashSet::from([Money::from_cents(1748)]));
+
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert_eq!(items[1].description, "ORGANIC MEAD 2% MILK");
+    assert_eq!(items[1].price, Money::from_cents(1099));
+}
+
+#[test]
+fn only_a_long_lowercase_tail_behind_a_price_is_show_through() {
+    use super::rows::strip_trailing_show_through;
+    for (line, kept) in [
+        (
+            "ORGANIC MEAD 2% MILK $10.99 yibelp lliwow",
+            "ORGANIC MEAD 2% MILK $10.99",
+        ),
+        ("MILK $10.99 H gherions", "MILK $10.99 H"),
+        ("REFUND 3.49- gladly refund", "REFUND 3.49-"),
+    ] {
+        assert_eq!(strip_trailing_show_through(line), kept, "{line}");
+    }
+    for line in [
+        // Units and tax flags a real row prints after its amount.
+        "BANANAS 1.99 each",
+        "BANANAS 1.99 ea",
+        "1.035 kg  $1.52 / kg",
+        "MILK 3.58 hc",
+        // A weight row: the tail carries digits.
+        "1.55 1b @ $9.99/1b",
+        // Too short to tell from a word the receipt printed.
+        "MILK 2.99 today",
+        // Capitalised: an OCR'd fragment of the receipt itself, not the back.
+        "082.98 Flayo",
+        "MILK 2.99 Sauce",
+        // No price in front of it.
+        "Items Subtotalgqe enoi",
+        "Retain this copy for your yibslg lliw ow",
+    ] {
+        assert_eq!(strip_trailing_show_through(line), line);
+    }
+}
+
+#[test]
 fn repeated_multibuy_offer_corroborates_a_damaged_total() {
     let lines = vec![
         "FRUIT DRINK".to_string(),
