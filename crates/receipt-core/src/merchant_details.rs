@@ -83,9 +83,26 @@ fn us_zip_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\b\d{5}(?:-\d{4})?\b").expect("valid US ZIP regex"))
 }
 
-fn us_region_before_zip_re() -> &'static Regex {
+/// USPS codes for the states, DC and the inhabited territories.
+const US_REGION_CODES: [&str; 56] = [
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS",
+    "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY",
+    "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
+    "WI", "WY", "DC", "AS", "GU", "MP", "PR", "VI",
+];
+
+/// Whether a five-digit run is preceded by a US state, as in `Buffalo, NY 14201`.
+///
+/// The state must be a real USPS code, printed in capitals. Any two letters
+/// will not do: Longo's prints its rewards week as `Week of 11/16/2026`, the
+/// OCR can drop the first slash (`Week of 11716/2026`), and `of` then passed
+/// for a state and published the date as the store's ZIP.
+fn us_region_before_zip(prefix: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)(?:^|[, ])\s*[A-Z]{2}\s*$").expect("valid US region regex"))
+    let re = RE
+        .get_or_init(|| Regex::new(r"(?:^|[, ])\s*([A-Z]{2})\s*$").expect("valid US region regex"));
+    re.captures(prefix)
+        .is_some_and(|captures| US_REGION_CODES.contains(&&captures[1]))
 }
 
 fn phone_re() -> &'static Regex {
@@ -260,7 +277,7 @@ fn postal_in(line: &str) -> Option<(String, std::ops::Range<usize>)> {
     }
     let found = us_zip_re().find(line)?;
     let prefix = line[..found.start()].trim_end();
-    let region_before_zip = us_region_before_zip_re().is_match(prefix);
+    let region_before_zip = us_region_before_zip(prefix);
     (street_like(prefix) || region_before_zip).then(|| (found.as_str().to_string(), found.range()))
 }
 
@@ -830,6 +847,23 @@ mod tests {
         assert_eq!(found.city.as_deref(), Some("Buffalo"));
         assert_eq!(found.region.as_deref(), Some("NY"));
         assert_eq!(found.postal_code.as_deref(), Some("14201"));
+    }
+
+    #[test]
+    fn a_two_letter_word_before_digits_is_not_a_us_state() {
+        // A rewards block whose date lost a slash to the OCR.
+        for line in [
+            "Week of 11716/2026",
+            "WEEK OF 11716/2026",
+            "Valid to 12345",
+            "Buffalo, ny 14201",
+        ] {
+            assert_eq!(postal_in(line), None, "{line}");
+        }
+        assert_eq!(
+            postal_in("Buffalo, NY 14201").map(|p| p.0).as_deref(),
+            Some("14201")
+        );
     }
 
     #[test]
