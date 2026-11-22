@@ -126,6 +126,46 @@ pub(super) fn strip_trailing_sale_marker(text: &str) -> String {
     }
 }
 
+/// Drop show-through from the back of the receipt OCR'd after an item's price.
+///
+/// Thermal paper is thin, and a chain that prints marketing copy on the back
+/// gets it read through the front — mirrored, so it comes out as lowercase
+/// gibberish (`we will gladly` reads `yibelp lliwow`). Where that copy sits
+/// beside an item row it groups onto the row behind the amount
+/// (`ORGANIC MEAD 2% MILK $10.99 yibelp lliwow`), and [`re_trailing_price`],
+/// which anchors the price at the end of the line, reads the row as unpriced:
+/// the item vanishes and its amount turns up as a subtotal gap.
+///
+/// Recognised by shape, not vocabulary: every word is lowercase ASCII letters
+/// only and at least four long, and the words make at least six letters
+/// together. Four is one past the longest tax flag ([`TAX_FLAG_CLASS`] stops at
+/// three letters), and six is past every unit a real row prints after its
+/// amount (`ea`, `kg`, `lb`, `each`). On the 213-receipt private corpus
+/// (2026-11-21) no real row ends in such a tail: the lowercase tails that do
+/// occur are units, weight expressions (`1b @ $0.98/1b 3.12`) and glued tax
+/// flags, and a capitalised OCR fragment (`082.98 Flayo`) is not this shape,
+/// which matters — unpricing that row is what keeps a phantom 82.98 item out.
+pub(super) fn strip_trailing_show_through(text: &str) -> String {
+    const MIN_TAIL_LETTERS: usize = 6;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(&format!(
+            r"(\d+\.\d{{2}}-?\s*{TAX_FLAG_CLASS})\s+([a-z]{{4,}}(?:\s+[a-z]{{4,}})*)\s*$"
+        ))
+        .unwrap()
+    });
+    let Some(caps) = re.captures(text) else {
+        return text.to_string();
+    };
+    let tail = caps.get(2).unwrap().as_str();
+    if tail.chars().filter(char::is_ascii_lowercase).count() < MIN_TAIL_LETTERS {
+        return text.to_string();
+    }
+    let whole = caps.get(0).unwrap();
+    let kept = caps.get(1).unwrap();
+    format!("{}{}", &text[..whole.start()], kept.as_str().trim_end())
+}
+
 pub(super) fn alpha_ratio(value: &str) -> f64 {
     if value.is_empty() {
         return 0.0;

@@ -26,6 +26,7 @@ pub fn extract_text_items(lines: &[String], summary_amounts: &HashSet<Money>) ->
             }
         })
         .map(|line| normalize_decimal_spacing(&line))
+        .map(|line| strip_trailing_show_through(&line))
         .map(|line| normalize_tax_code_ocr(&line))
         .map(|line| strip_trailing_sale_marker(&line))
         .collect();
