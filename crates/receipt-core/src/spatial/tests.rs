@@ -58,6 +58,19 @@ fn parses_tt_price_with_gst_pst_tax_flags() {
     assert_eq!(is_price_word("$12.81 F"), Some(128_100));
 }
 
+#[test]
+fn a_flag_the_ocr_could_not_read_still_fronts_a_dollar_amount() {
+    // T&T's `W $8.91`, with the faded W read as `0`. Without this the row has
+    // no price candidate and the item drops out of the receipt.
+    assert_eq!(is_price_word("0 $8.91"), Some(89_100));
+    assert_eq!(is_price_word("% $8.91 G"), Some(89_100));
+    // The `$` is what makes the amount unambiguous: without it, or with more
+    // than one glyph in front, the token is something else.
+    for token in ["0 8.91", "10 $8.91", "AB $8.91", "$ 6.00x", " $8.91 x"] {
+        assert_eq!(is_price_word(token), None, "{token}");
+    }
+}
+
 fn word(text: &str, left: f64, top: f64, right: f64, bottom: f64) -> OcrWord {
     OcrWord {
         text: text.to_string(),
