@@ -284,6 +284,7 @@ pub(crate) fn is_price_word(text: &str) -> Option<i64> {
         .strip_prefix('W')
         .map(str::trim_start)
         .or_else(|| normalized.strip_prefix('w').map(str::trim_start))
+        .or_else(|| unreadable_flag_before_dollar_amount(&normalized))
         .unwrap_or(normalized.as_str());
     if let Some(captures) = re_price_word().captures(stripped) {
         let value = parse_scaled_decimal(captures.get(2)?.as_str())?;
@@ -297,6 +298,27 @@ pub(crate) fn is_price_word(text: &str) -> Option<i64> {
     }
     let captures = re_embedded_trailing_price_word().captures(stripped)?;
     parse_scaled_decimal(captures.get(1)?.as_str())
+}
+/// The amount behind a flag glyph the OCR could not read.
+///
+/// T&T prints a flag in front of every amount (`W $5.97`), and a faded one can
+/// come back as an unrelated glyph: `0 $8.91`, where the `W` is plain on the
+/// photo. That is not a confusion worth teaching the error model (`W` and `0`
+/// share no strokes), and it does not need to be: with the `$` and both
+/// decimals intact, the amount is unambiguous, so a single glyph standing alone
+/// before a `$`-amount is the flag slot, whatever it reads as.
+///
+/// Requiring the `$` keeps the rule off Costco's split `$ 6.00`, and the single
+/// glyph keeps it off anything that says more. On the private corpus
+/// (2026-11-21) the only lone glyphs in front of a right-column amount are
+/// `W` (68), `$` (19), and this `0`.
+fn unreadable_flag_before_dollar_amount(text: &str) -> Option<&str> {
+    let mut chars = text.chars();
+    let flag = chars.next()?;
+    let rest = chars.as_str();
+    let amount = rest.trim_start();
+    (!flag.is_whitespace() && amount.len() < rest.len() && amount.starts_with('$'))
+        .then_some(amount)
 }
 pub(super) fn is_short_alpha_item(text: &str) -> bool {
     let letters_only: String = text.chars().filter(|ch| ch.is_ascii_alphabetic()).collect();
