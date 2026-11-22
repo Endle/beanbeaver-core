@@ -1603,9 +1603,12 @@ exact_only = true
 # Mart prints when its fixed-width item column cuts PASTE after the first P.
 # Keeping that truncated alias brand-qualified avoids swallowing products such
 # as a "Hot Pepper Plant" into seasoning.
+# CJ labels the same paste RED PEPPER PASTE (T&T prints `CJO RED PEPPER PASTE
+# 500G`). Without it the row fell to PEPPER (Vegetable), and the fuzzy
+# DR PEPPER ~ RED PEPPER match added a soda tag.
 [[rules]]
 id = "hot_pepper_paste_seasoning"
-keywords = ["HOT PEPPER PASTE", "CHORIPDONG - HOT PEPPER P"]
+keywords = ["HOT PEPPER PASTE", "RED PEPPER PASTE", "CHORIPDONG - HOT PEPPER P"]
 tags = ["grocery/seasoning"]
 priority = 10
 exact_only = true
