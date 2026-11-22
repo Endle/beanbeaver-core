@@ -192,7 +192,12 @@ exact_only = false
 
 [[rules]]
 id = "legacy_0001"
-keywords = ["CHICKEN", "CHICKN", "FREE RANGE CHIC", "BEEF", "BEAF", "PORK", "BACON", "SAUSAGE", "HAM", "TURKEY", "LAMB", "STEAK", "GROUND MEAT", "MEATBALL", "SALAMI", "PEPPERONI", "PROSCIUTTO", "ROTISSERIE", "DRUMSTICK", "MEAT", "BEEF BELLY", "BEEF BELLY ROLL", "ANGUS", "DUCK FEET", "DUCK LEG", "DUCK WING", "DUCK BREAST", "DUCK NECK", "BRISKET"]
+# "BONELESS PO" is Bestco's 25-column cut of "Fresh Grade A Boneless Pork
+# Belly" (新鲜A级无骨五花腩): the print stops two letters into PORK, so nothing
+# matched and the line booked to FIXME. The same idiom as "INSTANT NOO".
+# Deliberately not bare "BONELESS", which would outrank FISH (4) on a boneless
+# fish fillet. Corpus: bestco_fresh 2026-11-13 $182.19.
+keywords = ["CHICKEN", "CHICKN", "FREE RANGE CHIC", "BEEF", "BEAF", "PORK", "BONELESS PO", "BACON", "SAUSAGE", "HAM", "TURKEY", "LAMB", "STEAK", "GROUND MEAT", "MEATBALL", "SALAMI", "PEPPERONI", "PROSCIUTTO", "ROTISSERIE", "DRUMSTICK", "MEAT", "BEEF BELLY", "BEEF BELLY ROLL", "ANGUS", "DUCK FEET", "DUCK LEG", "DUCK WING", "DUCK BREAST", "DUCK NECK", "BRISKET"]
 tags = ["grocery/meat"]
 priority = 0
 exact_only = false
@@ -326,7 +331,16 @@ id = "legacy_0008"
 # "Oasis Smoothie" and this prefix cannot fuzzy-match a smoothie back. Not the
 # shorter "SMOOTH TO", which "Smooth Toffee" would contain. Corpus: foody_mart
 # 2026-09-20 $41.51, 2026-07-22 $56.07 and 2026-07-29 $110.05.
-keywords = ["LETTUCE", "SPINACH", "KALE", "CABBAGE", "BROCCOLI", "CAULIFLOWER", "CARROT", "CELERY", "CUCUMBER", "CUKES", "TOMATO", "TOMATOES", "PEPPER", "PEPPERS", "ONION", "POTATO", "POTATOES", "SWEET POTATO", "MUSHROOM", "ZUCCHINI", "SQUASH", "EGGPLANT", "ASPARAGUS", "CORN", "GREEN BEAN", "SOYA BEAN", "PEA", "PEAS", "EDAMAME", "BOK CHOY", "YU CHOY", "SHEPHERDS PURSE", "NAPA", "RADISH", "TURNIP", "BEET", "ARTICHOKE", "LEEK", "SCALLION", "SHALLOT", "CHIVE", "WATERCRESS", "OKRA", "OKAR", "PARSLEY", "BASIL", "DILL", "TOFU", "FRESH SMOOTH TO", "BEAN SPROUT", "SPROUTS", "SALAD", "COLESLAW", "GREENS", "VEGETABLES", "VEGETABLE"]
+#
+# "TARO (FRESH)" is Bestco's fresh taro root (新鲜大芋头, by the pound under
+# "&& Vegetable"), which matched nothing. Not bare "TARO": in the corpus it is
+# a FLAVOUR three times out of four ("*Ji An Taro Pie 800g", "Kosa - Taro
+# Bubble Tea", and C&C's "Xiao Piao Piao TaroFlavor", which is 香飘飘 taro milk
+# tea). At four letters it would outrank PIE and TEA on `keyword_length`, and
+# it filed the milk tea, which matches nothing else, as a Vegetable. Widen it
+# when another store's fresh-taro spelling turns up. Corpus: bestco_fresh
+# 2026-11-13 $182.19.
+keywords = ["LETTUCE", "SPINACH", "KALE", "CABBAGE", "BROCCOLI", "CAULIFLOWER", "CARROT", "CELERY", "CUCUMBER", "CUKES", "TOMATO", "TOMATOES", "PEPPER", "PEPPERS", "ONION", "POTATO", "POTATOES", "SWEET POTATO", "MUSHROOM", "ZUCCHINI", "SQUASH", "EGGPLANT", "ASPARAGUS", "CORN", "GREEN BEAN", "SOYA BEAN", "PEA", "PEAS", "EDAMAME", "BOK CHOY", "YU CHOY", "SHEPHERDS PURSE", "NAPA", "RADISH", "TURNIP", "BEET", "ARTICHOKE", "LEEK", "SCALLION", "SHALLOT", "CHIVE", "WATERCRESS", "OKRA", "OKAR", "TARO (FRESH)", "PARSLEY", "BASIL", "DILL", "TOFU", "FRESH SMOOTH TO", "BEAN SPROUT", "SPROUTS", "SALAD", "COLESLAW", "GREENS", "VEGETABLES", "VEGETABLE"]
 tags = ["grocery/vegetable"]
 priority = 0
 exact_only = false
@@ -517,9 +531,30 @@ exact_only = false
 # "NOODLE SAUCE" (12) exists to beat NOODLE (6, staple) and TURKEY (6, meat) on
 # `keyword_length` for "*ZHy Turkey Noodle Sauce 2" (周黑鸭火鸡面酱) — a sauce FOR
 # noodles, not a noodle. Same shape as VEGETABLE OIL beating VEGETABLE.
+#
+# "FENNEL" is the spice, 小茴香 (fennel seed): Bestco's "YYH Fennel 130g" sits
+# beside "YYH Chillies 160g" from the same spice maker, and matched nothing. A
+# fresh fennel bulb would be a vegetable; the corpus has none, and fresh herbs
+# (CORIANDER, CILANTRO) are already filed here. Corpus: bestco_fresh 2026-11-13
+# $182.19.
 id = "legacy_0019"
-keywords = ["VEGETABLE OIL", "CORN OIL", "SESAME OIL", "SESAMEOIL", "GARLIC", "GINGER", "GREEN ONION", "GREEN ONIONS", "CHILI PEPPER", "RED CHILI PEPPER", "CHILLI", "DRIED CHILLI", "CRUSHED CHILLI", "SPICE", "SEASONING", "SALT", "ROCK SUGAR", "PAPRIKA", "CUMIN", "CORIANDER", "CILANTRO", "TURMERIC", "CINNAMON", "STAR ANISE", "STAR ANISEED", "NUTMEG", "OREGANO", "THYME", "ROSEMARY", "BAY LEAF", "CURRY", "CHILI POWDER", "CAYENNE", "SAUCE", "NOODLE SAUCE", "SOY SAUCE", "BEAN SAUCE", "FISH SAUCE", "OYSTER SAUCE", "HOISIN", "WASABI", "SRIRACHA", "HOT SAUCE", "KETCHUP", "MUSTARD", "MAYONNAISE", "MAYO", "RELISH", "BBQ SAUCE", "TERIYAKI", "WORCESTERSHIRE", "PERICARPIUM ZANTHOXYLI", "PERICARPIURN ZANTHOXYLI", "SALSA", "HUMMUS", "GUACAMOLE", "PESTO", "CHINA TIME HONORED BRAND", "YUQUAN FRESH PRESERVED", "SOYBEAN PASTE", "MONOSODIUM", "MSG", "VEGOIL", "PRESERVED VEG"]
+keywords = ["VEGETABLE OIL", "CORN OIL", "SESAME OIL", "SESAMEOIL", "GARLIC", "GINGER", "GREEN ONION", "GREEN ONIONS", "CHILI PEPPER", "RED CHILI PEPPER", "CHILLI", "DRIED CHILLI", "CRUSHED CHILLI", "SPICE", "SEASONING", "SALT", "ROCK SUGAR", "PAPRIKA", "CUMIN", "CORIANDER", "CILANTRO", "FENNEL", "TURMERIC", "CINNAMON", "STAR ANISE", "STAR ANISEED", "NUTMEG", "OREGANO", "THYME", "ROSEMARY", "BAY LEAF", "CURRY", "CHILI POWDER", "CAYENNE", "SAUCE", "NOODLE SAUCE", "SOY SAUCE", "BEAN SAUCE", "FISH SAUCE", "OYSTER SAUCE", "HOISIN", "WASABI", "SRIRACHA", "HOT SAUCE", "KETCHUP", "MUSTARD", "MAYONNAISE", "MAYO", "RELISH", "BBQ SAUCE", "TERIYAKI", "WORCESTERSHIRE", "PERICARPIUM ZANTHOXYLI", "PERICARPIURN ZANTHOXYLI", "SALSA", "HUMMUS", "GUACAMOLE", "PESTO", "CHINA TIME HONORED BRAND", "YUQUAN FRESH PRESERVED", "SOYBEAN PASTE", "MONOSODIUM", "MSG", "VEGOIL", "PRESERVED VEG"]
 tags = ["grocery/seasoning"]
+priority = 0
+exact_only = false
+
+[[rules]]
+id = "mixed_wide_noodle"
+# 龙七爷冒烟辣宽宽拌面, instant wide noodles with a sauce packet. Bestco's 25-column
+# print cuts it to "*LQY Spicy Sauce Mixed Wid", before NOODLE, so the
+# seasoning rule's bare SAUCE (5) was the only hit and the noodles booked as
+# Seasoning. "MIXED WID" (9) wins on `keyword_length` at equal priority, the
+# same truncation idiom as "INSTANT NOO". A rule of its own rather than a
+# keyword in legacy_0017, because it must be declared AFTER the seasoning rule:
+# the app labels an item by its last tag, and from legacy_0017 the label would
+# still read Seasoning. Corpus: bestco_fresh 2026-11-13 $182.19.
+keywords = ["MIXED WID"]
+tags = ["grocery/staple"]
 priority = 0
 exact_only = false
 
@@ -654,8 +689,14 @@ exact_only = false
 # Strawberry Milk" were both filed as Fruit on MELON and STRAWBERRY. They are
 # drinks, like the Want Want Milk Drink on the same receipt. Corpus:
 # asia_food_mart 2026-10-28 $124.78.
+#
+# "CANTABILE" (坎塔比莱) is a 99-cent sparkling fruit drink, also named by
+# flavour: Bestco prints "*Cantabile Strawberry Flav" and "*Cantabile Apple
+# Flavored", and STRAWBERRY and APPLE filed both cans as Fruit. A Drink rather
+# than a Juice, like Chi Forest's sparkling flavours. Corpus: bestco_fresh
+# 2026-11-13 $182.19.
 id = "beverage_brands"
-keywords = ["NONGFU", "HEYTEA", "LIZIYUAN"]
+keywords = ["NONGFU", "HEYTEA", "LIZIYUAN", "CANTABILE"]
 tags = ["grocery/drink"]
 priority = 1
 exact_only = false
@@ -795,7 +836,13 @@ id = "legacy_0030"
 # "DOVE 2PK BW". The same name is also a chocolate brand. On a line that names
 # the chocolate, the snacks rule's longer CHOCOLATE keyword outranks DOVE at
 # equal priority.
-keywords = ["SHAMPOO", "CONDITIONER", "BODY WASH", "SOAP", "HAND SOAP", "LOTION", "MOISTURIZER", "SUNSCREEN", "DEODORANT", "ANTIPERSPIRANT", "RAZOR", "SHAVING", "COTTON", "COTTON BALL", "Q-TIP", "SWAB", "BAND-AID", "BANDAGE", "FIRST AID", "FEMININE", "TAMPON", "PAD", "PANTY LINER", "DOVE"]
+#
+# "ELLEAIR ELLIES" is 大王's sanitary-pad line (Elis / エリス), which Bestco prints
+# as "*Elleair Ellies Luna Fit S" under "&& Beauty" with no product word; both
+# sizes booked to FIXME. Brand plus line, not either alone: Elleair also makes
+# tissue, and ELLIES alone sits inside JELLIES. Corpus: bestco_fresh 2026-11-13
+# $182.19.
+keywords = ["SHAMPOO", "CONDITIONER", "BODY WASH", "SOAP", "HAND SOAP", "LOTION", "MOISTURIZER", "SUNSCREEN", "DEODORANT", "ANTIPERSPIRANT", "RAZOR", "SHAVING", "COTTON", "COTTON BALL", "Q-TIP", "SWAB", "BAND-AID", "BANDAGE", "FIRST AID", "FEMININE", "TAMPON", "PAD", "PANTY LINER", "DOVE", "ELLEAIR ELLIES"]
 tags = ["personal_care"]
 priority = 0
 exact_only = false
@@ -1010,6 +1057,21 @@ id = "hot_spicy_dip"
 # Narrow on purpose — one merchant's SKU wording, no evidence yet of other
 # spellings. Widen it when a second receipt shows one.
 keywords = ["HOT SPICY DIP"]
+tags = ["grocery/prepared_meal"]
+priority = 0
+exact_only = false
+
+[[rules]]
+id = "garlic_pork_rib"
+# 蒜香骨, fried garlic ribs from Bestco's food court: "&& Food court" / "Garlic
+# Pork Rib 12.99H". Same evidence as `dim_sum` and `hot_spicy_dip`: it is the
+# only H-flagged line, and the receipt's HST of 1.69 is exactly 13% of 12.99, so
+# it is ready-to-eat food, not zero-rated raw ribs. Without this rule the
+# seasoning rule's GARLIC (6) outranked PORK (4) and filed the dish as
+# Seasoning. The 15-char dish name wins on `keyword_length` at equal priority.
+# Declared after the seasoning rule, so `grocery/prepared_meal` is the last
+# tag and the app's label. Corpus: bestco_fresh 2026-11-13 $182.19.
+keywords = ["GARLIC PORK RIB"]
 tags = ["grocery/prepared_meal"]
 priority = 0
 exact_only = false
