@@ -340,7 +340,13 @@ id = "legacy_0008"
 # it filed the milk tea, which matches nothing else, as a Vegetable. Widen it
 # when another store's fresh-taro spelling turns up. Corpus: bestco_fresh
 # 2026-11-13 $182.19.
-keywords = ["LETTUCE", "SPINACH", "KALE", "CABBAGE", "BROCCOLI", "CAULIFLOWER", "CARROT", "CELERY", "CUCUMBER", "CUKES", "TOMATO", "TOMATOES", "PEPPER", "PEPPERS", "ONION", "POTATO", "POTATOES", "SWEET POTATO", "MUSHROOM", "ZUCCHINI", "SQUASH", "EGGPLANT", "ASPARAGUS", "CORN", "GREEN BEAN", "SOYA BEAN", "PEA", "PEAS", "EDAMAME", "BOK CHOY", "YU CHOY", "SHEPHERDS PURSE", "NAPA", "RADISH", "TURNIP", "BEET", "ARTICHOKE", "LEEK", "SCALLION", "SHALLOT", "CHIVE", "WATERCRESS", "OKRA", "OKAR", "TARO (FRESH)", "PARSLEY", "BASIL", "DILL", "TOFU", "FRESH SMOOTH TO", "BEAN SPROUT", "SPROUTS", "SALAD", "COLESLAW", "GREENS", "VEGETABLES", "VEGETABLE"]
+#
+# "FRESH MUSTARD" is Asia Food Mart's "*Fresh Mustard Stem" (新鲜小芥菜, by the
+# pound under "&& 02-Vegetable"), which legacy_0019's "MUSTARD" filed as a
+# Seasoning. It outranks that keyword on `keyword_length` at equal priority.
+# Not "MUSTARD STEM": T&T's "WJ LIGHT PRSUD MUSTARD STEM" is the pickled stem
+# (榨菜), and the public tnt_20260217_redact fixture asserts it as Seasoning.
+keywords = ["LETTUCE", "SPINACH", "KALE", "CABBAGE", "BROCCOLI", "CAULIFLOWER", "CARROT", "CELERY", "CUCUMBER", "CUKES", "TOMATO", "TOMATOES", "PEPPER", "PEPPERS", "ONION", "POTATO", "POTATOES", "SWEET POTATO", "MUSHROOM", "ZUCCHINI", "SQUASH", "EGGPLANT", "ASPARAGUS", "CORN", "GREEN BEAN", "SOYA BEAN", "PEA", "PEAS", "EDAMAME", "BOK CHOY", "YU CHOY", "SHEPHERDS PURSE", "NAPA", "RADISH", "TURNIP", "BEET", "ARTICHOKE", "LEEK", "SCALLION", "SHALLOT", "CHIVE", "WATERCRESS", "OKRA", "OKAR", "TARO (FRESH)", "PARSLEY", "BASIL", "DILL", "TOFU", "FRESH SMOOTH TO", "FRESH MUSTARD", "BEAN SPROUT", "SPROUTS", "SALAD", "COLESLAW", "GREENS", "VEGETABLES", "VEGETABLE"]
 tags = ["grocery/vegetable"]
 priority = 0
 exact_only = false

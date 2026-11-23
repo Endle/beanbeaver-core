@@ -322,8 +322,21 @@ pub(super) fn plan_price_line(
     // *unclaimed* name the price is that item's own: a weighed item prints
     // "*Baby Yu Choy" / "(...)<ON SALE>  1.97" / "1.05 lb @ $1.88/lb", and the
     // forward search skipped the weight row to give 1.97 to the next item.
+    //
+    // An unpriced weight row directly below is the same verdict without drift.
+    // That row closes the item above, and it prints no amount, so this row's
+    // price is the only one that weighed item can have. Forwarding it skips the
+    // block, prices the next item with it, and leaves that item's own price
+    // with no name. A receipt with no priced banner and only reconciling weight
+    // rows never establishes drift, and the weight × rate witness above fails
+    // whenever the price is misread. A faded `1.92` read `1.52` failed it, as
+    // did a six-item receipt that had nothing to establish drift.
+    let next_row_is_unpriced_weight_row = rows
+        .all
+        .get(index + 1)
+        .is_some_and(|next| is_unpriced_weight_row(next));
     let onsale_price_is_own = is_onsale_marker_desc
-        && rows.drift
+        && (rows.drift || next_row_is_unpriced_weight_row)
         && (!nearest_desc_above_consumed(rows.all, rows.used, index) || next_weight_row_owns_price);
     if is_onsale_marker_desc && !onsale_price_is_own {
         prefer_forward_desc = true;
