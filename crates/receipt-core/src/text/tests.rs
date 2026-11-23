@@ -1798,6 +1798,47 @@ fn onsale_row_under_an_unclaimed_weighed_name_keeps_its_price() {
 }
 
 #[test]
+fn onsale_row_above_an_unpriced_weight_row_keeps_its_price_without_drift() {
+    // The same block as above on a receipt that never establishes drift: no
+    // banner is priced, and every weight row that carries an amount reconciles.
+    // The first amount is also misread (a faded 1.92 read 1.52, so
+    // 1.94 × 0.99 no longer reconciles with it). Neither witness above
+    // applies, so the subtext row searched forward, priced the squash with the
+    // mustard's amount, and left the squash's own 2.89 on its weight row with
+    // no name: one line dropped, and 3.29 short of the subtotal.
+    let observed = text_items(
+        &[
+            "&& 02-Vegetable MX",
+            "*Fresh Mustard Stem",
+            "(NTME<ON SALE> 1.52",
+            "1.94 1b @ $0.99/1b",
+            "*Squash",
+            "(A J)CON SALE>",
+            "1.82 1b @ $1.59/1b 2.89",
+            "Sub Total 4.41",
+        ],
+        441,
+    );
+    assert_eq!(
+        observed,
+        vec![
+            ("*Fresh Mustard Stem".to_string(), Money::from_cents(152)),
+            ("*Squash".to_string(), Money::from_cents(289)),
+        ]
+    );
+    // The witness is a weight row printing no amount of its own. One that
+    // prints its total, a count row, and a plain name are not.
+    assert!(super::quantity::is_unpriced_weight_row(
+        "1.94 1b @ $0.99/1b"
+    ));
+    assert!(!super::quantity::is_unpriced_weight_row(
+        "1.82 1b @ $1.59/1b 2.89"
+    ));
+    assert!(!super::quantity::is_unpriced_weight_row("2 @ $2.99"));
+    assert!(!super::quantity::is_unpriced_weight_row("*Squash"));
+}
+
+#[test]
 fn weight_row_below_an_onsale_row_keeps_identical_weighed_lines_apart() {
     // Asia Food Mart 2026-10-07: two weighed packs of the same beef, one after
     // the other. The first "*YongDa" sits directly under the priced "Meat"

@@ -136,6 +136,18 @@ pub(super) fn weight_row_totals_to(line: &str, price: Money) -> bool {
             && validate_quantity_price(price, &modifier)
     })
 }
+/// Whether `line` is a weight row that prints no amount of its own:
+/// `1.94 lb @ $0.99/lb`, its block's total printed on a neighbouring row.
+///
+/// Structural evidence only, and deliberately so. It is consulted exactly
+/// where [`weight_row_totals_to`] cannot be: when the neighbouring amount is
+/// misread, a faded `1.92` read `1.52`, so weight × rate no longer reconciles
+/// with it.
+pub(super) fn is_unpriced_weight_row(line: &str) -> bool {
+    parse_quantity_modifier(line)
+        .is_some_and(|modifier| matches!(modifier.pattern_type, QuantityPatternType::WeightAtPrice))
+        && extract_trailing_price_cents(line.trim()).is_none()
+}
 pub(super) fn validate_quantity_price(total_price: Money, modifier: &QuantityModifier) -> bool {
     let tolerance = 2i64;
     match modifier.pattern_type {
