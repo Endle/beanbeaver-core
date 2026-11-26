@@ -110,11 +110,15 @@ pub(crate) fn re_count_at_price() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"(?i)^\d+(?:\s*@\s*\$?|\s+[0O]\s+\$)-?\d+\.\d{2}").unwrap())
 }
 
+/// `<weight> <unit> @`, case-insensitive like the text path's twin: T&T prints
+/// `0.720 Kg @ $1.72/Kg`, and OCR returns the `K` as printed. A case-sensitive
+/// unit left that row a plain item line, so its price could pair only within
+/// `Y_TOLERANCE` and was lost on a close-up photo whose rows sit further apart.
 pub(crate) fn re_weight_at_price() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(&format!(
-            r"^\d+\.?\d*\s*{WEIGHT_UNIT_CLASS}{WEIGHT_UNIT_AT_SEP}@"
+            r"(?i)^\d+\.?\d*\s*{WEIGHT_UNIT_CLASS}{WEIGHT_UNIT_AT_SEP}@"
         ))
         .unwrap()
     })
@@ -128,6 +132,17 @@ pub(crate) fn re_multi_for_price() -> &'static Regex {
 pub(crate) fn re_compact_offer_fragment() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^\d+\s*@\s*\d+\s*/\s*\$?\d+\.\d{2}\b").unwrap())
+}
+
+/// `<count> @<deal count>/$<deal price>`, optionally after the item code T&T
+/// prints ahead of it: `123456 2 @2/$2.50` under `(SALE) <description>`. The
+/// row states a count bought at a deal, so it qualifies the item *above* it
+/// exactly as `2 @ $1.97ea.` does. Without this it was only "quantity-like",
+/// and the choice between the description above and the next description
+/// below fell to raw distance, which a few pixels of tilt decide.
+pub(crate) fn re_multi_buy_at_deal() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^(?:\d{4,}\s+)?\d+\s*@\s*\d+\s*/\s*\$?\d+\.\d{2}\b").unwrap())
 }
 
 pub(crate) fn re_parenthetical_offer_prefix() -> &'static Regex {
@@ -243,9 +258,13 @@ pub(crate) fn re_weight_at_unit_price() -> &'static Regex {
     })
 }
 
+/// T&T's `(SALE)` prefix. The closing parenthesis is optional because OCR can
+/// drop it along with the space after it, gluing the marker to the next word:
+/// `(SALE) T&T KIMCHI` read as `(SALET&T KIMCHI`, which described the item as
+/// `SALET&T KIMCHI`. The opening parenthesis is what identifies the marker.
 pub(crate) fn re_sale_marker() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\(SALE\)\s*").unwrap())
+    RE.get_or_init(|| Regex::new(r"\(SALE\)?\s*").unwrap())
 }
 
 pub(crate) fn re_hed_marker() -> &'static Regex {

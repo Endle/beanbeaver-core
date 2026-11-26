@@ -185,6 +185,7 @@ pub(super) fn parse_quantity_modifier(text: &str) -> bool {
     re_count_at_price().is_match(text)
         || re_weight_at_price().is_match(text)
         || re_multi_for_price().is_match(text)
+        || re_multi_buy_at_deal().is_match(text)
 }
 pub(super) fn looks_like_quantity_expression(text: &str) -> bool {
     let normalized = normalize_decimal_spacing(text.trim());
