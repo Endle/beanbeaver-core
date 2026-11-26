@@ -990,3 +990,119 @@ fn a_sku_row_does_not_reach_a_description_a_whole_line_above() {
     );
     assert_eq!(outcome.warnings.len(), 1);
 }
+
+/// A T&T item block photographed close up: the receipt fills the frame, so its
+/// rows sit ~0.020 of the image height apart, the size of `Y_TOLERANCE`
+/// itself. Real normalized boxes, with a synthetic item code.
+fn tt_close_up_block() -> Vec<OcrLine> {
+    fn row(words: Vec<OcrWord>) -> OcrLine {
+        let text = words
+            .iter()
+            .map(|w| w.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        OcrLine::new(text, words)
+    }
+    vec![
+        row(vec![word("GROCERY", 0.050, 0.429, 0.164, 0.449)]),
+        row(vec![word(
+            "(SALE) FW DEL POTHERB MUSTARD 3PK",
+            0.051,
+            0.447,
+            0.553,
+            0.470,
+        )]),
+        row(vec![
+            word("123456 2 @2/$2.50", 0.063, 0.468, 0.359, 0.490),
+            word("W $2.50", 0.724, 0.463, 0.843, 0.485),
+        ]),
+        row(vec![word(
+            "(SALE) FISHWELL PRESERVE MUSTARD STEM",
+            0.047,
+            0.486,
+            0.614,
+            0.510,
+        )]),
+        row(vec![
+            word("2 @ $1.97ea.", 0.056, 0.510, 0.245, 0.530),
+            word("W $3.94", 0.724, 0.503, 0.844, 0.527),
+        ]),
+        row(vec![word("PRODUCE", 0.044, 0.531, 0.159, 0.550)]),
+        row(vec![word("(SALE) NAPA", 0.050, 0.551, 0.221, 0.570)]),
+        row(vec![
+            word("0.720 Kg @ $1.72/Kg", 0.063, 0.571, 0.357, 0.590),
+            word("W $1.24", 0.720, 0.566, 0.838, 0.587),
+        ]),
+        row(vec![word("YU CHOY SPROUTS", 0.054, 0.589, 0.285, 0.609)]),
+        row(vec![
+            word("0.755 Kg @ $4.37/Kg", 0.068, 0.610, 0.359, 0.629),
+            word("W $3.30", 0.716, 0.608, 0.834, 0.628),
+        ]),
+        row(vec![word("DELI", 0.058, 0.630, 0.126, 0.649)]),
+        row(vec![
+            word("(SALET&T", 0.062, 0.651, 0.218, 0.670),
+            word("KIMCHI", 0.232, 0.651, 0.328, 0.668),
+            word("W $8.97", 0.716, 0.649, 0.829, 0.668),
+        ]),
+        row(vec![
+            word("TOTAL", 0.050, 0.690, 0.150, 0.710),
+            word("$19.95", 0.716, 0.690, 0.829, 0.710),
+        ]),
+    ]
+}
+
+#[test]
+fn close_up_tt_quantity_rows_price_the_description_above_them() {
+    // Each quantity row sits between its own description and the next one, a
+    // row's pitch from both. Three things went wrong at this scale: the
+    // `<code> 2 @2/$2.50` multi-buy was not a real quantity modifier, so the
+    // description *below* (a few pixels nearer) took its price and the next
+    // price fell back two rows up; and `Kg` failed a case-sensitive unit, so
+    // the weight rows could pair only within `Y_TOLERANCE` and NAPA's 1.24 was
+    // lost while NAPA took YU CHOY's 3.30.
+    assert_eq!(
+        pairs_of(tt_close_up_block()),
+        vec![
+            (
+                "FW DEL POTHERB MUSTARD 3PK".to_string(),
+                Money::from_cents(250)
+            ),
+            (
+                "FISHWELL PRESERVE MUSTARD STEM".to_string(),
+                Money::from_cents(394)
+            ),
+            ("NAPA".to_string(), Money::from_cents(124)),
+            ("YU CHOY SPROUTS".to_string(), Money::from_cents(330)),
+            ("T&T KIMCHI".to_string(), Money::from_cents(897)),
+        ]
+    );
+}
+
+#[test]
+fn tt_quantity_row_shapes_are_real_modifiers() {
+    use super::rows::parse_quantity_modifier;
+    for modifier in [
+        "123456 2 @2/$2.50",
+        "2 @2/$4.47",
+        "3 @3/$6.97",
+        "0.720 Kg @ $1.72/Kg",
+        "0.760 kg @ $1.72/kg",
+        "2 @ $1.97ea.",
+    ] {
+        assert!(parse_quantity_modifier(modifier), "{modifier:?}");
+    }
+    // A long code alone, or a code with a price but no count-at-deal, is not.
+    for other in ["123456", "123456 2.50", "123456 KIMCHI 2.50"] {
+        assert!(!parse_quantity_modifier(other), "{other:?}");
+    }
+}
+
+#[test]
+fn a_sale_marker_that_lost_its_parenthesis_is_still_stripped() {
+    use super::rows::clean_description;
+    assert_eq!(clean_description("(SALE) T&T KIMCHI"), "T&T KIMCHI");
+    assert_eq!(clean_description("(SALET&T KIMCHI"), "T&T KIMCHI");
+    assert_eq!(clean_description("(SALE NAPA"), "NAPA");
+    // Only the parenthesised marker: a bare SALE word is description text.
+    assert_eq!(clean_description("GARAGE SALE BAGS"), "GARAGE SALE BAGS");
+}
